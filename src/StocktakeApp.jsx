@@ -120,10 +120,10 @@ export default function App() {
   };
 
   return (
-    <div className="flex flex-col h-screen max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200">
+    <div className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 overflow-x-hidden">
       
       {/* Top Header */}
-      <header className="flex items-center justify-between px-5 pt-6 pb-2 border-b border-gray-50">
+      <header className="flex items-center justify-between px-5 pt-6 pb-2 border-b border-gray-50 flex-shrink-0">
         <div className="flex items-center space-x-2">
           <span className="font-serif text-2xl font-bold tracking-tighter">T</span>
           <span className="font-semibold text-base tracking-tight">West Side Tavern</span>
@@ -174,7 +174,7 @@ export default function App() {
                   placeholder="https://script.google.com/macros/s/..."
                   value={tempUrl}
                   onChange={e => setTempUrl(e.target.value)}
-                  className="w-full bg-[#EDEDED] py-3 pl-10 pr-4 rounded-lg text-xs font-mono text-gray-800 placeholder-gray-400 focus:outline-none"
+                  className="w-full bg-[#EDEDED] py-3 pl-10 pr-4 rounded-lg text-base sm:text-xs font-mono text-gray-800 placeholder-gray-400 focus:outline-none"
                   required
                 />
                 <Link className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
@@ -217,7 +217,7 @@ export default function App() {
         <div className="flex-1 flex flex-col overflow-hidden">
           
           {/* Title Section */}
-          <div className="px-5 pt-3 pb-2 flex justify-between items-end">
+          <div className="px-5 pt-3 pb-2 flex justify-between items-end flex-shrink-0">
             <div>
               <p className="text-gray-500 italic text-sm font-serif">Stocktake</p>
               <h1 className="text-3xl font-extrabold tracking-tight leading-none mt-1">
@@ -236,7 +236,7 @@ export default function App() {
           </div>
 
           {statusMsg && (
-            <div className={`mx-5 my-1 p-2.5 rounded-lg text-xs font-medium ${
+            <div className={`mx-5 my-1 p-2.5 rounded-lg text-xs font-medium flex-shrink-0 ${
               statusMsg.type === 'success' ? 'bg-green-50 text-green-800 border border-green-200' : 'bg-red-50 text-red-800 border border-red-200'
             }`}>
               {statusMsg.text}
@@ -244,12 +244,12 @@ export default function App() {
           )}
 
           {/* Controls Bar */}
-          <div className="flex items-center justify-between px-5 py-2">
+          <div className="flex items-center justify-between px-5 py-2 flex-shrink-0">
             <div className="relative">
               <select 
                 value={selectedDay}
                 onChange={(e) => setSelectedDay(e.target.value)}
-                className="appearance-none bg-[#F3F3F3] font-medium py-2 pl-4 pr-9 rounded-lg text-sm text-gray-900 focus:outline-none cursor-pointer"
+                className="appearance-none bg-[#F3F3F3] font-medium py-2 pl-4 pr-9 rounded-lg text-base sm:text-sm text-gray-900 focus:outline-none cursor-pointer"
               >
                 <option>Monday</option>
                 <option>Tuesday</option>
@@ -280,7 +280,7 @@ export default function App() {
           </div>
 
           {/* Search & Supplier Filter Chips */}
-          <div className="px-5 py-2">
+          <div className="px-5 py-2 flex-shrink-0">
             <label className="block text-sm font-bold text-gray-900 mb-2">Search products</label>
             
             <div className="flex items-center space-x-2 mb-2 overflow-x-auto pb-1 scrollbar-none">
@@ -305,14 +305,14 @@ export default function App() {
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Search products..."
-                className="w-full bg-[#EDEDED] py-2.5 pl-4 pr-10 rounded-lg text-sm italic placeholder-gray-500 focus:outline-none"
+                className="w-full bg-[#EDEDED] py-2.5 pl-4 pr-10 rounded-lg text-base sm:text-sm italic placeholder-gray-500 focus:outline-none focus:ring-0"
               />
-              <Search className="w-4 h-4 absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <Search className="w-4 h-4 absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
             </div>
           </div>
 
           {/* Stocktake Table Headers */}
-          <div className="grid grid-cols-12 px-5 py-2 border-b border-gray-100 text-xs font-bold text-gray-900 mt-1">
+          <div className="grid grid-cols-12 px-5 py-2 border-b border-gray-100 text-xs font-bold text-gray-900 mt-1 flex-shrink-0">
             <span className="col-span-5">Stocktake</span>
             <span className="col-span-2 text-center">Order Amt.</span>
             <span className="col-span-2 text-center">Par</span>
@@ -373,7 +373,7 @@ export default function App() {
       )}
 
       {/* Bottom Navigation */}
-      <footer className="bg-[#111111] text-white flex justify-around items-center py-4 px-2 text-xs font-semibold">
+      <footer className="bg-[#111111] text-white flex justify-around items-center py-4 px-2 text-xs font-semibold flex-shrink-0">
         <button className="text-gray-400 hover:text-white">&lt; Back</button>
         <button 
           onClick={() => { setView('stocktake'); setActiveTab('Stocktake'); }}
