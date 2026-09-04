@@ -1,22 +1,52 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Search, Plus, Minus, ChevronDown, RefreshCw, X, Check, Lock, Delete } from 'lucide-react';
+import { Search, Plus, Minus, RefreshCw, X, Check, Lock, Delete } from 'lucide-react';
 
-// Hardwired Web App Endpoint
 const HARDWIRED_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzcrqf4q-QWiGq0sxMmXqS7QcsxCVfhkJgPfjxOm6KyPShNUD-zkD9HUZy49rDdrfAYJg/exec";
 const PIN_CODE = "1234";
 
+// Helper to format dynamic date & day name
+function getFormattedDates() {
+  const now = new Date();
+  
+  // Get current day name (e.g. "Friday")
+  const dayName = now.toLocaleDateString('en-GB', { weekday: 'long' });
+
+  // Calculate Monday of the current week
+  const day = now.getDay();
+  const diff = now.getDate() - day + (day === 0 ? -6 : 1);
+  const monday = new Date(now.setDate(diff));
+
+  // Format ordinal date (e.g. "17th November")
+  const dayOfMonth = monday.getDate();
+  const monthName = monday.toLocaleDateString('en-GB', { month: 'long' });
+  
+  const getOrdinalSuffix = (d) => {
+    if (d > 3 && d < 21) return 'th';
+    switch (d % 10) {
+      case 1:  return "st";
+      case 2:  return "nd";
+      case 3:  return "rd";
+      default: return "th";
+    }
+  };
+
+  const weekBeginningStr = `${dayOfMonth}${getOrdinalSuffix(dayOfMonth)} ${monthName}`;
+  return { dayName, weekBeginningStr };
+}
+
 export default function App() {
-  // Navigation & Auth States
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [pinInput, setPinInput] = useState('');
   const [pinError, setPinError] = useState(false);
 
   const [activeTab, setActiveTab] = useState('Stocktake');
-  const [selectedDay, setSelectedDay] = useState('Monday');
-  const [searchQuery, setSearchQuery] = useState('Bacard');
-  const [selectedSupplier, setSelectedSupplier] = useState(null);
+  const [searchQuery, setSearchQuery] = useState('');
   
-  // App views: 'stocktake' or 'settings'
+  // Filter States
+  const [selectedSupplier, setSelectedSupplier] = useState(null);
+  const [selectedArea, setSelectedArea] = useState(null);
+  const [selectedCategory, setSelectedCategory] = useState(null);
+
   const [view, setView] = useState('stocktake');
   const [products, setProducts] = useState([]);
   const [counts, setCounts] = useState({});
@@ -24,14 +54,14 @@ export default function App() {
   const [saving, setSaving] = useState(false);
   const [statusMsg, setStatusMsg] = useState(null);
 
-  // Sync counts state from products
+  const { dayName, weekBeginningStr } = useMemo(() => getFormattedDates(), []);
+
   useEffect(() => {
     const initCounts = {};
     products.forEach(p => { initCounts[p.id] = p.count ?? 0; });
     setCounts(initCounts);
   }, [products]);
 
-  // Fetch sheet catalog upon authentication
   const fetchSheetData = async () => {
     setLoading(true);
     setStatusMsg(null);
@@ -59,7 +89,6 @@ export default function App() {
     }
   }, [isAuthenticated]);
 
-  // PIN Keypad Press Handler
   const handlePinPress = (num) => {
     if (pinInput.length < 4) {
       const newPin = pinInput + num;
@@ -68,9 +97,7 @@ export default function App() {
 
       if (newPin.length === 4) {
         if (newPin === PIN_CODE) {
-          setTimeout(() => {
-            setIsAuthenticated(true);
-          }, 150);
+          setTimeout(() => setIsAuthenticated(true), 150);
         } else {
           setTimeout(() => {
             setPinError(true);
@@ -86,7 +113,6 @@ export default function App() {
     setPinError(false);
   };
 
-  // Save stock counts back to sheet
   const handleSaveToSheet = async () => {
     setSaving(true);
     setStatusMsg(null);
@@ -110,18 +136,23 @@ export default function App() {
     }
   };
 
-  const suppliers = useMemo(() => {
-    return Array.from(new Set(products.map(p => p.supplier))).filter(Boolean);
-  }, [products]);
+  // Filter List Extractors
+  const suppliers = useMemo(() => Array.from(new Set(products.map(p => p.supplier))).filter(Boolean), [products]);
+  const areas = useMemo(() => Array.from(new Set(products.map(p => p.area))).filter(Boolean), [products]);
+  const categories = useMemo(() => Array.from(new Set(products.map(p => p.category))).filter(Boolean), [products]);
 
+  // Combined Multi-Filter Logic
   const filteredProducts = useMemo(() => {
     return products.filter(p => {
       const matchesSearch = p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
                             p.id.toLowerCase().includes(searchQuery.toLowerCase());
       const matchesSupplier = selectedSupplier ? p.supplier === selectedSupplier : true;
-      return matchesSearch && matchesSupplier;
+      const matchesArea = selectedArea ? p.area === selectedArea : true;
+      const matchesCategory = selectedCategory ? p.category === selectedCategory : true;
+
+      return matchesSearch && matchesSupplier && matchesArea && matchesCategory;
     });
-  }, [products, searchQuery, selectedSupplier]);
+  }, [products, searchQuery, selectedSupplier, selectedArea, selectedCategory]);
 
   const updateCount = (id, delta) => {
     setCounts(prev => ({
@@ -130,18 +161,12 @@ export default function App() {
     }));
   };
 
-  /* -------------------------------------------------------------------------- */
-  /* 1. LOGIN SCREEN                                                           */
-  /* -------------------------------------------------------------------------- */
   if (!isAuthenticated) {
     return (
       <div className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 justify-center items-center px-8">
-        {/* Brand Logo */}
         <div className="mb-12">
           <span className="font-serif text-6xl font-bold tracking-tighter">T</span>
         </div>
-
-        {/* PIN Indicators */}
         <div className="flex space-x-4 mb-16">
           {[0, 1, 2, 3].map(index => {
             const isFilled = pinInput.length > index;
@@ -149,18 +174,12 @@ export default function App() {
               <div
                 key={index}
                 className={`w-3.5 h-3.5 rounded-full transition-all duration-150 ${
-                  pinError 
-                    ? 'bg-red-500 animate-bounce' 
-                    : isFilled 
-                      ? 'bg-gray-800 scale-110' 
-                      : 'bg-gray-200'
+                  pinError ? 'bg-red-500 animate-bounce' : isFilled ? 'bg-gray-800 scale-110' : 'bg-gray-200'
                 }`}
               />
             );
           })}
         </div>
-
-        {/* Numeric Keypad */}
         <div className="grid grid-cols-3 gap-y-8 gap-x-12 w-full max-w-xs text-center text-2xl font-medium">
           {[1, 2, 3, 4, 5, 6, 7, 8, 9].map(num => (
             <button
@@ -189,9 +208,6 @@ export default function App() {
     );
   }
 
-  /* -------------------------------------------------------------------------- */
-  /* 2. LOADING SCREEN                                                          */
-  /* -------------------------------------------------------------------------- */
   if (loading) {
     return (
       <div className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 justify-center items-center px-6">
@@ -202,9 +218,6 @@ export default function App() {
     );
   }
 
-  /* -------------------------------------------------------------------------- */
-  /* 3. MAIN APPLICATION                                                        */
-  /* -------------------------------------------------------------------------- */
   return (
     <div className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 overflow-x-hidden">
       
@@ -233,7 +246,7 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main Container Switch */}
+      {/* Main Container */}
       {view === 'settings' ? (
         
         /* SETTINGS SCREEN */
@@ -291,101 +304,136 @@ export default function App() {
         /* STOCKTAKE SCREEN */
         <div className="flex-1 flex flex-col overflow-hidden">
           
-          {/* Title Section */}
-          <div className="px-5 pt-3 pb-2 flex justify-between items-end flex-shrink-0">
+          {/* Title Section with Smaller Text & Dynamic Day */}
+          <div className="px-5 pt-3 pb-1 flex justify-between items-end flex-shrink-0">
             <div>
-              <p className="text-gray-500 italic text-sm font-serif">Stocktake</p>
-              <h1 className="text-3xl font-extrabold tracking-tight leading-none mt-1">
-                Week beginning<br />17th November
+              <p className="text-gray-500 italic text-xs font-serif">Stocktake</p>
+              <h1 className="text-lg font-bold tracking-tight text-gray-900 mt-0.5 leading-snug">
+                Week beginning {weekBeginningStr}
               </h1>
             </div>
             <button 
               onClick={fetchSheetData} 
-              className="p-2 text-gray-500 hover:text-black rounded-lg bg-gray-50 border border-gray-100"
+              className="p-1.5 text-gray-500 hover:text-black rounded-lg bg-gray-50 border border-gray-100"
               title="Sync with Google Sheet"
             >
-              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
             </button>
           </div>
 
           {statusMsg && (
-            <div className={`mx-5 my-1 p-2.5 rounded-lg text-xs font-medium flex-shrink-0 ${
+            <div className={`mx-5 my-1 p-2 rounded-lg text-xs font-medium flex-shrink-0 ${
               statusMsg.type === 'success' ? 'bg-green-50 text-green-800 border border-green-200' : 'bg-red-50 text-red-800 border border-red-200'
             }`}>
               {statusMsg.text}
             </div>
           )}
 
-          {/* Controls Bar */}
+          {/* Controls Bar with Automatic Day Badge */}
           <div className="flex items-center justify-between px-5 py-2 flex-shrink-0">
-            <div className="relative">
-              <select 
-                value={selectedDay}
-                onChange={(e) => setSelectedDay(e.target.value)}
-                className="appearance-none bg-[#F3F3F3] font-medium py-2 pl-4 pr-9 rounded-lg text-base sm:text-sm text-gray-900 focus:outline-none cursor-pointer"
-              >
-                <option>Monday</option>
-                <option>Tuesday</option>
-                <option>Wednesday</option>
-                <option>Thursday</option>
-                <option>Friday</option>
-                <option>Saturday</option>
-                <option>Sunday</option>
-              </select>
-              <ChevronDown className="w-4 h-4 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-600" />
+            <div className="bg-[#F3F3F3] font-bold px-3 py-1.5 rounded-lg text-xs text-gray-800 tracking-wide uppercase">
+              {dayName}
             </div>
 
             <div className="flex space-x-2">
               <button 
                 onClick={() => setCounts({})}
-                className="px-4 py-2 bg-[#F3F3F3] hover:bg-gray-200 rounded-lg text-sm font-medium text-gray-800 transition"
+                className="px-3 py-1.5 bg-[#F3F3F3] hover:bg-gray-200 rounded-lg text-xs font-medium text-gray-800 transition"
               >
                 Clear
               </button>
               <button 
                 onClick={handleSaveToSheet}
                 disabled={saving}
-                className="flex items-center space-x-1 px-4 py-2 bg-[#C2F19D] hover:bg-[#b2e88a] rounded-lg text-sm font-semibold text-gray-900 transition"
+                className="flex items-center space-x-1 px-3 py-1.5 bg-[#C2F19D] hover:bg-[#b2e88a] rounded-lg text-xs font-semibold text-gray-900 transition"
               >
                 <span>{saving ? 'Saving...' : 'Save'}</span>
               </button>
             </div>
           </div>
 
-          {/* Search & Supplier Filter Chips */}
-          <div className="px-5 py-2 flex-shrink-0">
-            <label className="block text-sm font-bold text-gray-900 mb-2">Search products</label>
+          {/* Search Bar & 3-Tier Filter Chips */}
+          <div className="px-5 py-1.5 flex-shrink-0 space-y-2">
             
-            <div className="flex items-center space-x-2 mb-2 overflow-x-auto pb-1 scrollbar-none">
-              {suppliers.map(sup => (
-                <button
-                  key={sup}
-                  onClick={() => setSelectedSupplier(selectedSupplier === sup ? null : sup)}
-                  className={`px-3 py-1.5 rounded-md text-xs font-medium italic whitespace-nowrap transition border ${
-                    selectedSupplier === sup 
-                      ? 'bg-black text-white border-black' 
-                      : 'bg-[#EDEDED] text-gray-700 border-transparent hover:bg-gray-200'
-                  }`}
-                >
-                  {sup}
-                </button>
-              ))}
-            </div>
-
             <div className="relative">
               <input
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Search products..."
-                className="w-full bg-[#EDEDED] py-2.5 pl-4 pr-10 rounded-lg text-base sm:text-sm italic placeholder-gray-500 focus:outline-none focus:ring-0"
+                className="w-full bg-[#EDEDED] py-2 pl-4 pr-9 rounded-lg text-xs italic placeholder-gray-500 focus:outline-none focus:ring-0"
               />
-              <Search className="w-4 h-4 absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+              <Search className="w-3.5 h-3.5 absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
             </div>
+
+            {/* Filter 1: Supplier */}
+            <div>
+              <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Supplier</span>
+              <div className="flex items-center space-x-1.5 overflow-x-auto pb-1 scrollbar-none">
+                {suppliers.map(sup => (
+                  <button
+                    key={sup}
+                    onClick={() => setSelectedSupplier(selectedSupplier === sup ? null : sup)}
+                    className={`px-2.5 py-1 rounded-md text-[11px] font-medium italic whitespace-nowrap transition border ${
+                      selectedSupplier === sup 
+                        ? 'bg-black text-white border-black' 
+                        : 'bg-[#EDEDED] text-gray-700 border-transparent hover:bg-gray-200'
+                    }`}
+                  >
+                    {sup}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Filter 2: Area (Column H) */}
+            {areas.length > 0 && (
+              <div>
+                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Area</span>
+                <div className="flex items-center space-x-1.5 overflow-x-auto pb-1 scrollbar-none">
+                  {areas.map(area => (
+                    <button
+                      key={area}
+                      onClick={() => setSelectedArea(selectedArea === area ? null : area)}
+                      className={`px-2.5 py-1 rounded-md text-[11px] font-medium whitespace-nowrap transition border ${
+                        selectedArea === area 
+                          ? 'bg-black text-white border-black' 
+                          : 'bg-[#EDEDED] text-gray-700 border-transparent hover:bg-gray-200'
+                      }`}
+                    >
+                      {area}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Filter 3: Category (Column I) */}
+            {categories.length > 0 && (
+              <div>
+                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Category</span>
+                <div className="flex items-center space-x-1.5 overflow-x-auto pb-1 scrollbar-none">
+                  {categories.map(cat => (
+                    <button
+                      key={cat}
+                      onClick={() => setSelectedCategory(selectedCategory === cat ? null : cat)}
+                      className={`px-2.5 py-1 rounded-md text-[11px] font-medium whitespace-nowrap transition border ${
+                        selectedCategory === cat 
+                          ? 'bg-black text-white border-black' 
+                          : 'bg-[#EDEDED] text-gray-700 border-transparent hover:bg-gray-200'
+                      }`}
+                    >
+                      {cat}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
           </div>
 
-          {/* Stocktake Table Headers */}
-          <div className="grid grid-cols-12 px-5 py-2 border-b border-gray-100 text-xs font-bold text-gray-900 mt-1 flex-shrink-0">
+          {/* Table Headers */}
+          <div className="grid grid-cols-12 px-5 py-1.5 border-b border-gray-100 text-xs font-bold text-gray-900 mt-1 flex-shrink-0">
             <span className="col-span-5">Stocktake</span>
             <span className="col-span-2 text-center">Order Amt.</span>
             <span className="col-span-2 text-center">Par</span>
@@ -402,17 +450,17 @@ export default function App() {
                 const orderAmt = Math.max(0, product.par - currentCount);
 
                 return (
-                  <div key={product.id} className="grid grid-cols-12 items-center py-3 text-sm">
+                  <div key={product.id} className="grid grid-cols-12 items-center py-2.5 text-sm">
                     <div className="col-span-5 pr-1">
-                      <span className="font-semibold text-gray-900 block leading-tight">{product.name}</span>
-                      <span className="text-xs text-gray-400 italic">({product.unit})</span>
+                      <span className="font-semibold text-gray-900 block leading-tight text-xs">{product.name}</span>
+                      <span className="text-[10px] text-gray-400 italic">({product.unit})</span>
                     </div>
 
-                    <div className="col-span-2 text-center font-bold text-gray-900">
+                    <div className="col-span-2 text-center font-bold text-gray-900 text-xs">
                       {orderAmt}
                     </div>
 
-                    <div className="col-span-2 text-center text-gray-800 font-medium">
+                    <div className="col-span-2 text-center text-gray-800 font-medium text-xs">
                       {product.par}
                     </div>
 
@@ -421,10 +469,10 @@ export default function App() {
                         onClick={() => updateCount(product.id, -1)}
                         className="p-1 text-gray-800 hover:bg-gray-100 rounded transition"
                       >
-                        <Minus className="w-4 h-4" />
+                        <Minus className="w-3.5 h-3.5" />
                       </button>
                       
-                      <span className="w-8 py-1 bg-[#EDEDED] text-center font-medium rounded text-xs">
+                      <span className="w-7 py-1 bg-[#EDEDED] text-center font-medium rounded text-xs">
                         {currentCount}
                       </span>
 
@@ -432,7 +480,7 @@ export default function App() {
                         onClick={() => updateCount(product.id, 1)}
                         className="p-1 text-gray-800 hover:bg-gray-100 rounded transition"
                       >
-                        <Plus className="w-4 h-4" />
+                        <Plus className="w-3.5 h-3.5" />
                       </button>
                     </div>
                   </div>
@@ -444,7 +492,7 @@ export default function App() {
       )}
 
       {/* Bottom Navigation */}
-      <footer className="bg-[#111111] text-white flex justify-around items-center py-4 px-2 text-xs font-semibold flex-shrink-0">
+      <footer className="bg-[#111111] text-white flex justify-around items-center py-3.5 px-2 text-xs font-semibold flex-shrink-0">
         <button className="text-gray-400 hover:text-white">&lt; Back</button>
         <button 
           onClick={() => { setView('stocktake'); setActiveTab('Stocktake'); }}
