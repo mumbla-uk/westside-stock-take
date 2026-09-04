@@ -44,9 +44,13 @@ export default function App() {
   const [view, setView] = useState('stocktake');
   const [products, setProducts] = useState([]);
   const [counts, setCounts] = useState({});
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [statusMsg, setStatusMsg] = useState(null);
+
+  // Animated Startup Sequence State
+  const [loading, setLoading] = useState(true);
+  const [loadingProgress, setLoadingProgress] = useState(0);
+  const [loadingText, setLoadingText] = useState('Initializing settings...');
 
   const { dayName, weekBeginningStr } = useMemo(() => getFormattedDates(), []);
 
@@ -56,30 +60,54 @@ export default function App() {
     setCounts(initCounts);
   }, [products]);
 
-  const fetchSheetData = async () => {
+  // Animated Multi-Stage Startup Loader
+  const startLoadingSequence = async () => {
     setLoading(true);
-    setStatusMsg(null);
+    setLoadingProgress(10);
+    setLoadingText('Initializing settings...');
+
     try {
+      // Stage 1: Load configurations
+      await new Promise(r => setTimeout(r, 300));
+      setLoadingProgress(35);
+      setLoadingText('Connecting to Google Sheets...');
+
+      // Stage 2: Fetch Data
       const res = await fetch(HARDWIRED_SCRIPT_URL);
       const json = await res.json();
+
+      setLoadingProgress(65);
+      setLoadingText('Loading SKUs & inventory...');
+      await new Promise(r => setTimeout(r, 400));
+
+      setLoadingProgress(85);
+      setLoadingText('Finalizing product catalog...');
+
       if (json.status === "success" && Array.isArray(json.data)) {
         setProducts(json.data);
       } else if (Array.isArray(json)) {
         setProducts(json);
-      } else {
-        setStatusMsg({ type: 'error', text: 'Error fetching catalog from script.' });
       }
+
+      await new Promise(r => setTimeout(r, 300));
+      setLoadingProgress(100);
+
+      // Finish loading
+      setTimeout(() => {
+        setLoading(false);
+      }, 200);
+
     } catch (err) {
       console.error("Failed to load sheet data:", err);
-      setStatusMsg({ type: 'error', text: 'Network error connecting to Apps Script.' });
-    } finally {
-      setLoading(false);
+      setLoadingProgress(100);
+      setLoadingText('Loaded with offline fallback.');
+      setTimeout(() => setLoading(false), 500);
     }
   };
 
   useEffect(() => {
     if (isAuthenticated) {
-      fetchSheetData();
+      startLoadingSequence();
     }
   }, [isAuthenticated]);
 
@@ -132,15 +160,19 @@ export default function App() {
 
   // Filter Extractors
   const suppliers = useMemo(() => Array.from(new Set(products.map(p => p.supplier))).filter(Boolean), [products]);
-  const areas = useMemo(() => Array.from(new Set(products.map(p => p.area))).filter(Boolean), [products]);
+  const areas = useMemo(() => {
+    const list = Array.from(new Set(products.map(p => p.area || 'Main Bar'))).filter(Boolean);
+    return list;
+  }, [products]);
 
   // Combined Supplier & Area Filter Logic
   const filteredProducts = useMemo(() => {
     return products.filter(p => {
+      const itemArea = p.area || 'Main Bar';
       const matchesSearch = p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
                             p.id.toLowerCase().includes(searchQuery.toLowerCase());
       const matchesSupplier = selectedSupplier ? p.supplier === selectedSupplier : true;
-      const matchesArea = selectedArea ? p.area === selectedArea : true;
+      const matchesArea = selectedArea ? itemArea === selectedArea : true;
 
       return matchesSearch && matchesSupplier && matchesArea;
     });
@@ -153,6 +185,9 @@ export default function App() {
     }));
   };
 
+  /* -------------------------------------------------------------------------- */
+  /* 1. LOGIN SCREEN                                                           */
+  /* -------------------------------------------------------------------------- */
   if (!isAuthenticated) {
     return (
       <div className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 justify-center items-center px-8">
@@ -200,16 +235,33 @@ export default function App() {
     );
   }
 
+  /* -------------------------------------------------------------------------- */
+  /* 2. ANIMATED STARTUP LOADING SCREEN                                         */
+  /* -------------------------------------------------------------------------- */
   if (loading) {
     return (
-      <div className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 justify-center items-center px-6">
-        <span className="font-serif text-5xl font-bold tracking-tighter mb-6">T</span>
-        <RefreshCw className="w-6 h-6 text-gray-400 animate-spin mb-3" />
-        <p className="text-sm font-medium text-gray-600 italic">loading products...</p>
+      <div className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 justify-center items-center px-10">
+        <span className="font-serif text-6xl font-bold tracking-tighter mb-10 animate-pulse">T</span>
+        
+        {/* Progress Bar Container */}
+        <div className="w-full bg-[#EDEDED] h-2 rounded-full overflow-hidden mb-4">
+          <div 
+            className="bg-black h-full transition-all duration-300 ease-out rounded-full"
+            style={{ width: `${loadingProgress}%` }}
+          />
+        </div>
+
+        {/* Dynamic Startup Status Text */}
+        <p className="text-xs font-mono text-gray-500 italic tracking-tight">
+          {loadingText}
+        </p>
       </div>
     );
   }
 
+  /* -------------------------------------------------------------------------- */
+  /* 3. MAIN APPLICATION                                                        */
+  /* -------------------------------------------------------------------------- */
   return (
     <div className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 overflow-x-hidden">
       
@@ -305,11 +357,11 @@ export default function App() {
               </h1>
             </div>
             <button 
-              onClick={fetchSheetData} 
+              onClick={startLoadingSequence} 
               className="p-1.5 text-gray-500 hover:text-black rounded-lg bg-gray-50 border border-gray-100"
               title="Sync with Google Sheet"
             >
-              <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+              <RefreshCw className="w-3.5 h-3.5" />
             </button>
           </div>
 
