@@ -4,19 +4,14 @@ import { Search, Plus, Minus, RefreshCw, X, Check, Lock, Delete } from 'lucide-r
 const HARDWIRED_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzcrqf4q-QWiGq0sxMmXqS7QcsxCVfhkJgPfjxOm6KyPShNUD-zkD9HUZy49rDdrfAYJg/exec";
 const PIN_CODE = "1234";
 
-// Helper to format dynamic date & day name
 function getFormattedDates() {
   const now = new Date();
-  
-  // Get current day name (e.g. "Friday")
   const dayName = now.toLocaleDateString('en-GB', { weekday: 'long' });
 
-  // Calculate Monday of the current week
   const day = now.getDay();
   const diff = now.getDate() - day + (day === 0 ? -6 : 1);
   const monday = new Date(now.setDate(diff));
 
-  // Format ordinal date (e.g. "17th November")
   const dayOfMonth = monday.getDate();
   const monthName = monday.toLocaleDateString('en-GB', { month: 'long' });
   
@@ -45,7 +40,6 @@ export default function App() {
   // Filter States
   const [selectedSupplier, setSelectedSupplier] = useState(null);
   const [selectedArea, setSelectedArea] = useState(null);
-  const [selectedCategory, setSelectedCategory] = useState(null);
 
   const [view, setView] = useState('stocktake');
   const [products, setProducts] = useState([]);
@@ -136,23 +130,21 @@ export default function App() {
     }
   };
 
-  // Filter List Extractors
+  // Filter Extractors
   const suppliers = useMemo(() => Array.from(new Set(products.map(p => p.supplier))).filter(Boolean), [products]);
   const areas = useMemo(() => Array.from(new Set(products.map(p => p.area))).filter(Boolean), [products]);
-  const categories = useMemo(() => Array.from(new Set(products.map(p => p.category))).filter(Boolean), [products]);
 
-  // Combined Multi-Filter Logic
+  // Combined Supplier & Area Filter Logic
   const filteredProducts = useMemo(() => {
     return products.filter(p => {
       const matchesSearch = p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
                             p.id.toLowerCase().includes(searchQuery.toLowerCase());
       const matchesSupplier = selectedSupplier ? p.supplier === selectedSupplier : true;
       const matchesArea = selectedArea ? p.area === selectedArea : true;
-      const matchesCategory = selectedCategory ? p.category === selectedCategory : true;
 
-      return matchesSearch && matchesSupplier && matchesArea && matchesCategory;
+      return matchesSearch && matchesSupplier && matchesArea;
     });
-  }, [products, searchQuery, selectedSupplier, selectedArea, selectedCategory]);
+  }, [products, searchQuery, selectedSupplier, selectedArea]);
 
   const updateCount = (id, delta) => {
     setCounts(prev => ({
@@ -304,7 +296,7 @@ export default function App() {
         /* STOCKTAKE SCREEN */
         <div className="flex-1 flex flex-col overflow-hidden">
           
-          {/* Title Section with Smaller Text & Dynamic Day */}
+          {/* Title Section */}
           <div className="px-5 pt-3 pb-1 flex justify-between items-end flex-shrink-0">
             <div>
               <p className="text-gray-500 italic text-xs font-serif">Stocktake</p>
@@ -329,7 +321,7 @@ export default function App() {
             </div>
           )}
 
-          {/* Controls Bar with Automatic Day Badge */}
+          {/* Controls Bar */}
           <div className="flex items-center justify-between px-5 py-2 flex-shrink-0">
             <div className="bg-[#F3F3F3] font-bold px-3 py-1.5 rounded-lg text-xs text-gray-800 tracking-wide uppercase">
               {dayName}
@@ -352,7 +344,7 @@ export default function App() {
             </div>
           </div>
 
-          {/* Search Bar & 3-Tier Filter Chips */}
+          {/* Search Bar & 2-Row Filter Chips (Supplier & Area) */}
           <div className="px-5 py-1.5 flex-shrink-0 space-y-2">
             
             <div className="relative">
@@ -366,7 +358,7 @@ export default function App() {
               <Search className="w-3.5 h-3.5 absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
             </div>
 
-            {/* Filter 1: Supplier */}
+            {/* Row 1: Supplier */}
             <div>
               <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Supplier</span>
               <div className="flex items-center space-x-1.5 overflow-x-auto pb-1 scrollbar-none">
@@ -386,7 +378,7 @@ export default function App() {
               </div>
             </div>
 
-            {/* Filter 2: Area (Column H) */}
+            {/* Row 2: Area (Column H) */}
             {areas.length > 0 && (
               <div>
                 <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Area</span>
@@ -402,28 +394,6 @@ export default function App() {
                       }`}
                     >
                       {area}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Filter 3: Category (Column I) */}
-            {categories.length > 0 && (
-              <div>
-                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block mb-1">Category</span>
-                <div className="flex items-center space-x-1.5 overflow-x-auto pb-1 scrollbar-none">
-                  {categories.map(cat => (
-                    <button
-                      key={cat}
-                      onClick={() => setSelectedCategory(selectedCategory === cat ? null : cat)}
-                      className={`px-2.5 py-1 rounded-md text-[11px] font-medium whitespace-nowrap transition border ${
-                        selectedCategory === cat 
-                          ? 'bg-black text-white border-black' 
-                          : 'bg-[#EDEDED] text-gray-700 border-transparent hover:bg-gray-200'
-                      }`}
-                    >
-                      {cat}
                     </button>
                   ))}
                 </div>
