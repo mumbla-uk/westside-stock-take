@@ -4,6 +4,24 @@ import { Search, Plus, Minus, RefreshCw, X, Check, Lock, Delete } from 'lucide-r
 const HARDWIRED_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzcrqf4q-QWiGq0sxMmXqS7QcsxCVfhkJgPfjxOm6KyPShNUD-zkD9HUZy49rDdrfAYJg/exec";
 const PIN_CODE = "1234";
 
+// Reusable Icon Component with fallback to text
+function AppLogo({ className = "w-12 h-12", fallbackTextClass = "font-serif text-6xl font-bold tracking-tighter" }) {
+  const [imgError, setImgError] = useState(false);
+
+  if (!imgError) {
+    return (
+      <img 
+        src="/img/icon.png" 
+        alt="West Side Tavern" 
+        className={`${className} object-contain`} 
+        onError={() => setImgError(true)}
+      />
+    );
+  }
+
+  return <span className={fallbackTextClass}>T</span>;
+}
+
 function getFormattedDates() {
   const now = new Date();
   const dayName = now.toLocaleDateString('en-GB', { weekday: 'long' });
@@ -67,12 +85,10 @@ export default function App() {
     setLoadingText('Initializing settings...');
 
     try {
-      // Stage 1: Load configurations
       await new Promise(r => setTimeout(r, 300));
       setLoadingProgress(35);
       setLoadingText('Connecting to Google Sheets...');
 
-      // Stage 2: Fetch Data
       const res = await fetch(HARDWIRED_SCRIPT_URL);
       const json = await res.json();
 
@@ -92,7 +108,6 @@ export default function App() {
       await new Promise(r => setTimeout(r, 300));
       setLoadingProgress(100);
 
-      // Finish loading
       setTimeout(() => {
         setLoading(false);
       }, 200);
@@ -191,8 +206,8 @@ export default function App() {
   if (!isAuthenticated) {
     return (
       <div className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 justify-center items-center px-8">
-        <div className="mb-12">
-          <span className="font-serif text-6xl font-bold tracking-tighter">T</span>
+        <div className="mb-12 flex justify-center items-center">
+          <AppLogo className="w-20 h-20" fallbackTextClass="font-serif text-6xl font-bold tracking-tighter" />
         </div>
         <div className="flex space-x-4 mb-16">
           {[0, 1, 2, 3].map(index => {
@@ -241,9 +256,10 @@ export default function App() {
   if (loading) {
     return (
       <div className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 justify-center items-center px-10">
-        <span className="font-serif text-6xl font-bold tracking-tighter mb-10 animate-pulse">T</span>
+        <div className="mb-10 animate-pulse flex justify-center items-center">
+          <AppLogo className="w-16 h-16" fallbackTextClass="font-serif text-6xl font-bold tracking-tighter" />
+        </div>
         
-        {/* Progress Bar Container */}
         <div className="w-full bg-[#EDEDED] h-2 rounded-full overflow-hidden mb-4">
           <div 
             className="bg-black h-full transition-all duration-300 ease-out rounded-full"
@@ -251,7 +267,6 @@ export default function App() {
           />
         </div>
 
-        {/* Dynamic Startup Status Text */}
         <p className="text-xs font-mono text-gray-500 italic tracking-tight">
           {loadingText}
         </p>
@@ -268,7 +283,7 @@ export default function App() {
       {/* Header */}
       <header className="flex items-center justify-between px-5 pt-6 pb-2 border-b border-gray-50 flex-shrink-0">
         <div className="flex items-center space-x-2">
-          <span className="font-serif text-2xl font-bold tracking-tighter">T</span>
+          <AppLogo className="w-7 h-7" fallbackTextClass="font-serif text-2xl font-bold tracking-tighter" />
           <span className="font-semibold text-base tracking-tight">West Side Tavern</span>
         </div>
         <div className="flex items-center space-x-4 text-sm font-medium">
@@ -396,7 +411,7 @@ export default function App() {
             </div>
           </div>
 
-          {/* Search Bar & 2-Row Filter Chips (Supplier & Area) */}
+          {/* Dynamic Search Bar */}
           <div className="px-5 py-1.5 flex-shrink-0 space-y-2">
             
             <div className="relative">
@@ -407,7 +422,18 @@ export default function App() {
                 placeholder="Search products..."
                 className="w-full bg-[#EDEDED] py-2 pl-4 pr-9 rounded-lg text-xs italic placeholder-gray-500 focus:outline-none focus:ring-0"
               />
-              <Search className="w-3.5 h-3.5 absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+              
+              {searchQuery ? (
+                <button 
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 p-0.5 text-gray-500 hover:text-black transition"
+                  title="Clear search"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              ) : (
+                <Search className="w-3.5 h-3.5 absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+              )}
             </div>
 
             {/* Row 1: Supplier */}
