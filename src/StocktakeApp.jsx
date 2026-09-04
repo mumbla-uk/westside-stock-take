@@ -1,32 +1,26 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Search, Plus, Minus, ChevronDown, RefreshCw, X, Link, Check, AlertCircle } from 'lucide-react';
+import { Search, Plus, Minus, ChevronDown, RefreshCw, X, Check, Lock, Delete } from 'lucide-react';
 
-const INITIAL_PRODUCTS = [
-  { id: 'WY002', name: 'Aberfeldy 12', unit: 'case', supplier: 'Tennents', par: 3, count: 1 },
-  { id: 'LQ005', name: 'Almave 0&', unit: 'bottle', supplier: 'Royal Mile', par: 2, count: 1 },
-  { id: 'PR030', name: 'Almond Milk', unit: 'pack', supplier: 'General', par: 4, count: 0 },
-  { id: 'BA003', name: 'Almond Milk Punched Mai Tai', unit: 'ml', supplier: 'Batch', par: 5000, count: 0 },
-  { id: 'AM003', name: 'Amaro Averna', unit: 'bottle', supplier: 'Tennents', par: 4, count: 2 },
-  { id: 'AM001', name: 'Amaro Montenegro', unit: 'bottle', supplier: 'Royal Mile', par: 3, count: 0 },
-  { id: 'BT001', name: 'Angostura Bitters', unit: 'bottle', supplier: 'Royal Mile', par: 2, count: 2 },
-  { id: 'RM003', name: 'Bacardi Blanca', unit: 'bottle', supplier: 'Tennents', par: 4, count: 3 },
-  { id: 'RM005', name: 'Bacardi Spiced', unit: 'bottle', supplier: 'Tennents', par: 9, count: 1 },
-  { id: 'RM006', name: 'Bacardi Ocho', unit: 'bottle', supplier: 'Tennents', par: 1, count: 1 }
-];
+// Hardwired Web App Endpoint
+const HARDWIRED_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzcrqf4q-QWiGq0sxMmXqS7QcsxCVfhkJgPfjxOm6KyPShNUD-zkD9HUZy49rDdrfAYJg/exec";
+const PIN_CODE = "1234";
 
 export default function App() {
+  // Navigation & Auth States
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [pinInput, setPinInput] = useState('');
+  const [pinError, setPinError] = useState(false);
+
   const [activeTab, setActiveTab] = useState('Stocktake');
   const [selectedDay, setSelectedDay] = useState('Monday');
   const [searchQuery, setSearchQuery] = useState('Bacard');
   const [selectedSupplier, setSelectedSupplier] = useState(null);
   
-  // Settings & Sync State
-  const [view, setView] = useState('stocktake'); // 'stocktake' or 'settings'
-  const [scriptUrl, setScriptUrl] = useState(() => localStorage.getItem('wst_script_url') || '');
-  const [tempUrl, setTempUrl] = useState(scriptUrl);
-  const [products, setProducts] = useState(INITIAL_PRODUCTS);
+  // App views: 'stocktake' or 'settings'
+  const [view, setView] = useState('stocktake');
+  const [products, setProducts] = useState([]);
   const [counts, setCounts] = useState({});
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [statusMsg, setStatusMsg] = useState(null);
 
@@ -37,17 +31,17 @@ export default function App() {
     setCounts(initCounts);
   }, [products]);
 
-  // Fetch sheet catalog
+  // Fetch sheet catalog upon authentication
   const fetchSheetData = async () => {
-    if (!scriptUrl) return;
     setLoading(true);
     setStatusMsg(null);
     try {
-      const res = await fetch(scriptUrl);
+      const res = await fetch(HARDWIRED_SCRIPT_URL);
       const json = await res.json();
       if (json.status === "success" && Array.isArray(json.data)) {
         setProducts(json.data);
-        setStatusMsg({ type: 'success', text: 'Stock data loaded from Google Sheet' });
+      } else if (Array.isArray(json)) {
+        setProducts(json);
       } else {
         setStatusMsg({ type: 'error', text: 'Error fetching catalog from script.' });
       }
@@ -60,15 +54,40 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (scriptUrl) fetchSheetData();
-  }, [scriptUrl]);
+    if (isAuthenticated) {
+      fetchSheetData();
+    }
+  }, [isAuthenticated]);
+
+  // PIN Keypad Press Handler
+  const handlePinPress = (num) => {
+    if (pinInput.length < 4) {
+      const newPin = pinInput + num;
+      setPinInput(newPin);
+      setPinError(false);
+
+      if (newPin.length === 4) {
+        if (newPin === PIN_CODE) {
+          setTimeout(() => {
+            setIsAuthenticated(true);
+          }, 150);
+        } else {
+          setTimeout(() => {
+            setPinError(true);
+            setPinInput('');
+          }, 200);
+        }
+      }
+    }
+  };
+
+  const handlePinDelete = () => {
+    setPinInput(prev => prev.slice(0, -1));
+    setPinError(false);
+  };
 
   // Save stock counts back to sheet
   const handleSaveToSheet = async () => {
-    if (!scriptUrl) {
-      setView('settings');
-      return;
-    }
     setSaving(true);
     setStatusMsg(null);
     try {
@@ -76,7 +95,7 @@ export default function App() {
         id: p.id,
         count: counts[p.id] ?? 0
       }));
-      await fetch(scriptUrl, {
+      await fetch(HARDWIRED_SCRIPT_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -89,14 +108,6 @@ export default function App() {
     } finally {
       setSaving(false);
     }
-  };
-
-  const handleSaveSettings = (e) => {
-    e.preventDefault();
-    localStorage.setItem('wst_script_url', tempUrl);
-    setScriptUrl(tempUrl);
-    setView('stocktake');
-    if (tempUrl) fetchSheetData();
   };
 
   const suppliers = useMemo(() => {
@@ -119,22 +130,102 @@ export default function App() {
     }));
   };
 
+  /* -------------------------------------------------------------------------- */
+  /* 1. LOGIN SCREEN                                                           */
+  /* -------------------------------------------------------------------------- */
+  if (!isAuthenticated) {
+    return (
+      <div className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 justify-center items-center px-8">
+        {/* Brand Logo */}
+        <div className="mb-12">
+          <span className="font-serif text-6xl font-bold tracking-tighter">T</span>
+        </div>
+
+        {/* PIN Indicators */}
+        <div className="flex space-x-4 mb-16">
+          {[0, 1, 2, 3].map(index => {
+            const isFilled = pinInput.length > index;
+            return (
+              <div
+                key={index}
+                className={`w-3.5 h-3.5 rounded-full transition-all duration-150 ${
+                  pinError 
+                    ? 'bg-red-500 animate-bounce' 
+                    : isFilled 
+                      ? 'bg-gray-800 scale-110' 
+                      : 'bg-gray-200'
+                }`}
+              />
+            );
+          })}
+        </div>
+
+        {/* Numeric Keypad */}
+        <div className="grid grid-cols-3 gap-y-8 gap-x-12 w-full max-w-xs text-center text-2xl font-medium">
+          {[1, 2, 3, 4, 5, 6, 7, 8, 9].map(num => (
+            <button
+              key={num}
+              onClick={() => handlePinPress(num.toString())}
+              className="py-3 hover:bg-gray-50 active:bg-gray-100 rounded-full transition select-none focus:outline-none"
+            >
+              {num}
+            </button>
+          ))}
+          <div />
+          <button
+            onClick={() => handlePinPress('0')}
+            className="py-3 hover:bg-gray-50 active:bg-gray-100 rounded-full transition select-none focus:outline-none"
+          >
+            0
+          </button>
+          <button
+            onClick={handlePinDelete}
+            className="flex items-center justify-center py-3 text-gray-400 hover:text-gray-900 transition focus:outline-none"
+          >
+            <Delete className="w-6 h-6" />
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  /* -------------------------------------------------------------------------- */
+  /* 2. LOADING SCREEN                                                          */
+  /* -------------------------------------------------------------------------- */
+  if (loading) {
+    return (
+      <div className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 justify-center items-center px-6">
+        <span className="font-serif text-5xl font-bold tracking-tighter mb-6">T</span>
+        <RefreshCw className="w-6 h-6 text-gray-400 animate-spin mb-3" />
+        <p className="text-sm font-medium text-gray-600 italic">loading products...</p>
+      </div>
+    );
+  }
+
+  /* -------------------------------------------------------------------------- */
+  /* 3. MAIN APPLICATION                                                        */
+  /* -------------------------------------------------------------------------- */
   return (
     <div className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 overflow-x-hidden">
       
-      {/* Top Header */}
+      {/* Header */}
       <header className="flex items-center justify-between px-5 pt-6 pb-2 border-b border-gray-50 flex-shrink-0">
         <div className="flex items-center space-x-2">
           <span className="font-serif text-2xl font-bold tracking-tighter">T</span>
           <span className="font-semibold text-base tracking-tight">West Side Tavern</span>
         </div>
         <div className="flex items-center space-x-4 text-sm font-medium">
-          <button className="text-gray-900 hover:text-black">Logout</button>
           <button 
             onClick={() => {
-              setTempUrl(scriptUrl);
-              setView(view === 'settings' ? 'stocktake' : 'settings');
-            }}
+              setIsAuthenticated(false);
+              setPinInput('');
+            }} 
+            className="text-gray-900 hover:text-black"
+          >
+            Logout
+          </button>
+          <button 
+            onClick={() => setView(view === 'settings' ? 'stocktake' : 'settings')}
             className={`transition ${view === 'settings' ? 'font-bold underline' : 'text-gray-900 hover:text-black'}`}
           >
             Settings
@@ -160,55 +251,39 @@ export default function App() {
             </button>
           </div>
 
-          <form onSubmit={handleSaveSettings} className="space-y-5 mt-4">
+          <div className="space-y-5 mt-4">
             <div className="space-y-2">
               <label className="block text-sm font-bold text-gray-900">
                 Google Apps Script Web App URL
               </label>
               <p className="text-xs text-gray-500 leading-relaxed">
-                Paste your deployed Google Apps Script URL here to sync your live product catalog and write stock counts directly to your master Google Sheet.
+                Endpoint URL is hardwired into the application core.
               </p>
               <div className="relative mt-2">
                 <input
-                  type="url"
-                  placeholder="https://script.google.com/macros/s/..."
-                  value={tempUrl}
-                  onChange={e => setTempUrl(e.target.value)}
-                  className="w-full bg-[#EDEDED] py-3 pl-10 pr-4 rounded-lg text-base sm:text-xs font-mono text-gray-800 placeholder-gray-400 focus:outline-none"
-                  required
+                  type="text"
+                  readOnly
+                  value={HARDWIRED_SCRIPT_URL}
+                  className="w-full bg-[#EDEDED] py-3 pl-10 pr-4 rounded-lg text-xs font-mono text-gray-500 cursor-not-allowed focus:outline-none"
                 />
-                <Link className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
+                <Lock className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
               </div>
             </div>
 
-            {scriptUrl ? (
-              <div className="p-3 bg-green-50 border border-green-200 rounded-lg flex items-center space-x-2 text-xs text-green-800 font-medium">
-                <Check className="w-4 h-4 text-green-600 flex-shrink-0" />
-                <span>Connected to Google Apps Script Endpoint.</span>
-              </div>
-            ) : (
-              <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg flex items-center space-x-2 text-xs text-amber-800 font-medium">
-                <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0" />
-                <span>No endpoint set. Using default offline stock template.</span>
-              </div>
-            )}
+            <div className="p-3 bg-green-50 border border-green-200 rounded-lg flex items-center space-x-2 text-xs text-green-800 font-medium">
+              <Check className="w-4 h-4 text-green-600 flex-shrink-0" />
+              <span>Hardwired & Connected to Google Sheet.</span>
+            </div>
 
-            <div className="pt-2 flex space-x-3">
+            <div className="pt-2">
               <button
-                type="button"
                 onClick={() => setView('stocktake')}
-                className="w-1/2 py-3 bg-[#EDEDED] text-sm font-medium rounded-lg text-gray-800 hover:bg-gray-200 transition"
+                className="w-full py-3 bg-[#C2F19D] text-sm font-semibold rounded-lg text-gray-900 hover:bg-[#b2e88a] transition"
               >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                className="w-1/2 py-3 bg-[#C2F19D] text-sm font-semibold rounded-lg text-gray-900 hover:bg-[#b2e88a] transition"
-              >
-                Save Configuration
+                Back to Stocktake
               </button>
             </div>
-          </form>
+          </div>
         </div>
 
       ) : (
@@ -224,15 +299,13 @@ export default function App() {
                 Week beginning<br />17th November
               </h1>
             </div>
-            {scriptUrl && (
-              <button 
-                onClick={fetchSheetData} 
-                className="p-2 text-gray-500 hover:text-black rounded-lg bg-gray-50 border border-gray-100"
-                title="Sync with Google Sheet"
-              >
-                <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-              </button>
-            )}
+            <button 
+              onClick={fetchSheetData} 
+              className="p-2 text-gray-500 hover:text-black rounded-lg bg-gray-50 border border-gray-100"
+              title="Sync with Google Sheet"
+            >
+              <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+            </button>
           </div>
 
           {statusMsg && (
@@ -321,9 +394,7 @@ export default function App() {
 
           {/* Product List */}
           <div className="flex-1 overflow-y-auto px-5 divide-y divide-gray-100">
-            {loading ? (
-              <p className="text-center py-8 text-sm text-gray-500">Syncing Google Sheets data...</p>
-            ) : filteredProducts.length === 0 ? (
+            {filteredProducts.length === 0 ? (
               <p className="text-center py-8 text-sm text-gray-500">No matching products found.</p>
             ) : (
               filteredProducts.map(product => {
