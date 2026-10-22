@@ -9,12 +9,12 @@ import {
   Unlock, 
   Copy, 
   Check, 
-  Download, 
   ClipboardList, 
   Trash2, 
   Send, 
   FileText,
-  ArrowLeft
+  ArrowLeft,
+  Sparkles
 } from 'lucide-react';
 
 const HARDWIRED_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzcrqf4q-QWiGq0sxMmXqS7QcsxCVfhkJgPfjxOm6KyPShNUD-zkD9HUZy49rDdrfAYJg/exec";
@@ -61,6 +61,14 @@ function getFormattedDates() {
   const fullDateStr = `${dayName} ${dayOfMonth}${getOrdinalSuffix(dayOfMonth)} ${monthName}`;
   return { dayName, weekBeginningStr, fullDateStr };
 }
+
+const LOADING_HINTS = [
+  "Connecting...",
+  "Auditing speed rails & pars...",
+  "Checking cellar taps & keg counts...",
+  "Syncing catalog definitions...",
+  "Almost ready for service..."
+];
 
 export default function StocktakeApp({ onBackToHub, onLogout }) {
   // Tabs: 'Stocktake', 'Orders', 'Goods'
@@ -109,24 +117,38 @@ export default function StocktakeApp({ onBackToHub, onLogout }) {
   const [saving, setSaving] = useState(false);
   const [statusMsg, setStatusMsg] = useState(null);
 
-  // Animated Startup Loader
+  // Animated Interactive Startup Loader
   const [loading, setLoading] = useState(true);
-  const [loadingProgress, setLoadingProgress] = useState(0);
-  const [loadingText, setLoadingText] = useState('Initializing settings...');
+  const [loadingProgress, setLoadingProgress] = useState(12);
+  const [hintIndex, setHintIndex] = useState(0);
 
   const { dayName, weekBeginningStr, fullDateStr } = useMemo(() => getFormattedDates(), []);
+
+  // Cycle playful hints while loading
+  useEffect(() => {
+    if (!loading) return;
+    const interval = setInterval(() => {
+      setHintIndex((prev) => (prev + 1) % LOADING_HINTS.length);
+    }, 1800);
+    return () => clearInterval(interval);
+  }, [loading]);
 
   // Fetch sheet catalog
   const fetchSheetData = async () => {
     setLoading(true);
-    setLoadingProgress(20);
-    setLoadingText('Connecting to Google Sheets...');
+    setLoadingProgress(18);
+
+    // Staged progress bumps to give visual feedback during long network trips
+    const t1 = setTimeout(() => setLoadingProgress(45), 400);
+    const t2 = setTimeout(() => setLoadingProgress(72), 1200);
+
     try {
       const res = await fetch(HARDWIRED_SCRIPT_URL);
       const json = await res.json();
       
-      setLoadingProgress(70);
-      setLoadingText('Loading catalog & par levels...');
+      clearTimeout(t1);
+      clearTimeout(t2);
+      setLoadingProgress(92);
 
       let fetched = [];
       if (json.status === "success" && Array.isArray(json.data)) {
@@ -146,11 +168,12 @@ export default function StocktakeApp({ onBackToHub, onLogout }) {
       setOrderOverrides(initialOrders);
 
       setLoadingProgress(100);
-      setTimeout(() => setLoading(false), 200);
+      setTimeout(() => setLoading(false), 250);
     } catch (err) {
       console.error("Failed to load sheet data:", err);
+      clearTimeout(t1);
+      clearTimeout(t2);
       setLoadingProgress(100);
-      setLoadingText('Ready (Offline mode)');
       setTimeout(() => setLoading(false), 400);
     }
   };
@@ -491,21 +514,52 @@ export default function StocktakeApp({ onBackToHub, onLogout }) {
   };
 
   /* -------------------------------------------------------------------------- */
-  /* LOADING SCREEN                                                             */
+  /* INTERACTIVE "CONNECTING" SCREEN                                            */
   /* -------------------------------------------------------------------------- */
   if (loading) {
     return (
-      <div className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 justify-center items-center px-10">
-        <div className="mb-10 animate-pulse flex justify-center items-center">
-          <AppLogo className="w-16 h-16" fallbackTextClass="font-serif text-6xl font-bold tracking-tighter" />
+      <div className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 justify-center items-center px-8 relative overflow-hidden select-none">
+        
+        {/* Subtle decorative glow */}
+        <div className="absolute w-72 h-72 rounded-full bg-neutral-100 blur-3xl pointer-events-none -top-10" />
+
+        {/* Brand Icon */}
+        <div className="mb-8 relative flex flex-col items-center">
+          <div className="p-4 rounded-3xl bg-neutral-50 border border-neutral-100 shadow-sm mb-3">
+            <AppLogo className="w-14 h-14" fallbackTextClass="font-serif text-5xl font-black tracking-tighter" />
+          </div>
+          <span className="font-mono text-[10px] uppercase tracking-widest text-neutral-400">West Side Tavern</span>
         </div>
-        <div className="w-full bg-[#EDEDED] h-2 rounded-full overflow-hidden mb-4">
-          <div 
-            className="bg-black h-full transition-all duration-300 ease-out rounded-full"
-            style={{ width: `${loadingProgress}%` }}
-          />
+
+        {/* Progress Card */}
+        <div className="w-full max-w-xs bg-neutral-50/80 backdrop-blur border border-neutral-200/80 rounded-2xl p-5 shadow-sm space-y-4">
+          <div className="flex items-center justify-between text-xs">
+            <div className="flex items-center space-x-2">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              <span className="font-bold tracking-tight text-neutral-900">Connecting...</span>
+            </div>
+            <span className="font-mono text-[11px] font-bold text-neutral-500">
+              {Math.round(loadingProgress)}%
+            </span>
+          </div>
+
+          {/* Smooth Progress Bar with subtle striped sheen */}
+          <div className="w-full bg-neutral-200/70 h-2 rounded-full overflow-hidden p-0.5">
+            <div 
+              className="bg-black h-full rounded-full transition-all duration-300 ease-out shadow-sm"
+              style={{ width: `${loadingProgress}%` }}
+            />
+          </div>
+
+          {/* Cycling hints so wait time feels short */}
+          <div className="min-h-[28px] flex items-center justify-center text-center">
+            <p className="text-[11px] font-medium text-neutral-500 italic transition-opacity duration-300">
+              {LOADING_HINTS[hintIndex]}
+            </p>
+          </div>
         </div>
-        <p className="text-xs font-mono text-gray-500 italic tracking-tight">{loadingText}</p>
+
+        <p className="text-[10px] text-neutral-400 font-mono mt-8">Live Stocktake & Intake System</p>
       </div>
     );
   }
@@ -514,10 +568,10 @@ export default function StocktakeApp({ onBackToHub, onLogout }) {
   /* MAIN APPLICATION INTERFACE                                                 */
   /* -------------------------------------------------------------------------- */
   return (
-    <div className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 overflow-x-hidden">
+    <div className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 overflow-x-hidden relative">
       
       {/* Top Header with Hub Navigation */}
-      <header className="flex items-center justify-between px-5 pt-6 pb-2 border-b border-gray-50 flex-shrink-0">
+      <header className="flex items-center justify-between px-5 pt-6 pb-2 border-b border-gray-50 flex-shrink-0 bg-white z-10">
         <div className="flex items-center space-x-2">
           {onBackToHub && (
             <button 
@@ -560,7 +614,7 @@ export default function StocktakeApp({ onBackToHub, onLogout }) {
       {view === 'settings' ? (
         
         /* SETTINGS VIEW */
-        <div className="flex-1 flex flex-col px-5 pt-4 pb-2 overflow-y-auto">
+        <div className="flex-1 flex flex-col px-5 pt-4 pb-28 overflow-y-auto">
           <div className="flex items-center justify-between pb-3 border-b border-gray-100">
             <div>
               <p className="text-gray-500 italic text-xs font-serif">Preferences</p>
@@ -607,9 +661,9 @@ export default function StocktakeApp({ onBackToHub, onLogout }) {
       ) : activeTab === 'Orders' ? (
 
         /* ====================================================================== */
-        /* ORDERS MODULE                                                          */
+        /* ORDERS MODULE (SHOWING MODIFIED ITEMS)                                 */
         /* ====================================================================== */
-        <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="flex-1 flex flex-col overflow-hidden pb-24">
           <div className="px-5 pt-4 pb-2 border-b border-gray-100 flex-shrink-0">
             <div className="flex justify-between items-start mb-2">
               <div>
@@ -640,7 +694,7 @@ export default function StocktakeApp({ onBackToHub, onLogout }) {
               <div className="text-center py-16 text-gray-400">
                 <ClipboardList className="w-10 h-10 mx-auto mb-2 opacity-40" />
                 <p className="text-sm font-semibold text-gray-700">No items counted yet this session</p>
-                <p className="text-xs text-gray-400 mt-1">Tap Stocktake to adjust counts; any items needing restock will appear here.</p>
+                <p className="text-xs text-gray-400 mt-1">Tap Stocktake to adjust counts; items needing restock will appear here.</p>
               </div>
             ) : Object.keys(ordersBySupplier).length === 0 ? (
               <div className="text-center py-16 text-gray-400">
@@ -713,7 +767,7 @@ export default function StocktakeApp({ onBackToHub, onLogout }) {
         /* ====================================================================== */
         /* GOODS RECEIVED INVOICE INTAKE REPORT                                   */
         /* ====================================================================== */
-        <div className="flex-1 flex flex-col overflow-y-auto px-5 py-3 space-y-4">
+        <div className="flex-1 flex flex-col overflow-y-auto px-5 py-3 space-y-4 pb-28">
           
           <div className="border-b border-gray-100 pb-3">
             <div className="flex justify-between items-start">
@@ -731,39 +785,39 @@ export default function StocktakeApp({ onBackToHub, onLogout }) {
                 title="Lock / Unlock Automatic VAT & Unit Math"
               >
                 {isMathLocked ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
-                <span>{isMathLocked ? 'VAT Locked (20%)' : 'Unlocked (Manual)'}</span>
+                <span>{isMathLocked ? 'VAT Locked' : 'Manual Math'}</span>
               </button>
             </div>
 
-            {/* Supplier, Invoice Ref & Delivery Date */}
-            <div className="grid grid-cols-3 gap-2 mt-3 text-xs">
-              <div>
-                <label className="block text-[10px] font-bold uppercase text-gray-400 mb-1">Supplier</label>
+            {/* Supplier, Invoice Ref & Delivery Date (Proportionally fitted with min-w-0 to prevent right overflow) */}
+            <div className="grid grid-cols-12 gap-1.5 mt-3 text-xs">
+              <div className="col-span-4 min-w-0">
+                <label className="block text-[10px] font-bold uppercase text-gray-400 mb-1 truncate">Supplier</label>
                 <input
                   type="text"
-                  placeholder="e.g. Tennents"
+                  placeholder="Tennents"
                   value={invoiceSupplier}
                   onChange={(e) => setInvoiceSupplier(e.target.value)}
-                  className="w-full bg-[#EDEDED] py-2 px-3 rounded-lg font-semibold text-gray-900 focus:outline-none"
+                  className="w-full min-w-0 bg-[#EDEDED] py-2 px-2.5 rounded-lg font-semibold text-gray-900 text-[11px] focus:outline-none"
                 />
               </div>
-              <div>
-                <label className="block text-[10px] font-bold uppercase text-gray-400 mb-1">Invoice / Ref #</label>
+              <div className="col-span-4 min-w-0">
+                <label className="block text-[10px] font-bold uppercase text-gray-400 mb-1 truncate">Invoice / Ref</label>
                 <input
                   type="text"
-                  placeholder="e.g. INV-1094"
+                  placeholder="INV-1094"
                   value={invoiceRef}
                   onChange={(e) => setInvoiceRef(e.target.value)}
-                  className="w-full bg-[#EDEDED] py-2 px-3 rounded-lg font-semibold text-gray-900 focus:outline-none"
+                  className="w-full min-w-0 bg-[#EDEDED] py-2 px-2.5 rounded-lg font-semibold text-gray-900 text-[11px] focus:outline-none"
                 />
               </div>
-              <div>
-                <label className="block text-[10px] font-bold uppercase text-gray-400 mb-1">Delivery Date</label>
+              <div className="col-span-4 min-w-0">
+                <label className="block text-[10px] font-bold uppercase text-gray-400 mb-1 truncate">Date</label>
                 <input
                   type="date"
                   value={deliveryDate}
                   onChange={(e) => setDeliveryDate(e.target.value)}
-                  className="w-full bg-[#EDEDED] py-2 px-2.5 rounded-lg font-semibold text-gray-900 focus:outline-none"
+                  className="w-full min-w-0 bg-[#EDEDED] py-2 px-1.5 rounded-lg font-semibold text-gray-900 text-[11px] focus:outline-none appearance-none"
                 />
               </div>
             </div>
@@ -996,7 +1050,7 @@ export default function StocktakeApp({ onBackToHub, onLogout }) {
         /* ====================================================================== */
         /* STOCKTAKE MODULE                                                       */
         /* ====================================================================== */
-        <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="flex-1 flex flex-col overflow-hidden pb-24">
           
           <div className="px-5 pt-3 pb-1 flex justify-between items-end flex-shrink-0">
             <div>
@@ -1225,27 +1279,42 @@ export default function StocktakeApp({ onBackToHub, onLogout }) {
         </div>
       )}
 
-      {/* Bottom Navigation */}
-      <footer className="bg-[#111111] text-white flex justify-around items-center py-3.5 px-2 text-xs font-semibold flex-shrink-0">
+      {/* ====================================================================== */}
+      {/* FLOATING GLASSMORPHISM BOTTOM NAVIGATION BAR                           */}
+      {/* ====================================================================== */}
+      <nav className="fixed bottom-4 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-[390px] z-50 rounded-2xl bg-[#111111]/95 backdrop-blur-md text-white py-2.5 px-3 flex justify-around items-center text-xs font-semibold shadow-2xl border border-white/10 select-none">
         <button 
           onClick={() => { setView('main'); setActiveTab('Stocktake'); }}
-          className={activeTab === 'Stocktake' && view === 'main' ? 'text-white border-b-2 border-white pb-0.5' : 'text-gray-400 hover:text-white'}
+          className={`flex-1 py-1 text-center rounded-xl transition ${
+            activeTab === 'Stocktake' && view === 'main' 
+              ? 'text-white bg-white/15 font-bold shadow-inner' 
+              : 'text-gray-400 hover:text-white'
+          }`}
         >
           Stocktake
         </button>
         <button 
           onClick={() => { setView('main'); setActiveTab('Orders'); }}
-          className={activeTab === 'Orders' && view === 'main' ? 'text-white border-b-2 border-white pb-0.5' : 'text-gray-400 hover:text-white'}
+          className={`flex-1 py-1 text-center rounded-xl transition ${
+            activeTab === 'Orders' && view === 'main' 
+              ? 'text-white bg-white/15 font-bold shadow-inner' 
+              : 'text-gray-400 hover:text-white'
+          }`}
         >
           Orders
         </button>
         <button 
           onClick={() => { setView('main'); setActiveTab('Goods'); }}
-          className={activeTab === 'Goods' && view === 'main' ? 'text-white border-b-2 border-white pb-0.5' : 'text-gray-400 hover:text-white'}
+          className={`flex-1 py-1 text-center rounded-xl transition ${
+            activeTab === 'Goods' && view === 'main' 
+              ? 'text-white bg-white/15 font-bold shadow-inner' 
+              : 'text-gray-400 hover:text-white'
+          }`}
         >
           Goods Received
         </button>
-      </footer>
+      </nav>
+
     </div>
   );
 }
