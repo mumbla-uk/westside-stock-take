@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Search, 
   Plus, 
@@ -68,7 +68,8 @@ export default function StocktakeApp({ currentUser, initialCatalog = [], onBackT
   const [selectedAreas, setSelectedAreas] = useState([]);
   const [view, setView] = useState('main');
 
-  // Robust parser supporting raw arrays, { catalog: [...] }, or { data: [...] }
+  const touchStartRef = useRef({ x: 0, y: 0 });
+
   const parseCatalog = (data) => {
     if (!data) return [];
     if (Array.isArray(data)) return data;
@@ -77,7 +78,6 @@ export default function StocktakeApp({ currentUser, initialCatalog = [], onBackT
     return [];
   };
 
-  // 1. Initialise immediately from prop or cached localStorage
   const [products, setProducts] = useState(() => {
     const fromProp = parseCatalog(initialCatalog);
     if (fromProp.length > 0) return fromProp;
@@ -138,7 +138,37 @@ export default function StocktakeApp({ currentUser, initialCatalog = [], onBackT
 
   const { dayName, weekBeginningStr, fullDateStr } = useMemo(() => getFormattedDates(), []);
 
-  // Manual & Fallback Refresh
+  // Swipe Navigation Handlers with Hub Fallback
+  const handleTouchStart = (e) => {
+    touchStartRef.current = {
+      x: e.touches[0].clientX,
+      y: e.touches[0].clientY
+    };
+  };
+
+  const handleTouchEnd = (e) => {
+    if (view === 'settings') return;
+    const deltaX = e.changedTouches[0].clientX - touchStartRef.current.x;
+    const deltaY = e.changedTouches[0].clientY - touchStartRef.current.y;
+
+    if (Math.abs(deltaX) > 50 && Math.abs(deltaX) > Math.abs(deltaY) * 1.5) {
+      if (deltaX < 0) {
+        // Swiped Left -> Move forward
+        if (activeTab === 'Stocktake') setActiveTab('Orders');
+        else if (activeTab === 'Orders') setActiveTab('Goods');
+      } else {
+        // Swiped Right -> Move backward or exit to Hub
+        if (activeTab === 'Goods') {
+          setActiveTab('Orders');
+        } else if (activeTab === 'Orders') {
+          setActiveTab('Stocktake');
+        } else if (activeTab === 'Stocktake' && onBackToHub) {
+          onBackToHub();
+        }
+      }
+    }
+  };
+
   const fetchSheetData = async () => {
     setSaving(true);
     setStatusMsg(null);
@@ -169,14 +199,12 @@ export default function StocktakeApp({ currentUser, initialCatalog = [], onBackT
     }
   };
 
-  // 2. Automatic fallback: If products array is empty on mount, fetch directly
   useEffect(() => {
     if (products.length === 0) {
       fetchSheetData();
     }
   }, []);
 
-  // 3. Sync if background preloader delivers products after initial mount
   useEffect(() => {
     const parsed = parseCatalog(initialCatalog);
     if (parsed.length > 0 && products.length === 0) {
@@ -437,9 +465,12 @@ export default function StocktakeApp({ currentUser, initialCatalog = [], onBackT
   };
 
   return (
-    <div className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 overflow-x-hidden relative">
-      
-      {/* Top Header with Hub Navigation */}
+    <div 
+      onTouchStart={handleTouchStart}
+      onTouchEnd={handleTouchEnd}
+      className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 overflow-x-hidden relative"
+    >
+      {/* Top Header */}
       <header className="flex items-center justify-between px-5 pt-6 pb-2 border-b border-gray-50 flex-shrink-0 bg-white z-10">
         <div className="flex items-center space-x-2">
           {onBackToHub && (
@@ -465,7 +496,7 @@ export default function StocktakeApp({ currentUser, initialCatalog = [], onBackT
         </div>
       </header>
 
-      {/* View Switcher */}
+      {/* Main Container */}
       {view === 'settings' ? (
         <div className="flex-1 flex flex-col px-5 pt-4 pb-28 overflow-y-auto">
           <div className="flex items-center justify-between pb-3 border-b border-gray-100">
@@ -840,7 +871,7 @@ export default function StocktakeApp({ currentUser, initialCatalog = [], onBackT
         </div>
       )}
 
-      {/* Floating Glassmorphism Bottom Navigation Pill */}
+      {/* Floating Bottom Navigation */}
       <nav className="fixed bottom-4 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-[390px] z-50 rounded-2xl bg-[#111111]/95 backdrop-blur-md text-white py-2.5 px-3 flex justify-around items-center text-xs font-semibold shadow-2xl border border-white/10 select-none">
         <button onClick={() => { setView('main'); setActiveTab('Stocktake'); }} className={`flex-1 py-1 text-center rounded-xl transition ${activeTab === 'Stocktake' && view === 'main' ? 'text-white bg-white/15 font-bold shadow-inner' : 'text-gray-400 hover:text-white'}`}>Stocktake</button>
         <button onClick={() => { setView('main'); setActiveTab('Orders'); }} className={`flex-1 py-1 text-center rounded-xl transition ${activeTab === 'Orders' && view === 'main' ? 'text-white bg-white/15 font-bold shadow-inner' : 'text-gray-400 hover:text-white'}`}>Orders</button>
