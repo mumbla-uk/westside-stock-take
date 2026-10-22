@@ -1,9 +1,61 @@
-import React, { useState } from 'react';
-import { ArrowLeft } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { 
+  ArrowLeft, 
+  Search, 
+  Plus, 
+  X, 
+  Send, 
+  Calendar, 
+  FileSpreadsheet, 
+  Lock, 
+  ExternalLink,
+  ChevronRight,
+  Sparkles
+} from 'lucide-react';
 
 const HARDWIRED_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzcrqf4q-QWiGq0sxMmXqS7QcsxCVfhkJgPfjxOm6KyPShNUD-zkD9HUZy49rDdrfAYJg/exec";
 
-// Recurring schedule tasks feeding into suggestion logic
+function AppLogo({ className = "w-6 h-6", fallbackTextClass = "font-serif text-xl font-bold tracking-tighter" }) {
+  const [imgError, setImgError] = useState(false);
+
+  if (!imgError) {
+    return (
+      <img 
+        src="/img/icon.png" 
+        alt="West Side Tavern" 
+        className={`${className} object-contain`} 
+        onError={() => setImgError(true)}
+      />
+    );
+  }
+
+  return <span className={fallbackTextClass}>T</span>;
+}
+
+// Convert ISO/raw date strings into clean tavern headers (e.g. "Thursday 22nd October 2026")
+function formatDisplayDate(dateInput) {
+  if (!dateInput) return "Undated Shift";
+  const d = new Date(dateInput);
+  if (isNaN(d.getTime())) return String(dateInput);
+
+  const dayName = d.toLocaleDateString('en-GB', { weekday: 'long' });
+  const dayNum = d.getDate();
+  const monthName = d.toLocaleDateString('en-GB', { month: 'long' });
+  const year = d.getFullYear();
+
+  const getOrdinalSuffix = (n) => {
+    if (n > 3 && n < 21) return 'th';
+    switch (n % 10) {
+      case 1:  return "st";
+      case 2:  return "nd";
+      case 3:  return "rd";
+      default: return "th";
+    }
+  };
+
+  return `${dayName} ${dayNum}${getOrdinalSuffix(dayNum)} ${monthName} ${year}`;
+}
+
 const WEEKLY_SCHEDULE_TASKS = {
   Thursday: ['Keg Order (Greene King)', 'Ice Order (Ice 24/7)', 'Cleanzone Order', 'Wine Order Check'],
   Friday: ['Laundry Drop Off & Pay (Pre 5pm)', 'Fruit Order'],
@@ -14,145 +66,203 @@ const WEEKLY_SCHEDULE_TASKS = {
   Wednesday: ['Keg Order', 'Wine Order (Alliance)']
 };
 
-const INITIAL_HANDOVERS = [
-  {
-    id: 'h-101',
-    date: 'Wednesday 17th November',
-    dayOfWeek: 'Wednesday',
-    manager: 'Ross',
-    takings: '1823.21',
-    closeTime: '11.30PM',
-    generalNotes: 'Smooth shift overall. Regular crowd for late food. Tap 3 handle needs a washer check tomorrow.',
-    kitchenNotes: 'Kitchen deep clean completed. Last order out at 21:15.',
-    eightySixList: ['Rapple', 'Mai Italiano', 'Tavern Lager', 'Sangiovese'],
-    tomorrowTasks: ['Prep', 'Wine Delivery', 'Keg Order', 'Kegs Out', 'Ice Ordered'],
-    spillages: ['2 shots House Gin (Line burst)'],
-    maintenanceFlags: ['Tap 3 handle loose']
-  }
-];
-
-export default function HandoverApp({ onBackToHub, onLogout }) {
-  // View Navigation ('today' | 'latest' | 'history' | 'assistant' | 'settings')
+export default function HandoverApp({ currentUser, onBackToHub, onLogout }) {
   const [currentTab, setCurrentTab] = useState('today');
 
-  // Database History State
-  const [handoverHistory, setHandoverHistory] = useState(INITIAL_HANDOVERS);
+  // Master catalog from Google Sheets for 86 SKU auto-lookup
+  const [catalog, setCatalog] = useState([]);
+  const [loadingCatalog, setLoadingCatalog] = useState(true);
 
-  // Form State ("Today" view)
+  // Form State - Auto populated from authenticated user role
+  const [manager, setManager] = useState(currentUser?.name || 'Duty Manager');
+  const [role, setRole] = useState(currentUser?.role || 'Staff');
+  const [shiftDate, setShiftDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [takings, setTakings] = useState('1540.21');
+  const [closeTime, setCloseTime] = useState('11.30PM');
   const [generalNotes, setGeneralNotes] = useState('');
-  const [kitchenService, setKitchenService] = useState('Close');
-  const [eightySixInput, setEightySixInput] = useState('');
-  const [eightySixList, setEightySixList] = useState(['Rapple', 'Mai Italiano', 'Tavern Lager', 'Ichnusa', 'Sangiovese']);
+  const [kitchenNotes, setKitchenNotes] = useState('Close');
 
+  // 86 List State
+  const [eightySixInput, setEightySixInput] = useState('');
+  const [eightySixQty, setEightySixQty] = useState('1');
+  const [selectedProduct, setSelectedProduct] = useState(null);
+  const [eightySixList, setEightySixList] = useState([]);
+
+  // Tomorrow Task State
   const [tomorrowInput, setTomorrowInput] = useState('');
   const [tomorrowList, setTomorrowList] = useState(['Ice Order', 'Carb Hugo Keg', 'Strain Mint Water']);
-  
-  const [spillInput, setSpillInput] = useState('');
-  const [spillList, setSpillList] = useState(['1x Pint Tavern Lager (Drip tray)']);
 
-  const [closeTime, setCloseTime] = useState('11.30PM');
+  // History & Filter State
+  const [historyList, setHistoryList] = useState([]);
+  const [historySearch, setHistorySearch] = useState('');
+  const [historyDateFilter, setHistoryDateFilter] = useState('');
+  const [selectedHistoryItem, setSelectedHistoryItem] = useState(null);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isSubmitted, setIsSubmitted] = useState(false);
+  const [statusMsg, setStatusMsg] = useState(null);
 
-  // Autocomplete Suggestions for "Tomorrow" Tasks
+  useEffect(() => {
+    if (currentUser?.name) setManager(currentUser.name);
+    if (currentUser?.role) setRole(currentUser.role);
+  }, [currentUser]);
+
+  // Fetch catalog on mount
+  useEffect(() => {
+    async function loadCatalog() {
+      try {
+        const res = await fetch(HARDWIRED_SCRIPT_URL);
+        const json = await res.json();
+        if (json.status === 'success' && Array.isArray(json.data)) {
+          setCatalog(json.data);
+        } else if (Array.isArray(json)) {
+          setCatalog(json);
+        }
+      } catch (err) {
+        console.error("Failed to load catalog for 86 list:", err);
+      } finally {
+        setLoadingCatalog(false);
+      }
+    }
+    loadCatalog();
+  }, []);
+
+  // Fetch history when entering History tab
+  const fetchHistory = async () => {
+    setLoadingHistory(true);
+    try {
+      const res = await fetch(`${HARDWIRED_SCRIPT_URL}?action=get_handovers`);
+      const json = await res.json();
+      if (json.status === 'success' && Array.isArray(json.data)) {
+        setHistoryList(json.data);
+      }
+    } catch (err) {
+      console.error("Failed to fetch history:", err);
+    } finally {
+      setLoadingHistory(false);
+    }
+  };
+
+  useEffect(() => {
+    if (currentTab === 'history') {
+      fetchHistory();
+    }
+  }, [currentTab]);
+
+  // Autocomplete suggestions for 86 list
+  const catalogSuggestions = useMemo(() => {
+    if (!eightySixInput.trim() || selectedProduct) return [];
+    return catalog.filter(p => 
+      p.name.toLowerCase().includes(eightySixInput.toLowerCase()) || 
+      p.id.toLowerCase().includes(eightySixInput.toLowerCase())
+    ).slice(0, 5);
+  }, [catalog, eightySixInput, selectedProduct]);
+
+  // Tomorrow suggestions
   const tomorrowSuggestions = (WEEKLY_SCHEDULE_TASKS['Thursday'] || []).filter(
     (task) => task.toLowerCase().includes(tomorrowInput.toLowerCase()) && tomorrowInput.trim().length > 0
   );
 
-  // 86 List Handlers
   const handleAdd86 = (e) => {
     e?.preventDefault();
-    if (eightySixInput.trim()) {
-      setEightySixList([...eightySixList, eightySixInput.trim()]);
-      setEightySixInput('');
-    }
+    if (!eightySixInput.trim()) return;
+
+    const newItem = {
+      sku: selectedProduct ? selectedProduct.id : 'CUSTOM',
+      name: selectedProduct ? selectedProduct.name : eightySixInput.trim(),
+      supplier: selectedProduct ? selectedProduct.supplier : 'General',
+      unit: selectedProduct ? selectedProduct.unit : 'unit',
+      qty: parseFloat(eightySixQty) || 1
+    };
+
+    setEightySixList(prev => [...prev, newItem]);
+    setEightySixInput('');
+    setSelectedProduct(null);
+    setEightySixQty('1');
   };
 
   const handleRemove86 = (index) => {
-    setEightySixList(eightySixList.filter((_, i) => i !== index));
+    setEightySixList(prev => prev.filter((_, i) => i !== index));
   };
 
-  // Tomorrow List Handlers
   const handleAddTomorrow = (textToAdd) => {
     const text = textToAdd || tomorrowInput;
     if (text.trim()) {
-      setTomorrowList([...tomorrowList, text.trim()]);
+      setTomorrowList(prev => [...prev, text.trim()]);
       setTomorrowInput('');
     }
   };
 
   const handleRemoveTomorrow = (index) => {
-    setTomorrowList(tomorrowList.filter((_, i) => i !== index));
+    setTomorrowList(prev => prev.filter((_, i) => i !== index));
   };
 
-  // Spillage Handlers
-  const handleAddSpill = (e) => {
-    e?.preventDefault();
-    if (spillInput.trim()) {
-      setSpillList([...spillList, spillInput.trim()]);
-      setSpillInput('');
-    }
-  };
-
-  const handleRemoveSpill = (index) => {
-    setSpillList(spillList.filter((_, i) => i !== index));
-  };
-
-  // Form Submission -> Posts to Google Sheets & stores locally
+  // Submit Handover to Google Sheets & Drive
   const handleSubmit = async (e) => {
     e.preventDefault();
     setIsSubmitting(true);
-    
-    const newHandover = {
-      action: 'handover',
+    setStatusMsg(null);
+
+    const payload = {
+      action: "handover_report",
       id: `h-${Date.now()}`,
-      dateStr: 'Thursday 18th November',
-      dayOfWeek: 'Thursday',
-      manager: 'Ross',
+      dateStr: shiftDate,
+      manager,
+      role,
       takings,
       closeTime,
       generalNotes,
-      kitchenService,
+      kitchenNotes,
       eightySixList,
-      tomorrowTasks: tomorrowList,
-      spillages: spillList,
-      maintenanceFlags: generalNotes.toLowerCase().includes('glasswasher') ? ['Glasswasher check needed'] : []
+      tomorrowTasks: tomorrowList
     };
 
     try {
       await fetch(HARDWIRED_SCRIPT_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newHandover),
+        body: JSON.stringify(payload),
         mode: 'no-cors'
       });
+
+      setStatusMsg({ type: 'success', text: 'Handover report saved & filed to Drive!' });
+      setGeneralNotes('');
+      setKitchenNotes('Close');
+      setEightySixList([]);
     } catch (err) {
       console.error("Failed to post handover:", err);
+      setStatusMsg({ type: 'error', text: 'Network error submitting handover report.' });
     } finally {
-      setHandoverHistory([newHandover, ...handoverHistory]);
       setIsSubmitting(false);
-      setIsSubmitted(true);
-      setTimeout(() => setIsSubmitted(false), 3500);
     }
   };
 
-  const handleReset = () => {
-    setTakings('');
-    setGeneralNotes('');
-    setKitchenService('');
-    setEightySixList([]);
-    setTomorrowList([]);
-    setSpillList([]);
-  };
+  // 1. Featured latest diary
+  const latestHandover = historyList.length > 0 ? historyList[0] : null;
 
-  const latestHandover = handoverHistory[0] || INITIAL_HANDOVERS[0];
+  // 2. Filtered list for the rest of history
+  const filteredHistory = useMemo(() => {
+    // If no search is applied, we exclude the latest one since it's already highlighted at the top
+    const pool = (historySearch || historyDateFilter) ? historyList : historyList.slice(1);
+
+    return pool.filter(item => {
+      const q = historySearch.toLowerCase();
+      const matchesSearch = 
+        (item.manager || '').toLowerCase().includes(q) ||
+        (item.generalNotes || '').toLowerCase().includes(q) ||
+        (item.dateStr || '').toLowerCase().includes(q) ||
+        (item.eightySixList || []).some(p => (p.name || p).toLowerCase().includes(q) || (p.sku || '').toLowerCase().includes(q));
+
+      const matchesDate = historyDateFilter ? item.dateStr === historyDateFilter : true;
+      return matchesSearch && matchesDate;
+    });
+  }, [historyList, historySearch, historyDateFilter]);
 
   return (
-    <div className="min-h-screen bg-white text-black font-sans max-w-md mx-auto pb-24 relative selection:bg-black selection:text-white border-x border-gray-200">
+    <div className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 overflow-x-hidden relative">
       
-      {/* Top Header with Hub Navigation */}
-      <header className="px-5 py-4 flex justify-between items-center bg-white sticky top-0 z-10 border-b border-gray-100 flex-shrink-0">
+      {/* IDENTICAL TOP HEADER */}
+      <header className="flex items-center justify-between px-5 pt-6 pb-2 border-b border-gray-50 flex-shrink-0 bg-white z-10">
         <div className="flex items-center space-x-2">
           {onBackToHub && (
             <button 
@@ -163,227 +273,384 @@ export default function HandoverApp({ onBackToHub, onLogout }) {
               <ArrowLeft className="w-4 h-4" />
             </button>
           )}
-          <span className="font-serif text-2xl font-black">𝕿</span>
-          <span className="text-sm font-extrabold tracking-tight">West Side Tavern</span>
+          <AppLogo className="w-6 h-6" fallbackTextClass="font-serif text-2xl font-bold tracking-tighter" />
+          <span className="font-semibold text-base tracking-tight">West Side Tavern</span>
         </div>
-        <div className="flex items-center space-x-4 text-xs font-semibold text-black">
+        <div className="flex items-center space-x-4 text-sm font-medium">
           {onBackToHub ? (
-            <button onClick={onBackToHub} className="hover:opacity-60 font-bold">
+            <button onClick={onBackToHub} className="text-gray-900 hover:text-black font-semibold">
               Hub
             </button>
           ) : (
-            <button onClick={onLogout} className="hover:opacity-60">
+            <button onClick={onLogout} className="text-gray-900 hover:text-black">
               Logout
             </button>
           )}
-          <button onClick={() => setCurrentTab('settings')} className="hover:opacity-60">
+          <button 
+            onClick={() => setCurrentTab(currentTab === 'settings' ? 'today' : 'settings')}
+            className={`transition ${currentTab === 'settings' ? 'font-bold underline' : 'text-gray-900 hover:text-black'}`}
+          >
             Settings
           </button>
         </div>
       </header>
 
       {/* VIEW ROUTER */}
-      <main className="px-6 pt-3">
-        {/* VIEW 1: TODAY (Write Form) */}
-        {currentTab === 'today' && (
-          <div className="space-y-6">
+      {currentTab === 'settings' ? (
+        
+        /* SETTINGS VIEW */
+        <div className="flex-1 flex flex-col px-5 pt-4 pb-28 overflow-y-auto">
+          <div className="flex items-center justify-between pb-3 border-b border-gray-100">
             <div>
-              <h1 className="text-3xl font-extrabold tracking-tight leading-tight">
-                Thursday<br />18th November
+              <p className="text-gray-500 italic text-xs font-serif">Preferences</p>
+              <h1 className="text-2xl font-extrabold tracking-tight mt-0.5">Settings</h1>
+            </div>
+            <button 
+              onClick={() => setCurrentTab('today')}
+              className="p-1.5 bg-[#EDEDED] rounded-lg text-gray-700 hover:bg-gray-200"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          <div className="space-y-4 mt-4 text-xs">
+            <div className="p-3 bg-gray-50 border border-gray-200 rounded-xl space-y-1">
+              <span className="text-[10px] uppercase font-bold text-gray-400">Authenticated Session</span>
+              <p className="text-sm font-extrabold text-gray-900">{manager}</p>
+              <span className="inline-block px-2 py-0.5 rounded text-[10px] font-mono bg-black text-white font-bold">
+                {role}
+              </span>
+            </div>
+
+            <div className="space-y-2">
+              <label className="block text-sm font-bold text-gray-900">Google Drive Destination</label>
+              <p className="text-gray-500 leading-relaxed">
+                Shift handovers are compiled into individual spreadsheets in the Handover folder.
+              </p>
+              <div className="relative mt-2">
+                <input
+                  type="text"
+                  readOnly
+                  value={HARDWIRED_SCRIPT_URL}
+                  className="w-full bg-[#EDEDED] py-3 pl-10 pr-4 rounded-lg text-xs font-mono text-gray-500 cursor-not-allowed focus:outline-none"
+                />
+                <Lock className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              </div>
+            </div>
+
+            <div className="pt-2">
+              <button
+                onClick={() => setCurrentTab('today')}
+                className="w-full py-3 bg-[#C2F19D] text-sm font-semibold rounded-lg text-gray-900 hover:bg-[#b2e88a] transition"
+              >
+                Back to Diary
+              </button>
+            </div>
+          </div>
+        </div>
+
+      ) : currentTab === 'history' ? (
+
+        /* ====================================================================== */
+        /* HISTORY VIEWPORT WITH FEATURED LATEST CARD & CLEAN FILTERING           */
+        /* ====================================================================== */
+        <div className="flex-1 flex flex-col overflow-hidden pb-24">
+          
+          <div className="px-5 pt-3 pb-2 border-b border-gray-100 flex-shrink-0 space-y-2">
+            <div className="flex justify-between items-baseline">
+              <div>
+                <p className="text-gray-500 italic text-xs font-serif">Shift Logs</p>
+                <h1 className="text-xl font-black tracking-tight text-gray-900">Handover History</h1>
+              </div>
+              <button 
+                onClick={fetchHistory}
+                className="text-xs font-semibold text-gray-500 hover:text-black underline"
+              >
+                Refresh
+              </button>
+            </div>
+
+            {/* Quick Search Input */}
+            <div className="relative">
+              <input
+                type="text"
+                value={historySearch}
+                onChange={(e) => setHistorySearch(e.target.value)}
+                placeholder="Search by manager, notes, or 86 item..."
+                className="w-full bg-[#EDEDED] py-2 pl-4 pr-9 rounded-lg text-xs italic placeholder-gray-500 focus:outline-none"
+              />
+              {historySearch ? (
+                <button 
+                  onClick={() => setHistorySearch('')}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-black"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              ) : (
+                <Search className="w-3.5 h-3.5 absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+              )}
+            </div>
+
+            {/* Date Quick Filter */}
+            <div className="flex items-center space-x-2 text-xs">
+              <label className="text-[10px] font-bold uppercase text-gray-400">Date:</label>
+              <input
+                type="date"
+                value={historyDateFilter}
+                onChange={(e) => setHistoryDateFilter(e.target.value)}
+                className="bg-[#EDEDED] py-1 px-2 rounded-md font-semibold text-[11px] text-gray-800 focus:outline-none"
+              />
+              {historyDateFilter && (
+                <button 
+                  onClick={() => setHistoryDateFilter('')}
+                  className="text-[10px] text-gray-500 hover:text-black underline"
+                >
+                  Clear date
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Cards Scroll Area */}
+          <div className="flex-1 overflow-y-auto px-5 py-3 space-y-4">
+            
+            {loadingHistory ? (
+              <p className="text-center py-12 text-xs text-gray-400 italic">Connecting to archive...</p>
+            ) : historyList.length === 0 ? (
+              <div className="text-center py-16 text-gray-400">
+                <Calendar className="w-10 h-10 mx-auto mb-2 opacity-30" />
+                <p className="text-xs font-semibold text-gray-600">No shift handovers found</p>
+              </div>
+            ) : (
+              <>
+                {/* 1. EASY-TO-CLICK FEATURED "LATEST HANDOVER" CARD */}
+                {!historySearch && !historyDateFilter && latestHandover && (
+                  <div className="space-y-1">
+                    <div className="flex items-center space-x-1.5 px-1">
+                      <Sparkles className="w-3 h-3 text-emerald-600" />
+                      <span className="text-[10px] font-black uppercase tracking-wider text-emerald-800">
+                        Most Recent Handover
+                      </span>
+                    </div>
+
+                    <div 
+                      onClick={() => setSelectedHistoryItem(latestHandover)}
+                      className="border-2 border-black bg-[#FAFCF8] rounded-2xl p-4 cursor-pointer shadow-sm hover:shadow-md transition active:scale-[0.99] group space-y-2"
+                    >
+                      <div className="flex justify-between items-baseline">
+                        <span className="font-extrabold text-base text-gray-900">
+                          {formatDisplayDate(latestHandover.dateStr || latestHandover.timestamp)}
+                        </span>
+                        <span className="font-mono text-sm font-black text-gray-900">
+                          £{latestHandover.takings}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center space-x-2 text-[10px] text-gray-500 font-mono">
+                        <span>Duty: {latestHandover.manager}</span>
+                        <span>•</span>
+                        <span>Close: {latestHandover.closeTime}</span>
+                        <span>•</span>
+                        <span className="text-red-600 font-bold">{(latestHandover.eightySixList || []).length} items 86'd</span>
+                      </div>
+
+                      {latestHandover.generalNotes && (
+                        <p className="text-xs text-gray-700 italic line-clamp-2 leading-relaxed">
+                          "{latestHandover.generalNotes}"
+                        </p>
+                      )}
+
+                      <div className="flex justify-between items-center pt-1 text-xs font-bold text-black">
+                        <span>Tap to open full shift briefing</span>
+                        <ChevronRight className="w-4 h-4 group-hover:translate-x-0.5 transition-transform" />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* 2. PREVIOUS HANDOVERS SECTION */}
+                <div className="space-y-2 pt-1">
+                  {!historySearch && !historyDateFilter && filteredHistory.length > 0 && (
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 px-1 block">
+                      Previous Diaries ({filteredHistory.length})
+                    </span>
+                  )}
+
+                  {filteredHistory.map((item) => (
+                    <div 
+                      key={item.id}
+                      onClick={() => setSelectedHistoryItem(item)}
+                      className="border border-gray-200 rounded-xl p-3.5 hover:border-black transition cursor-pointer bg-white shadow-sm space-y-1.5 group"
+                    >
+                      <div className="flex justify-between items-baseline">
+                        <span className="font-bold text-xs text-gray-900 group-hover:text-black">
+                          {formatDisplayDate(item.dateStr || item.timestamp)}
+                        </span>
+                        <span className="font-mono text-xs font-bold text-gray-900">
+                          £{item.takings}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center space-x-2 text-[10px] text-gray-400 font-mono">
+                        <span>{item.manager}</span>
+                        <span>•</span>
+                        <span>{item.closeTime}</span>
+                        <span>•</span>
+                        <span>{(item.eightySixList || []).length} on 86</span>
+                      </div>
+
+                      {item.generalNotes && (
+                        <p className="text-xs text-gray-500 line-clamp-1 italic">
+                          "{item.generalNotes}"
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* ================================================================== */}
+          {/* CENTERED FLOATING VIEWPORT (TRUE MODAL)                            */}
+          {/* ================================================================== */}
+          {selectedHistoryItem && (
+            <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+              <div className="bg-white w-full max-w-sm rounded-3xl overflow-hidden shadow-2xl border border-gray-200 flex flex-col max-h-[80vh]">
+                
+                {/* Modal Header */}
+                <div className="px-5 pt-5 pb-3 border-b border-gray-100 flex justify-between items-start bg-gray-50/50">
+                  <div>
+                    <span className="text-[10px] font-mono uppercase text-gray-400 block font-bold">
+                      LOGGED BY {selectedHistoryItem.manager.toUpperCase()}
+                    </span>
+                    <h2 className="text-base font-black text-gray-900 leading-snug mt-0.5">
+                      {formatDisplayDate(selectedHistoryItem.dateStr || selectedHistoryItem.timestamp)}
+                    </h2>
+                    <span className="text-xs font-mono font-bold text-gray-900 mt-1 block">
+                      Takings: £{selectedHistoryItem.takings} | Close: {selectedHistoryItem.closeTime}
+                    </span>
+                  </div>
+                  <button 
+                    onClick={() => setSelectedHistoryItem(null)}
+                    className="p-1.5 text-gray-400 hover:text-black bg-white rounded-full border border-gray-200 shadow-sm"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {/* Modal Scroll Content */}
+                <div className="p-5 overflow-y-auto space-y-3.5 text-xs">
+                  <div>
+                    <span className="font-bold uppercase tracking-wider text-[10px] text-gray-400 block mb-1">
+                      General Notes
+                    </span>
+                    <p className="p-3 bg-gray-50 rounded-xl text-gray-800 leading-relaxed italic border border-gray-100">
+                      {selectedHistoryItem.generalNotes || 'No notes logged.'}
+                    </p>
+                  </div>
+
+                  <div>
+                    <span className="font-bold uppercase tracking-wider text-[10px] text-gray-400 block mb-1">
+                      Kitchen Service
+                    </span>
+                    <p className="p-3 bg-gray-50 rounded-xl text-gray-800 leading-relaxed border border-gray-100">
+                      {selectedHistoryItem.kitchenNotes || 'Close'}
+                    </p>
+                  </div>
+
+                  <div>
+                    <span className="font-bold uppercase tracking-wider text-[10px] text-gray-400 block mb-1">
+                      86 List (Out of Stock SKUs)
+                    </span>
+                    {(selectedHistoryItem.eightySixList || []).length === 0 ? (
+                      <p className="p-2 text-gray-400 italic">No items out of stock.</p>
+                    ) : (
+                      <div className="border border-gray-200 rounded-xl divide-y divide-gray-100 overflow-hidden bg-white">
+                        {selectedHistoryItem.eightySixList.map((prod, i) => (
+                          <div key={i} className="p-2 flex justify-between items-center text-xs">
+                            <div>
+                              <span className="font-bold text-gray-900">{prod.name || prod}</span>
+                              {prod.sku && <span className="font-mono text-[9px] text-gray-400 ml-1.5">[{prod.sku}]</span>}
+                            </div>
+                            <span className="font-mono text-[11px] font-bold text-red-600 bg-red-50 px-2 py-0.5 rounded">
+                              {prod.qty || 1} {prod.unit || 'unit'}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {selectedHistoryItem.fileUrl && (
+                    <a
+                      href={selectedHistoryItem.fileUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="w-full py-2.5 bg-black text-white rounded-xl flex items-center justify-center space-x-1.5 font-bold hover:bg-gray-800 transition shadow-sm mt-2"
+                    >
+                      <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
+                      <span>Open Drive Spreadsheet</span>
+                      <ExternalLink className="w-3 h-3 text-gray-400 ml-1" />
+                    </a>
+                  )}
+                </div>
+
+              </div>
+            </div>
+          )}
+
+        </div>
+
+      ) : (
+
+        /* ====================================================================== */
+        /* TODAY VIEW: HANDOVER SUBMISSION FORM                                   */
+        /* ====================================================================== */
+        <div className="flex-1 flex flex-col overflow-y-auto px-5 py-3 space-y-5 pb-28">
+          
+          <div className="border-b border-gray-100 pb-3 space-y-3">
+            <div>
+              <p className="text-gray-500 italic text-xs font-serif">Shift Wrap-Up</p>
+              <h1 className="text-xl font-black tracking-tight text-gray-900">
+                {formatDisplayDate(shiftDate)}
               </h1>
             </div>
 
-            {/* Assistant Context Banner */}
-            <div className="bg-[#F2F2F2] p-4 rounded-xl space-y-1.5">
-              <p className="text-xs font-bold text-black">West Side Tavern Assistant:</p>
-              <p className="text-xs text-neutral-600 italic leading-relaxed">
-                Keg, Ice and Cleanzone orders usually need placed today.
-              </p>
-              {latestHandover.generalNotes && (latestHandover.generalNotes.toLowerCase().includes('glasswasher') || latestHandover.generalNotes.toLowerCase().includes('tap')) ? (
-                <p className="text-xs text-neutral-600 italic leading-relaxed">
-                  ⚠️ Note from last night: "{latestHandover.generalNotes}"
-                </p>
-              ) : null}
-            </div>
+            {statusMsg && (
+              <div className={`p-2.5 rounded-xl text-xs font-semibold ${
+                statusMsg.type === 'success' ? 'bg-green-50 text-green-800 border border-green-200' : 'bg-red-50 text-red-800 border border-red-200'
+              }`}>
+                {statusMsg.text}
+              </div>
+            )}
 
-            {/* Takings Input */}
-            <div className="flex items-center space-x-4 pt-1">
-              <label className="text-lg font-bold text-black">Takings</label>
-              <div className="relative border border-neutral-300 rounded-lg px-3 py-1.5 focus-within:border-black bg-white">
-                <span className="text-sm font-medium">£</span>
+            {/* Date, Duty Person (Read Only from Auth) & Close Time */}
+            <div className="grid grid-cols-12 gap-1.5 text-xs">
+              <div className="col-span-4 min-w-0">
+                <label className="block text-[10px] font-bold uppercase text-gray-400 mb-1 truncate">Shift Date</label>
+                <input
+                  type="date"
+                  value={shiftDate}
+                  onChange={(e) => setShiftDate(e.target.value)}
+                  className="w-full min-w-0 bg-[#EDEDED] py-2 px-1.5 rounded-lg font-semibold text-gray-900 text-[11px] focus:outline-none appearance-none"
+                />
+              </div>
+              <div className="col-span-4 min-w-0">
+                <label className="block text-[10px] font-bold uppercase text-gray-400 mb-1 truncate">Duty Manager</label>
                 <input
                   type="text"
-                  value={takings}
-                  onChange={(e) => setTakings(e.target.value)}
-                  className="w-28 pl-1 text-sm font-medium bg-transparent focus:outline-none"
+                  readOnly
+                  value={`${manager} (${role})`}
+                  className="w-full min-w-0 bg-[#EDEDED] py-2 px-2.5 rounded-lg font-semibold text-gray-900 text-[11px] cursor-not-allowed focus:outline-none"
                 />
               </div>
-            </div>
-
-            {/* General Notes */}
-            <div className="space-y-1.5">
-              <label className="text-lg font-bold text-black">General Notes</label>
-              <div className="relative border border-neutral-300 rounded-xl p-3 focus-within:border-black bg-white">
-                <textarea
-                  rows="4"
-                  maxLength={500}
-                  value={generalNotes}
-                  onChange={(e) => setGeneralNotes(e.target.value)}
-                  placeholder="Record atmosphere, maintenance issues, or unexpected footfall spikes..."
-                  className="w-full text-xs leading-relaxed text-black bg-transparent focus:outline-none resize-none"
-                />
-                <span className="absolute bottom-2 right-3 text-[9px] text-neutral-400 font-mono">
-                  {generalNotes.length}/500
-                </span>
-              </div>
-            </div>
-
-            {/* Kitchen Service */}
-            <div className="space-y-1.5">
-              <label className="text-lg font-bold text-black">Kitchen Service</label>
-              <div className="relative border border-neutral-300 rounded-xl p-3 focus-within:border-black bg-white">
-                <textarea
-                  rows="3"
-                  maxLength={750}
-                  value={kitchenService}
-                  onChange={(e) => setKitchenService(e.target.value)}
-                  placeholder="Close"
-                  className="w-full text-xs leading-relaxed text-black bg-transparent focus:outline-none resize-none"
-                />
-                <span className="absolute bottom-2 right-3 text-[9px] text-neutral-400 font-mono">
-                  {kitchenService.length}/750
-                </span>
-              </div>
-            </div>
-
-            {/* 86 List */}
-            <div className="space-y-2">
-              <label className="text-lg font-bold text-black">86 List</label>
-              <form onSubmit={handleAdd86} className="relative">
-                <input
-                  type="text"
-                  value={eightySixInput}
-                  onChange={(e) => setEightySixInput(e.target.value)}
-                  placeholder="Add item out of stock..."
-                  className="w-full border border-neutral-300 rounded-xl py-2 px-3 text-sm focus:outline-none focus:border-black pr-10"
-                />
-                <button
-                  type="submit"
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-neutral-600 text-sm hover:text-black font-bold"
-                >
-                  →
-                </button>
-              </form>
-
-              <div className="divide-y divide-neutral-100 pt-1">
-                {eightySixList.map((item, idx) => (
-                  <div key={idx} className="flex justify-between items-center py-2 text-sm font-semibold text-black">
-                    <span>{item}</span>
-                    <button
-                      onClick={() => handleRemove86(idx)}
-                      className="text-neutral-400 hover:text-black text-xs px-1 font-mono"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Tomorrow List */}
-            <div className="space-y-2 pt-2">
-              <label className="text-lg font-bold text-black">Tomorrow</label>
-              <div className="relative">
-                <input
-                  type="text"
-                  value={tomorrowInput}
-                  onChange={(e) => setTomorrowInput(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), handleAddTomorrow())}
-                  placeholder="Add task for tomorrow's shift..."
-                  className="w-full border border-neutral-300 rounded-xl py-2 px-3 text-sm focus:outline-none focus:border-black pr-10"
-                />
-                <button
-                  type="button"
-                  onClick={() => handleAddTomorrow()}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-neutral-600 text-sm hover:text-black font-bold"
-                >
-                  →
-                </button>
-              </div>
-
-              {/* Autocomplete Suggestions */}
-              {tomorrowSuggestions.length > 0 && (
-                <div className="border border-neutral-200 rounded-xl overflow-hidden divide-y divide-neutral-100 bg-[#FBFBFB]">
-                  {tomorrowSuggestions.map((suggestion, idx) => (
-                    <button
-                      key={idx}
-                      onClick={() => handleAddTomorrow(suggestion)}
-                      className="w-full text-left px-3 py-2 text-xs text-black flex justify-between items-center hover:bg-neutral-100"
-                    >
-                      <span>{suggestion}</span>
-                      <span className="text-neutral-400">→</span>
-                    </button>
-                  ))}
-                </div>
-              )}
-
-              <div className="divide-y divide-neutral-100 pt-1">
-                {tomorrowList.map((item, idx) => (
-                  <div key={idx} className="flex justify-between items-center py-2 text-sm font-semibold text-black">
-                    <span>{item}</span>
-                    <button
-                      onClick={() => handleRemoveTomorrow(idx)}
-                      className="text-neutral-400 hover:text-black text-xs px-1 font-mono"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Spillage & Waste Logging */}
-            <div className="space-y-2 pt-2">
-              <label className="text-lg font-bold text-black">Spillage & Waste Log</label>
-              <form onSubmit={handleAddSpill} className="relative">
-                <input
-                  type="text"
-                  value={spillInput}
-                  onChange={(e) => setSpillInput(e.target.value)}
-                  placeholder="e.g. 1x Bottle House Gin (broken)"
-                  className="w-full border border-neutral-300 rounded-xl py-2 px-3 text-sm focus:outline-none focus:border-black pr-10"
-                />
-                <button
-                  type="submit"
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-neutral-600 text-sm hover:text-black font-bold"
-                >
-                  →
-                </button>
-              </form>
-
-              <div className="divide-y divide-neutral-100 pt-1">
-                {spillList.map((item, idx) => (
-                  <div key={idx} className="flex justify-between items-center py-2 text-xs text-neutral-800 font-medium">
-                    <span>{item}</span>
-                    <button
-                      onClick={() => handleRemoveSpill(idx)}
-                      className="text-neutral-400 hover:text-black text-xs px-1 font-mono"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Close Time Selector */}
-            <div className="flex items-center space-x-3 pt-3">
-              <label className="text-lg font-bold text-black">Close Time:</label>
-              <div className="relative inline-block border border-neutral-300 rounded-xl px-3 py-1.5 bg-white">
+              <div className="col-span-4 min-w-0">
+                <label className="block text-[10px] font-bold uppercase text-gray-400 mb-1 truncate">Close Time</label>
                 <select
                   value={closeTime}
                   onChange={(e) => setCloseTime(e.target.value)}
-                  className="appearance-none bg-transparent pr-6 text-sm font-black focus:outline-none cursor-pointer"
+                  className="w-full min-w-0 bg-[#EDEDED] py-2 px-2 rounded-lg font-semibold text-gray-900 text-[11px] focus:outline-none"
                 >
                   <option value="11.00PM">11.00PM</option>
                   <option value="11.30PM">11.30PM</option>
@@ -391,207 +658,264 @@ export default function HandoverApp({ onBackToHub, onLogout }) {
                   <option value="12.30AM">12.30AM</option>
                   <option value="01.00AM">01.00AM</option>
                 </select>
-                <span className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-xs">
-                  ▼
-                </span>
               </div>
             </div>
 
-            {/* Action Buttons */}
-            <div className="grid grid-cols-2 gap-3 pt-4">
+            {/* Takings */}
+            <div className="flex items-center space-x-3 pt-1">
+              <label className="text-sm font-extrabold text-gray-900">Takings (£):</label>
+              <div className="relative bg-[#EDEDED] rounded-lg px-3 py-1.5 flex items-center">
+                <span className="text-xs font-bold text-gray-500 mr-1">£</span>
+                <input
+                  type="text"
+                  value={takings}
+                  onChange={(e) => setTakings(e.target.value)}
+                  className="w-24 text-xs font-bold bg-transparent text-gray-900 focus:outline-none"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* General Notes */}
+          <div className="space-y-1">
+            <label className="block text-xs font-extrabold text-gray-900">General Notes & Atmosphere</label>
+            <div className="relative bg-[#EDEDED] rounded-xl p-3 focus-within:bg-gray-100 transition">
+              <textarea
+                rows="3"
+                maxLength={500}
+                value={generalNotes}
+                onChange={(e) => setGeneralNotes(e.target.value)}
+                placeholder="Atmosphere, maintenance issues, taps needing washer checks..."
+                className="w-full text-xs text-gray-900 bg-transparent focus:outline-none resize-none leading-relaxed"
+              />
+              <span className="absolute bottom-2 right-3 text-[9px] text-gray-400 font-mono">
+                {generalNotes.length}/500
+              </span>
+            </div>
+          </div>
+
+          {/* Kitchen Notes */}
+          <div className="space-y-1">
+            <label className="block text-xs font-extrabold text-gray-900">Kitchen Service & Clean</label>
+            <div className="relative bg-[#EDEDED] rounded-xl p-3 focus-within:bg-gray-100 transition">
+              <textarea
+                rows="2"
+                maxLength={500}
+                value={kitchenNotes}
+                onChange={(e) => setKitchenNotes(e.target.value)}
+                placeholder="Close time, chef notes, clean sign off..."
+                className="w-full text-xs text-gray-900 bg-transparent focus:outline-none resize-none leading-relaxed"
+              />
+            </div>
+          </div>
+
+          {/* 86 List */}
+          <div className="space-y-2 bg-gray-50 border border-gray-200 rounded-xl p-3.5">
+            <div className="flex justify-between items-center">
+              <span className="block font-bold text-gray-900 uppercase tracking-wider text-[11px]">
+                86 List (Stock SKU Lookup)
+              </span>
+              <span className="text-[10px] text-gray-400 font-mono">
+                {loadingCatalog ? 'Loading catalog...' : `${catalog.length} SKUs ready`}
+              </span>
+            </div>
+
+            <form onSubmit={handleAdd86} className="space-y-2">
+              <div className="relative">
+                <input
+                  type="text"
+                  value={eightySixInput}
+                  onChange={(e) => {
+                    setEightySixInput(e.target.value);
+                    setSelectedProduct(null);
+                  }}
+                  placeholder="Search product catalog or enter item..."
+                  className="w-full bg-white border border-gray-300 py-2 pl-3 pr-8 rounded-lg text-xs italic focus:outline-none"
+                />
+                {eightySixInput && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEightySixInput('');
+                      setSelectedProduct(null);
+                    }}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-black"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+
+                {catalogSuggestions.length > 0 && !selectedProduct && (
+                  <div className="absolute z-20 left-0 right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg divide-y divide-gray-100 max-h-40 overflow-y-auto">
+                    {catalogSuggestions.map(prod => (
+                      <button
+                        key={prod.id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedProduct(prod);
+                          setEightySixInput(prod.name);
+                        }}
+                        className="w-full text-left px-3 py-2 text-xs hover:bg-gray-100 flex items-center justify-between"
+                      >
+                        <div>
+                          <span className="font-bold text-gray-900">{prod.name}</span>
+                          <span className="text-[10px] text-gray-400 font-mono ml-2">[{prod.id}]</span>
+                        </div>
+                        <span className="text-[10px] text-gray-500 italic">({prod.unit})</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="grid grid-cols-12 gap-2">
+                <div className="col-span-4">
+                  <input
+                    type="number"
+                    step="any"
+                    value={eightySixQty}
+                    onChange={(e) => setEightySixQty(e.target.value)}
+                    placeholder="Qty"
+                    className="w-full bg-white border border-gray-300 py-1.5 px-2.5 rounded-lg text-xs font-bold text-center focus:outline-none"
+                  />
+                </div>
+                <div className="col-span-8">
+                  <button
+                    type="submit"
+                    disabled={!eightySixInput.trim()}
+                    className="w-full py-1.5 bg-black text-white hover:bg-gray-800 disabled:opacity-40 rounded-lg text-xs font-bold transition flex items-center justify-center space-x-1"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Add to 86 List</span>
+                  </button>
+                </div>
+              </div>
+            </form>
+
+            <div className="divide-y divide-gray-200 pt-1">
+              {eightySixList.length === 0 ? (
+                <p className="text-[11px] text-gray-400 italic py-2 text-center">No items 86'd this shift.</p>
+              ) : (
+                eightySixList.map((item, idx) => (
+                  <div key={idx} className="flex justify-between items-center py-2 text-xs">
+                    <div>
+                      <span className="font-bold text-gray-900">{item.name}</span>
+                      <div className="flex items-center space-x-1.5 text-[10px] text-gray-400 font-mono">
+                        <span>SKU: {item.sku}</span>
+                        <span>•</span>
+                        <span>{item.supplier}</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <span className="font-mono text-[11px] font-bold text-red-600 bg-red-50 px-2 py-0.5 rounded">
+                        {item.qty} {item.unit}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleRemove86(idx)}
+                        className="text-gray-400 hover:text-red-500 font-mono px-1"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          {/* Tomorrow Tasks */}
+          <div className="space-y-2">
+            <label className="block text-xs font-extrabold text-gray-900">Tomorrow / Handover Actions</label>
+            <div className="relative">
+              <input
+                type="text"
+                value={tomorrowInput}
+                onChange={(e) => setTomorrowInput(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), handleAddTomorrow())}
+                placeholder="Add task for next shift..."
+                className="w-full bg-[#EDEDED] rounded-xl py-2 px-3 text-xs focus:outline-none pr-10"
+              />
               <button
                 type="button"
-                onClick={handleReset}
-                className="w-full py-3 border border-neutral-300 rounded-xl text-xs font-bold text-neutral-700 hover:bg-neutral-50 transition"
+                onClick={() => handleAddTomorrow()}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-600 font-bold hover:text-black"
               >
-                Reset
-              </button>
-              <button
-                type="button"
-                onClick={handleSubmit}
-                disabled={isSubmitting}
-                className="w-full py-3 bg-[#141414] text-white rounded-xl text-xs font-bold hover:bg-black transition disabled:opacity-50"
-              >
-                {isSubmitting ? 'Submitting...' : 'Submit Handover'}
+                →
               </button>
             </div>
 
-            {isSubmitted && (
-              <p className="text-center text-xs font-bold text-emerald-700 pt-1">
-                ✓ Handover Saved & Logged to Master Sheet
-              </p>
+            {tomorrowSuggestions.length > 0 && (
+              <div className="border border-neutral-200 rounded-xl overflow-hidden divide-y divide-neutral-100 bg-[#FBFBFB]">
+                {tomorrowSuggestions.map((suggestion, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => handleAddTomorrow(suggestion)}
+                    className="w-full text-left px-3 py-2 text-xs text-black flex justify-between items-center hover:bg-neutral-100"
+                  >
+                    <span>{suggestion}</span>
+                    <span className="text-neutral-400">→</span>
+                  </button>
+                ))}
+              </div>
             )}
-          </div>
-        )}
 
-        {/* VIEW 2: LATEST / YESTERDAY (Read View) */}
-        {currentTab === 'latest' && (
-          <div className="space-y-6">
-            <div className="flex justify-between items-baseline">
-              <h1 className="text-3xl font-extrabold tracking-tight leading-tight">
-                {latestHandover.date}
-              </h1>
-              <span className="text-2xl font-black text-neutral-900">£{latestHandover.takings}</span>
-            </div>
-
-            <div className="bg-[#F2F2F2] p-4 rounded-xl space-y-1">
-              <p className="text-xs font-bold text-black">West Side Tavern Assistant:</p>
-              <p className="text-xs text-neutral-600 leading-relaxed italic">
-                Logged by {latestHandover.manager}. Close time: {latestHandover.closeTime}.
-              </p>
-            </div>
-
-            <div className="bg-[#F9F9F9] p-5 rounded-2xl space-y-5 border border-gray-100">
-              <div className="space-y-1">
-                <h3 className="text-sm font-bold text-black uppercase tracking-wider">General Notes</h3>
-                <p className="text-xs text-neutral-700 leading-relaxed">
-                  {latestHandover.generalNotes || 'No general notes submitted.'}
-                </p>
-              </div>
-
-              <div className="space-y-1">
-                <h3 className="text-sm font-bold text-black uppercase tracking-wider">Kitchen Service</h3>
-                <p className="text-xs text-neutral-700 leading-relaxed">
-                  {latestHandover.kitchenNotes || latestHandover.kitchenService || 'Close'}
-                </p>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4 pt-2">
-                <div>
-                  <h3 className="text-sm font-bold text-black uppercase tracking-wider mb-2">To Do</h3>
-                  <div className="space-y-1.5 text-xs text-neutral-800">
-                    {(latestHandover.tomorrowTasks || []).map((task, idx) => (
-                      <label key={idx} className="flex items-center space-x-2 cursor-pointer font-medium">
-                        <input type="checkbox" className="rounded border-neutral-400" />
-                        <span>{task}</span>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-
-                <div>
-                  <h3 className="text-sm font-bold text-black uppercase tracking-wider mb-2">86 List</h3>
-                  <ul className="space-y-1 text-xs text-neutral-800 font-semibold list-disc list-inside">
-                    {(latestHandover.eightySixList || []).map((item, idx) => (
-                      <li key={idx}>{item}</li>
-                    ))}
-                  </ul>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* VIEW 3: HISTORY */}
-        {currentTab === 'history' && (
-          <div className="space-y-4">
-            <h1 className="text-2xl font-black">Handover History</h1>
-            <div className="divide-y divide-neutral-200">
-              {handoverHistory.map((item) => (
-                <div key={item.id} className="py-3 flex justify-between items-center text-sm">
-                  <div>
-                    <p className="font-bold">{item.date || item.dateStr}</p>
-                    <p className="text-xs text-neutral-500">Logged by {item.manager}</p>
-                  </div>
-                  <span className="font-extrabold text-neutral-800">£{item.takings}</span>
+            <div className="divide-y divide-gray-100 pt-1">
+              {tomorrowList.map((item, idx) => (
+                <div key={idx} className="flex justify-between items-center py-2 text-xs text-gray-900 font-medium">
+                  <span>{item}</span>
+                  <button
+                    type="button"
+                    onClick={() => handleRemoveTomorrow(idx)}
+                    className="text-gray-400 hover:text-black px-1 font-mono"
+                  >
+                    ✕
+                  </button>
                 </div>
               ))}
             </div>
           </div>
-        )}
 
-        {/* VIEW 4: ASSISTANT */}
-        {currentTab === 'assistant' && (
-          <div className="space-y-4">
-            <h1 className="text-2xl font-black">Shift Co-Pilot</h1>
-            
-            <div className="bg-[#F2F2F2] p-4 rounded-xl space-y-1.5">
-              <p className="text-xs font-bold text-black">Cross-App Operational Summary</p>
-              <p className="text-xs text-neutral-600 leading-relaxed">
-                Aggregating logs across Handover, Stocktake, and Maintenance pipelines.
-              </p>
-            </div>
-
-            <div className="space-y-3 pt-2">
-              <div className="p-3.5 border border-neutral-200 rounded-xl space-y-1">
-                <p className="text-xs font-bold text-black">📦 Stock & 86 Insights</p>
-                <p className="text-xs text-neutral-600">
-                  {latestHandover.eightySixList.length} items currently on the 86 list. Automatically flagged for stock deficit check.
-                </p>
-              </div>
-
-              <div className="p-3.5 border border-neutral-200 rounded-xl space-y-1">
-                <p className="text-xs font-bold text-black">👥 Service Footfall</p>
-                <p className="text-xs text-neutral-600">
-                  Thursday revenue target averaged £1,540 over recent periods.
-                </p>
-              </div>
-
-              <div className="p-3.5 border border-neutral-200 rounded-xl space-y-1">
-                <p className="text-xs font-bold text-black">🛠️ Maintenance Alerts</p>
-                <p className="text-xs text-neutral-600">
-                  {latestHandover.maintenanceFlags && latestHandover.maintenanceFlags.length > 0
-                    ? `Open issue: ${latestHandover.maintenanceFlags.join(', ')}`
-                    : 'No critical equipment failures flagged in recent handovers.'}
-                </p>
-              </div>
-            </div>
+          <div className="pt-2">
+            <button
+              type="button"
+              onClick={handleSubmit}
+              disabled={isSubmitting}
+              className="w-full py-3 bg-[#141414] text-white rounded-xl text-xs font-bold hover:bg-black transition disabled:opacity-50 flex items-center justify-center space-x-1.5"
+            >
+              <Send className="w-3.5 h-3.5" />
+              <span>{isSubmitting ? 'Saving & Generating Spreadsheet...' : 'Submit Handover Report'}</span>
+            </button>
           </div>
-        )}
 
-        {/* VIEW 5: SETTINGS */}
-        {currentTab === 'settings' && (
-          <div className="space-y-4">
-            <h1 className="text-2xl font-black">App Settings</h1>
-            <div className="space-y-3 text-sm">
-              <div className="p-3.5 border border-neutral-200 rounded-xl">
-                <p className="font-bold text-xs">Manager Duty Roster</p>
-                <p className="text-xs text-neutral-500 mt-0.5">Ross, Duty Manager</p>
-              </div>
-              <div className="p-3.5 border border-neutral-200 rounded-xl">
-                <p className="font-bold text-xs">Google Sheets Data Bridge</p>
-                <p className="text-xs text-emerald-700 font-semibold mt-0.5">● Active (Connected to West Side Tavern Sheet)</p>
-              </div>
-            </div>
-          </div>
-        )}
-      </main>
+        </div>
+      )}
 
-      {/* Bottom Sticky Navigation Bar */}
-      <nav className="fixed bottom-0 left-0 right-0 bg-[#141414] text-white py-3.5 px-6 max-w-md mx-auto flex justify-between items-center text-xs font-bold border-t border-neutral-800">
-        <button
-          onClick={() => setCurrentTab('latest')}
-          className={`hover:text-neutral-300 transition ${
-            currentTab === 'latest' ? 'text-white border-b-2 border-white pb-0.5' : 'text-neutral-400'
-          }`}
-        >
-          Latest
-        </button>
-        <button
+      {/* IDENTICAL FLOATING GLASS BOTTOM NAVIGATION PILL */}
+      <nav className="fixed bottom-4 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-[390px] z-50 rounded-2xl bg-[#111111]/95 backdrop-blur-md text-white py-2.5 px-3 flex justify-around items-center text-xs font-semibold shadow-2xl border border-white/10 select-none">
+        <button 
           onClick={() => setCurrentTab('today')}
-          className={`hover:text-neutral-300 transition ${
-            currentTab === 'today' ? 'text-white border-b-2 border-white pb-0.5' : 'text-neutral-400'
+          className={`flex-1 py-1 text-center rounded-xl transition ${
+            currentTab === 'today' 
+              ? 'text-white bg-white/15 font-bold shadow-inner' 
+              : 'text-gray-400 hover:text-white'
           }`}
         >
           Today
         </button>
-        <button
+        <button 
           onClick={() => setCurrentTab('history')}
-          className={`hover:text-neutral-300 transition ${
-            currentTab === 'history' ? 'text-white border-b-2 border-white pb-0.5' : 'text-neutral-400'
+          className={`flex-1 py-1 text-center rounded-xl transition ${
+            currentTab === 'history' 
+              ? 'text-white bg-white/15 font-bold shadow-inner' 
+              : 'text-gray-400 hover:text-white'
           }`}
         >
           History
         </button>
-        <button
-          onClick={() => setCurrentTab('assistant')}
-          className={`hover:text-neutral-300 transition ${
-            currentTab === 'assistant' ? 'text-white border-b-2 border-white pb-0.5' : 'text-neutral-400'
-          }`}
-        >
-          Assistant
-        </button>
       </nav>
+
     </div>
   );
 }
