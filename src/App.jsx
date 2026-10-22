@@ -5,11 +5,9 @@ import {
   Wine, 
   Sparkles, 
   LogOut, 
-  ArrowLeft, 
   ChevronRight, 
   Delete,
-  Clock,
-  ShieldCheck
+  Loader2
 } from 'lucide-react';
 
 import StocktakeApp from './StocktakeApp';
@@ -34,85 +32,82 @@ function AppLogo({ className = "w-6 h-6", fallbackTextClass = "font-serif text-x
   return <span className={fallbackTextClass}>T</span>;
 }
 
-const BOOT_QUIPS = [
-  "Connecting to staff roster...",
-  "Syncing role permissions...",
-  "Verifying duty manager PINs...",
-  "Priming operations hub...",
-  "Ready for service..."
-];
-
 export default function App() {
-  // Pre-loader State
-  const [isInitializing, setIsInitializing] = useState(true);
-  const [initProgress, setInitProgress] = useState(15);
-  const [quipIndex, setQuipIndex] = useState(0);
+  // Read immediately from LocalStorage for zero-wait UI
+  const [staffRoster, setStaffRoster] = useState(() => {
+    try {
+      const c = localStorage.getItem('wst_staff');
+      return c ? JSON.parse(c) : [{ pin: '1234', name: 'Ross', role: 'General Manager' }];
+    } catch {
+      return [{ pin: '1234', name: 'Ross', role: 'General Manager' }];
+    }
+  });
 
-  // Authentication & Roster State
-  const [staffRoster, setStaffRoster] = useState([
-    { pin: '1234', name: 'Ross', role: 'General Manager' }
-  ]);
+  const [preloadedCatalog, setPreloadedCatalog] = useState(() => {
+    try {
+      const c = localStorage.getItem('wst_catalog');
+      return c ? JSON.parse(c) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const [preloadedHistory, setPreloadedHistory] = useState(() => {
+    try {
+      const c = localStorage.getItem('wst_history');
+      return c ? JSON.parse(c) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  // If local storage has a staff list, don't block user behind a full splash
+  const [isAppLoading, setIsAppLoading] = useState(() => {
+    return !localStorage.getItem('wst_staff');
+  });
+
+  // Auth & Navigation
   const [currentUser, setCurrentUser] = useState(null);
   const [pinInput, setPinInput] = useState('');
   const [pinError, setPinError] = useState(false);
-  
-  // Navigation State: 'hub' | 'stocktake' | 'handover'
   const [currentApp, setCurrentApp] = useState('hub');
 
-  // Cycle playful startup hints while initializing
-  useEffect(() => {
-    if (!isInitializing) return;
-    const interval = setInterval(() => {
-      setQuipIndex((prev) => (prev + 1) % BOOT_QUIPS.length);
-    }, 1400);
-    return () => clearInterval(interval);
-  }, [isInitializing]);
-
-  // Initial gateway fetch: load staff roster before rendering PIN keypad
+  // Single Background Data Sync Call
   useEffect(() => {
     let isMounted = true;
-    
-    // Staged progress jumps to maintain user engagement on slower mobile connections
-    const t1 = setTimeout(() => setInitProgress(48), 350);
-    const t2 = setTimeout(() => setInitProgress(78), 900);
 
-    async function bootstrapStaff() {
+    async function syncBundle() {
       try {
-        const res = await fetch(`${HARDWIRED_SCRIPT_URL}?action=get_staff`);
+        const res = await fetch(`${HARDWIRED_SCRIPT_URL}?action=all`);
         const json = await res.json();
         
-        if (isMounted) {
-          clearTimeout(t1);
-          clearTimeout(t2);
-          setInitProgress(95);
-
-          if (json.status === 'success' && Array.isArray(json.data) && json.data.length > 0) {
-            setStaffRoster(json.data);
+        if (isMounted && json && json.status === 'success') {
+          if (json.staff && json.staff.length > 0) {
+            setStaffRoster(json.staff);
+            localStorage.setItem('wst_staff', JSON.stringify(json.staff));
           }
-          setInitProgress(100);
-          setTimeout(() => setIsInitializing(false), 250);
+          if (json.catalog && json.catalog.length > 0) {
+            setPreloadedCatalog(json.catalog);
+            localStorage.setItem('wst_catalog', JSON.stringify(json.catalog));
+          }
+          if (json.history) {
+            setPreloadedHistory(json.history);
+            localStorage.setItem('wst_history', JSON.stringify(json.history));
+          }
         }
       } catch (err) {
-        console.error("Staff roster bootstrap failed, using local offline credentials:", err);
-        if (isMounted) {
-          clearTimeout(t1);
-          clearTimeout(t2);
-          setInitProgress(100);
-          setTimeout(() => setIsInitializing(false), 300);
-        }
+        console.warn("Operating with cached local storage:", err);
+      } finally {
+        if (isMounted) setIsAppLoading(false);
       }
     }
 
-    bootstrapStaff();
+    syncBundle();
 
-    return () => {
-      isMounted = false;
-      clearTimeout(t1);
-      clearTimeout(t2);
-    };
+    return () => { isMounted = false; };
   }, []);
 
-  // Keypad Handlers with instantaneous in-memory validation
+  // Keypad Handlers
   const handlePinPress = (num) => {
     if (pinInput.length < 4) {
       const newPin = pinInput + num;
@@ -120,9 +115,9 @@ export default function App() {
       setPinError(false);
 
       if (newPin.length === 4) {
-        const matchedStaff = staffRoster.find(s => s.pin === newPin);
-        if (matchedStaff) {
-          setCurrentUser(matchedStaff);
+        const matched = staffRoster.find(s => s.pin === newPin);
+        if (matched) {
+          setCurrentUser(matched);
           setTimeout(() => setPinInput(''), 150);
         } else {
           setTimeout(() => {
@@ -145,60 +140,28 @@ export default function App() {
     setCurrentApp('hub');
   };
 
-  /* -------------------------------------------------------------------------- */
-  /* 1. ANIMATED GATEWAY PRE-LOADER (MOBILE-OPTIMIZED)                          */
-  /* -------------------------------------------------------------------------- */
-  if (isInitializing) {
+  /* 1. NATIVE SPLASH (Only triggers if cache is completely empty) */
+  if (isAppLoading) {
     return (
-      <div className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 justify-center items-center px-8 relative overflow-hidden select-none">
-        
-        {/* Soft background ambient glow */}
-        <div className="absolute w-72 h-72 rounded-full bg-neutral-100 blur-3xl pointer-events-none -top-10" />
-
-        {/* Brand Monogram */}
-        <div className="mb-8 relative flex flex-col items-center">
-          <div className="p-4 rounded-3xl bg-neutral-50 border border-neutral-100 shadow-sm mb-3">
-            <AppLogo className="w-14 h-14" fallbackTextClass="font-serif text-5xl font-black tracking-tighter" />
+      <div className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 justify-between items-center py-16 px-8 select-none">
+        <div className="w-full" />
+        <div className="flex flex-col items-center justify-center">
+          <div className="p-3 mb-4">
+            <AppLogo className="w-24 h-24" fallbackTextClass="font-serif text-7xl font-bold tracking-tighter" />
           </div>
-          <span className="font-mono text-[10px] uppercase tracking-widest text-neutral-400">West Side Tavern</span>
+          <h1 className="text-xl font-bold tracking-tight text-gray-900">West Side Tavern</h1>
+          <p className="text-[11px] font-mono tracking-widest text-gray-400 uppercase mt-1">
+            Operations Suite
+          </p>
         </div>
-
-        {/* Glassmorphic Progress Container */}
-        <div className="w-full max-w-xs bg-neutral-50/80 backdrop-blur border border-neutral-200/80 rounded-2xl p-5 shadow-sm space-y-4">
-          <div className="flex items-center justify-between text-xs">
-            <div className="flex items-center space-x-2">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-              <span className="font-bold tracking-tight text-neutral-900">Connecting...</span>
-            </div>
-            <span className="font-mono text-[11px] font-bold text-neutral-500">
-              {Math.round(initProgress)}%
-            </span>
-          </div>
-
-          {/* Progress bar */}
-          <div className="w-full bg-neutral-200/70 h-2 rounded-full overflow-hidden p-0.5">
-            <div 
-              className="bg-black h-full rounded-full transition-all duration-300 ease-out shadow-sm"
-              style={{ width: `${initProgress}%` }}
-            />
-          </div>
-
-          {/* Cycling status quip */}
-          <div className="min-h-[26px] flex items-center justify-center text-center">
-            <p className="text-[11px] font-medium text-neutral-500 italic transition-opacity duration-300">
-              {BOOT_QUIPS[quipIndex]}
-            </p>
-          </div>
+        <div className="flex flex-col items-center space-y-3">
+          <Loader2 className="w-5 h-5 text-gray-400 animate-spin" />
         </div>
-
-        <p className="text-[10px] text-neutral-400 font-mono mt-8">Operations Portal Gateway</p>
       </div>
     );
   }
 
-  /* -------------------------------------------------------------------------- */
-  /* 2. ROLE-BASED PIN LOGIN SCREEN                                            */
-  /* -------------------------------------------------------------------------- */
+  /* 2. PIN LOGIN */
   if (!currentUser) {
     return (
       <div className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 justify-center items-center px-8">
@@ -208,7 +171,6 @@ export default function App() {
           <p className="text-xs text-gray-400 font-mono mt-1">STAFF OPERATIONS PORTAL</p>
         </div>
 
-        {/* PIN Indicators */}
         <div className="flex space-x-4 mb-14">
           {[0, 1, 2, 3].map(index => {
             const isFilled = pinInput.length > index;
@@ -223,7 +185,6 @@ export default function App() {
           })}
         </div>
 
-        {/* Numeric Keypad */}
         <div className="grid grid-cols-3 gap-y-7 gap-x-12 w-full max-w-xs text-center text-2xl font-medium">
           {[1, 2, 3, 4, 5, 6, 7, 8, 9].map(num => (
             <button
@@ -252,20 +213,31 @@ export default function App() {
     );
   }
 
-  /* -------------------------------------------------------------------------- */
-  /* 3. SUB-APP ROUTING                                                         */
-  /* -------------------------------------------------------------------------- */
+  /* 3. SUB-APP ROUTING */
   if (currentApp === 'stocktake') {
-    return <StocktakeApp currentUser={currentUser} onBackToHub={() => setCurrentApp('hub')} onLogout={handleLogout} />;
+    return (
+      <StocktakeApp 
+        currentUser={currentUser} 
+        initialCatalog={preloadedCatalog}
+        onBackToHub={() => setCurrentApp('hub')} 
+        onLogout={handleLogout} 
+      />
+    );
   }
 
   if (currentApp === 'handover') {
-    return <HandoverApp currentUser={currentUser} onBackToHub={() => setCurrentApp('hub')} onLogout={handleLogout} />;
+    return (
+      <HandoverApp 
+        currentUser={currentUser} 
+        initialCatalog={preloadedCatalog}
+        initialHistory={preloadedHistory}
+        onBackToHub={() => setCurrentApp('hub')} 
+        onLogout={handleLogout} 
+      />
+    );
   }
 
-  /* -------------------------------------------------------------------------- */
-  /* 4. MAIN DASHBOARD / HUB MENU                                              */
-  /* -------------------------------------------------------------------------- */
+  /* 4. MAIN HUB */
   const modules = [
     {
       id: 'stocktake',
@@ -303,8 +275,6 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 overflow-x-hidden">
-      
-      {/* Top Header with Active Role Badge */}
       <header className="flex items-center justify-between px-5 pt-6 pb-4 border-b border-gray-50 flex-shrink-0">
         <div className="flex items-center space-x-2.5">
           <AppLogo className="w-7 h-7" fallbackTextClass="font-serif text-2xl font-bold tracking-tighter" />
@@ -328,7 +298,6 @@ export default function App() {
         </button>
       </header>
 
-      {/* Main Content Area */}
       <div className="flex-1 overflow-y-auto px-5 py-6 space-y-6">
         <div>
           <p className="text-gray-400 font-serif italic text-xs">Logged in as {currentUser.role}</p>
@@ -382,7 +351,7 @@ export default function App() {
 
       <footer className="px-5 py-4 border-t border-gray-100 bg-[#FAFAFA] flex items-center justify-between text-[11px] text-gray-400 font-mono">
         <span>West Side Tavern Staff Portal</span>
-        <span>v2.3</span>
+        <span>v2.5</span>
       </footer>
     </div>
   );
