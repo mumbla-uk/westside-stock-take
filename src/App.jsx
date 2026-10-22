@@ -34,7 +34,21 @@ function AppLogo({ className = "w-6 h-6", fallbackTextClass = "font-serif text-x
   return <span className={fallbackTextClass}>T</span>;
 }
 
+const BOOT_QUIPS = [
+  "Connecting to staff roster...",
+  "Syncing role permissions...",
+  "Verifying duty manager PINs...",
+  "Priming operations hub...",
+  "Ready for service..."
+];
+
 export default function App() {
+  // Pre-loader State
+  const [isInitializing, setIsInitializing] = useState(true);
+  const [initProgress, setInitProgress] = useState(15);
+  const [quipIndex, setQuipIndex] = useState(0);
+
+  // Authentication & Roster State
   const [staffRoster, setStaffRoster] = useState([
     { pin: '1234', name: 'Ross', role: 'General Manager' }
   ]);
@@ -45,23 +59,60 @@ export default function App() {
   // Navigation State: 'hub' | 'stocktake' | 'handover'
   const [currentApp, setCurrentApp] = useState('hub');
 
-  // Load staff roles & PINs from Google Sheet
+  // Cycle playful startup hints while initializing
   useEffect(() => {
-    async function fetchRoster() {
+    if (!isInitializing) return;
+    const interval = setInterval(() => {
+      setQuipIndex((prev) => (prev + 1) % BOOT_QUIPS.length);
+    }, 1400);
+    return () => clearInterval(interval);
+  }, [isInitializing]);
+
+  // Initial gateway fetch: load staff roster before rendering PIN keypad
+  useEffect(() => {
+    let isMounted = true;
+    
+    // Staged progress jumps to maintain user engagement on slower mobile connections
+    const t1 = setTimeout(() => setInitProgress(48), 350);
+    const t2 = setTimeout(() => setInitProgress(78), 900);
+
+    async function bootstrapStaff() {
       try {
         const res = await fetch(`${HARDWIRED_SCRIPT_URL}?action=get_staff`);
         const json = await res.json();
-        if (json.status === 'success' && Array.isArray(json.data) && json.data.length > 0) {
-          setStaffRoster(json.data);
+        
+        if (isMounted) {
+          clearTimeout(t1);
+          clearTimeout(t2);
+          setInitProgress(95);
+
+          if (json.status === 'success' && Array.isArray(json.data) && json.data.length > 0) {
+            setStaffRoster(json.data);
+          }
+          setInitProgress(100);
+          setTimeout(() => setIsInitializing(false), 250);
         }
       } catch (err) {
-        console.error("Failed to load staff roster:", err);
+        console.error("Staff roster bootstrap failed, using local offline credentials:", err);
+        if (isMounted) {
+          clearTimeout(t1);
+          clearTimeout(t2);
+          setInitProgress(100);
+          setTimeout(() => setIsInitializing(false), 300);
+        }
       }
     }
-    fetchRoster();
+
+    bootstrapStaff();
+
+    return () => {
+      isMounted = false;
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
   }, []);
 
-  // Keypad Handlers with Role-Based Matching
+  // Keypad Handlers with instantaneous in-memory validation
   const handlePinPress = (num) => {
     if (pinInput.length < 4) {
       const newPin = pinInput + num;
@@ -72,7 +123,7 @@ export default function App() {
         const matchedStaff = staffRoster.find(s => s.pin === newPin);
         if (matchedStaff) {
           setCurrentUser(matchedStaff);
-          setTimeout(() => setPinInput(''), 200);
+          setTimeout(() => setPinInput(''), 150);
         } else {
           setTimeout(() => {
             setPinError(true);
@@ -95,7 +146,58 @@ export default function App() {
   };
 
   /* -------------------------------------------------------------------------- */
-  /* 1. ROLE-BASED PIN LOGIN SCREEN                                            */
+  /* 1. ANIMATED GATEWAY PRE-LOADER (MOBILE-OPTIMIZED)                          */
+  /* -------------------------------------------------------------------------- */
+  if (isInitializing) {
+    return (
+      <div className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 justify-center items-center px-8 relative overflow-hidden select-none">
+        
+        {/* Soft background ambient glow */}
+        <div className="absolute w-72 h-72 rounded-full bg-neutral-100 blur-3xl pointer-events-none -top-10" />
+
+        {/* Brand Monogram */}
+        <div className="mb-8 relative flex flex-col items-center">
+          <div className="p-4 rounded-3xl bg-neutral-50 border border-neutral-100 shadow-sm mb-3">
+            <AppLogo className="w-14 h-14" fallbackTextClass="font-serif text-5xl font-black tracking-tighter" />
+          </div>
+          <span className="font-mono text-[10px] uppercase tracking-widest text-neutral-400">West Side Tavern</span>
+        </div>
+
+        {/* Glassmorphic Progress Container */}
+        <div className="w-full max-w-xs bg-neutral-50/80 backdrop-blur border border-neutral-200/80 rounded-2xl p-5 shadow-sm space-y-4">
+          <div className="flex items-center justify-between text-xs">
+            <div className="flex items-center space-x-2">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              <span className="font-bold tracking-tight text-neutral-900">Connecting...</span>
+            </div>
+            <span className="font-mono text-[11px] font-bold text-neutral-500">
+              {Math.round(initProgress)}%
+            </span>
+          </div>
+
+          {/* Progress bar */}
+          <div className="w-full bg-neutral-200/70 h-2 rounded-full overflow-hidden p-0.5">
+            <div 
+              className="bg-black h-full rounded-full transition-all duration-300 ease-out shadow-sm"
+              style={{ width: `${initProgress}%` }}
+            />
+          </div>
+
+          {/* Cycling status quip */}
+          <div className="min-h-[26px] flex items-center justify-center text-center">
+            <p className="text-[11px] font-medium text-neutral-500 italic transition-opacity duration-300">
+              {BOOT_QUIPS[quipIndex]}
+            </p>
+          </div>
+        </div>
+
+        <p className="text-[10px] text-neutral-400 font-mono mt-8">Operations Portal Gateway</p>
+      </div>
+    );
+  }
+
+  /* -------------------------------------------------------------------------- */
+  /* 2. ROLE-BASED PIN LOGIN SCREEN                                            */
   /* -------------------------------------------------------------------------- */
   if (!currentUser) {
     return (
@@ -151,7 +253,7 @@ export default function App() {
   }
 
   /* -------------------------------------------------------------------------- */
-  /* 2. SUB-APP ROUTING (WITH ROLE CONTEXT INJECTED)                            */
+  /* 3. SUB-APP ROUTING                                                         */
   /* -------------------------------------------------------------------------- */
   if (currentApp === 'stocktake') {
     return <StocktakeApp currentUser={currentUser} onBackToHub={() => setCurrentApp('hub')} onLogout={handleLogout} />;
@@ -162,7 +264,7 @@ export default function App() {
   }
 
   /* -------------------------------------------------------------------------- */
-  /* 3. MAIN DASHBOARD / HUB MENU                                              */
+  /* 4. MAIN DASHBOARD / HUB MENU                                              */
   /* -------------------------------------------------------------------------- */
   const modules = [
     {
@@ -280,7 +382,7 @@ export default function App() {
 
       <footer className="px-5 py-4 border-t border-gray-100 bg-[#FAFAFA] flex items-center justify-between text-[11px] text-gray-400 font-mono">
         <span>West Side Tavern Staff Portal</span>
-        <span>v2.2</span>
+        <span>v2.3</span>
       </footer>
     </div>
   );
