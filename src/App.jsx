@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   ClipboardCheck, 
   BookOpen, 
+  Coins, 
   Wine, 
   Sparkles, 
   LogOut, 
@@ -12,6 +13,7 @@ import {
 
 import StocktakeApp from './StocktakeApp';
 import HandoverApp from './HandoverApp';
+import PettyCashApp from './PettyCashApp';
 
 const HARDWIRED_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzcrqf4q-QWiGq0sxMmXqS7QcsxCVfhkJgPfjxOm6KyPShNUD-zkD9HUZy49rDdrfAYJg/exec";
 
@@ -33,7 +35,7 @@ function AppLogo({ className = "w-6 h-6", fallbackTextClass = "font-serif text-x
 }
 
 export default function App() {
-  // Read immediately from LocalStorage for zero-wait UI
+  // Read immediately from LocalStorage for zero-wait UI on mobile
   const [staffRoster, setStaffRoster] = useState(() => {
     try {
       const c = localStorage.getItem('wst_staff');
@@ -61,18 +63,20 @@ export default function App() {
     }
   });
 
-  // If local storage has a staff list, don't block user behind a full splash
+  // Only show splash screen if local storage is completely empty on first launch
   const [isAppLoading, setIsAppLoading] = useState(() => {
     return !localStorage.getItem('wst_staff');
   });
 
-  // Auth & Navigation
+  // Auth & Session State
   const [currentUser, setCurrentUser] = useState(null);
   const [pinInput, setPinInput] = useState('');
   const [pinError, setPinError] = useState(false);
+  
+  // Navigation State: 'hub' | 'stocktake' | 'handover' | 'pettycash'
   const [currentApp, setCurrentApp] = useState('hub');
 
-  // Single Background Data Sync Call
+  // Unified Background Data Sync (Single Network Request)
   useEffect(() => {
     let isMounted = true;
 
@@ -94,6 +98,9 @@ export default function App() {
             setPreloadedHistory(json.history);
             localStorage.setItem('wst_history', JSON.stringify(json.history));
           }
+          if (json.duties && Array.isArray(json.duties)) {
+            localStorage.setItem('wst_duties', JSON.stringify(json.duties));
+          }
         }
       } catch (err) {
         console.warn("Operating with cached local storage:", err);
@@ -107,7 +114,7 @@ export default function App() {
     return () => { isMounted = false; };
   }, []);
 
-  // Keypad Handlers
+  // Keypad Handlers with instantaneous in-memory validation
   const handlePinPress = (num) => {
     if (pinInput.length < 4) {
       const newPin = pinInput + num;
@@ -140,7 +147,9 @@ export default function App() {
     setCurrentApp('hub');
   };
 
-  /* 1. NATIVE SPLASH (Only triggers if cache is completely empty) */
+  /* -------------------------------------------------------------------------- */
+  /* 1. NATIVE MOBILE APP SPLASH SCREEN (FIRST VISIT ONLY)                      */
+  /* -------------------------------------------------------------------------- */
   if (isAppLoading) {
     return (
       <div className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 justify-between items-center py-16 px-8 select-none">
@@ -161,7 +170,9 @@ export default function App() {
     );
   }
 
-  /* 2. PIN LOGIN */
+  /* -------------------------------------------------------------------------- */
+  /* 2. ROLE-BASED PIN LOGIN SCREEN                                             */
+  /* -------------------------------------------------------------------------- */
   if (!currentUser) {
     return (
       <div className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 justify-center items-center px-8">
@@ -171,6 +182,7 @@ export default function App() {
           <p className="text-xs text-gray-400 font-mono mt-1">STAFF OPERATIONS PORTAL</p>
         </div>
 
+        {/* PIN Dots */}
         <div className="flex space-x-4 mb-14">
           {[0, 1, 2, 3].map(index => {
             const isFilled = pinInput.length > index;
@@ -185,6 +197,7 @@ export default function App() {
           })}
         </div>
 
+        {/* Numeric Keypad */}
         <div className="grid grid-cols-3 gap-y-7 gap-x-12 w-full max-w-xs text-center text-2xl font-medium">
           {[1, 2, 3, 4, 5, 6, 7, 8, 9].map(num => (
             <button
@@ -213,7 +226,9 @@ export default function App() {
     );
   }
 
-  /* 3. SUB-APP ROUTING */
+  /* -------------------------------------------------------------------------- */
+  /* 3. SUB-APP ROUTING                                                         */
+  /* -------------------------------------------------------------------------- */
   if (currentApp === 'stocktake') {
     return (
       <StocktakeApp 
@@ -237,7 +252,19 @@ export default function App() {
     );
   }
 
-  /* 4. MAIN HUB */
+  if (currentApp === 'pettycash') {
+    return (
+      <PettyCashApp 
+        currentUser={currentUser} 
+        onBackToHub={() => setCurrentApp('hub')} 
+        onLogout={handleLogout} 
+      />
+    );
+  }
+
+  /* -------------------------------------------------------------------------- */
+  /* 4. MAIN DASHBOARD / HUB MENU                                               */
+  /* -------------------------------------------------------------------------- */
   const modules = [
     {
       id: 'stocktake',
@@ -250,8 +277,16 @@ export default function App() {
     {
       id: 'handover',
       title: 'Handover Diary',
-      subtitle: 'Shift reckonings, notes, 86 list & next-day prep',
+      subtitle: 'Shift logs, 86 list, duties & emoji acknowledgements',
       icon: BookOpen,
+      badge: 'Active',
+      badgeColor: 'bg-[#C2F19D] text-gray-900'
+    },
+    {
+      id: 'pettycash',
+      title: 'Petty Cash & Invoices',
+      subtitle: 'Safe counts, £1,200 float variance & receipt scans',
+      icon: Coins,
       badge: 'Active',
       badgeColor: 'bg-[#C2F19D] text-gray-900'
     },
@@ -275,6 +310,8 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 overflow-x-hidden">
+      
+      {/* Top Header with Active Role Badge */}
       <header className="flex items-center justify-between px-5 pt-6 pb-4 border-b border-gray-50 flex-shrink-0">
         <div className="flex items-center space-x-2.5">
           <AppLogo className="w-7 h-7" fallbackTextClass="font-serif text-2xl font-bold tracking-tighter" />
@@ -298,6 +335,7 @@ export default function App() {
         </button>
       </header>
 
+      {/* Hub Modules Grid */}
       <div className="flex-1 overflow-y-auto px-5 py-6 space-y-6">
         <div>
           <p className="text-gray-400 font-serif italic text-xs">Logged in as {currentUser.role}</p>
@@ -309,14 +347,16 @@ export default function App() {
         <div className="space-y-3">
           {modules.map((m) => {
             const Icon = m.icon;
+            const isClickable = m.badge === 'Active';
+
             return (
               <button
                 key={m.id}
                 onClick={() => {
-                  if (m.id === 'stocktake' || m.id === 'handover') setCurrentApp(m.id);
+                  if (isClickable) setCurrentApp(m.id);
                 }}
                 className={`w-full text-left p-4 rounded-2xl border transition-all shadow-sm group flex items-center justify-between ${
-                  m.badge === 'Active' 
+                  isClickable 
                     ? 'border-gray-200 bg-white hover:border-black active:scale-[0.99] cursor-pointer' 
                     : 'border-gray-100 bg-gray-50/60 opacity-60 cursor-not-allowed'
                 }`}
@@ -340,7 +380,7 @@ export default function App() {
                   </div>
                 </div>
 
-                {m.badge === 'Active' && (
+                {isClickable && (
                   <ChevronRight className="w-4 h-4 text-gray-400 group-hover:text-black transition-transform group-hover:translate-x-0.5 flex-shrink-0" />
                 )}
               </button>
@@ -349,9 +389,10 @@ export default function App() {
         </div>
       </div>
 
+      {/* Footer */}
       <footer className="px-5 py-4 border-t border-gray-100 bg-[#FAFAFA] flex items-center justify-between text-[11px] text-gray-400 font-mono">
         <span>West Side Tavern Staff Portal</span>
-        <span>v2.5</span>
+        <span>v2.6</span>
       </footer>
     </div>
   );
