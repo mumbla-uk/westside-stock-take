@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   ArrowLeft, 
   Plus, 
+  Minus,
   Trash2, 
   Camera, 
   FileText, 
@@ -20,18 +21,17 @@ import {
 const HARDWIRED_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzcrqf4q-QWiGq0sxMmXqS7QcsxCVfhkJgPfjxOm6KyPShNUD-zkD9HUZy49rDdrfAYJg/exec";
 const FLOAT_TARGET = 1200.00;
 
+// Currency structure with Large Notes consolidated and value step increments
 const DENOMINATIONS = [
-  { id: 'n50', label: '£50' },
-  { id: 'n20', label: '£20' },
-  { id: 'n10', label: '£10' },
-  { id: 'n5',  label: '£5' },
-  { id: 'c1',  label: '£1' },
-  { id: 'c50p', label: '50p' },
-  { id: 'c20p', label: '20p' },
-  { id: 'c10p', label: '10p' },
-  { id: 'c5p',  label: '5p' },
-  { id: 'c2p',  label: '2p' },
-  { id: 'c1p',  label: '1p' }
+  { id: 'largeNotes', label: 'Large Notes', step: 10.00 },
+  { id: 'n5',  label: '£5',  step: 5.00 },
+  { id: 'c1',  label: '£1',  step: 1.00 },
+  { id: 'c50p', label: '50p', step: 0.50 },
+  { id: 'c20p', label: '20p', step: 0.20 },
+  { id: 'c10p', label: '10p', step: 0.10 },
+  { id: 'c5p',  label: '5p',  step: 0.05 },
+  { id: 'c2p',  label: '2p',  step: 0.02 },
+  { id: 'c1p',  label: '1p',  step: 0.01 }
 ];
 
 const COMMON_VENDORS = [
@@ -80,22 +80,19 @@ function getWeekRange(dateStr) {
 export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
   const [activeTab, setActiveTab] = useState('entry');
 
-  // Summary Toggle Mode: 'week' | 'date'
   const [summaryViewMode, setSummaryViewMode] = useState('week');
   const [filterDate, setFilterDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [selectedWeekRange, setSelectedWeekRange] = useState(() => getWeekRange(new Date()));
 
-  // Daily Entry State
   const [entryDate, setEntryDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [entryDay, setEntryDay] = useState(() => new Date().toLocaleDateString('en-GB', { weekday: 'long' }));
 
-  // Denominations Monetary Values
+  // Denominations State
   const [denomValues, setDenomValues] = useState({
-    n50: '', n20: '', n10: '', n5: '',
-    c1: '', c50p: '', c20p: '', c10p: '', c5p: '', c2p: '', c1p: ''
+    largeNotes: '', n5: '', c1: '', c50p: '', c20p: '', c10p: '', c5p: '', c2p: '', c1p: ''
   });
 
-  // Outgoings & Receipts
+  // Outgoings & Attachments
   const [expenseVendor, setExpenseVendor] = useState('');
   const [expenseAmount, setExpenseAmount] = useState('');
   const [expenseCategory, setExpenseCategory] = useState('Supplies');
@@ -105,7 +102,6 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
   const [existingRecordUrl, setExistingRecordUrl] = useState('');
   const [lastSavedTimestamp, setLastSavedTimestamp] = useState('');
 
-  // History & Archive
   const [historyLogs, setHistoryLogs] = useState([]);
   const [historySearch, setHistorySearch] = useState('');
   const [selectedLogModal, setSelectedLogModal] = useState(null);
@@ -115,7 +111,6 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
   const [exportingDrive, setExportingDrive] = useState(false);
   const fileInputRef = useRef(null);
 
-  // Swipe handling
   const touchStartRef = useRef({ x: 0, y: 0 });
 
   const handleTouchStart = (e) => {
@@ -136,7 +131,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
     }
   };
 
-  // Sync Day Name & Auto-Load Day So Far
+  // Sync Day and load persistent single day inputs
   useEffect(() => {
     const d = new Date(entryDate);
     if (!isNaN(d.getTime())) {
@@ -146,26 +141,28 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
     const existingLog = historyLogs.find(l => l.date === entryDate);
     if (existingLog) {
       const dVals = existingLog.denominations || {};
+      // Handle backwards compatibility if older logs stored separated £50, £20, £10
+      const combinedLarge = dVals.largeNotes !== undefined
+        ? Number(dVals.largeNotes)
+        : ((Number(dVals.n50) || 0) + (Number(dVals.n20) || 0) + (Number(dVals.n10) || 0));
+
       setDenomValues({
-        n50: dVals.n50 !== undefined ? String(dVals.n50) : '',
-        n20: dVals.n20 !== undefined ? String(dVals.n20) : '',
-        n10: dVals.n10 !== undefined ? String(dVals.n10) : '',
-        n5:  dVals.n5 !== undefined ? String(dVals.n5) : '',
-        c1:  dVals.c1 !== undefined ? String(dVals.c1) : '',
-        c50p: dVals.c50p !== undefined ? String(dVals.c50p) : '',
-        c20p: dVals.c20p !== undefined ? String(dVals.c20p) : '',
-        c10p: dVals.c10p !== undefined ? String(dVals.c10p) : '',
-        c5p:  dVals.c5 !== undefined ? String(dVals.c5) : '',
-        c2p:  dVals.c2 !== undefined ? String(dVals.c2) : '',
-        c1p:  dVals.c1p !== undefined ? String(dVals.c1p) : ''
+        largeNotes: combinedLarge > 0 ? String(combinedLarge) : '',
+        n5:  dVals.n5 !== undefined && dVals.n5 !== '' ? String(dVals.n5) : '',
+        c1:  dVals.c1 !== undefined && dVals.c1 !== '' ? String(dVals.c1) : '',
+        c50p: dVals.c50p !== undefined && dVals.c50p !== '' ? String(dVals.c50p) : '',
+        c20p: dVals.c20p !== undefined && dVals.c20p !== '' ? String(dVals.c20p) : '',
+        c10p: dVals.c10p !== undefined && dVals.c10p !== '' ? String(dVals.c10p) : '',
+        c5p:  dVals.c5 !== undefined && dVals.c5 !== '' ? String(dVals.c5) : '',
+        c2p:  dVals.c2 !== undefined && dVals.c2 !== '' ? String(dVals.c2) : '',
+        c1p:  dVals.c1p !== undefined && dVals.c1p !== '' ? String(dVals.c1p) : ''
       });
       setExpenseList(existingLog.items || []);
       setExistingRecordUrl(existingLog.fileUrl || '');
       setLastSavedTimestamp(existingLog.savedAt || '');
     } else {
       setDenomValues({
-        n50: '', n20: '', n10: '', n5: '',
-        c1: '', c50p: '', c20p: '', c10p: '', c5p: '', c2p: '', c1p: ''
+        largeNotes: '', n5: '', c1: '', c50p: '', c20p: '', c10p: '', c5p: '', c2p: '', c1p: ''
       });
       setExpenseList([]);
       setExistingRecordUrl('');
@@ -189,7 +186,6 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
     loadPettyData();
   }, []);
 
-  // Total Physical Cash
   const totalPhysicalCash = useMemo(() => {
     return Object.values(denomValues).reduce((sum, val) => {
       const num = parseFloat(val);
@@ -201,12 +197,23 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
     return expenseList.reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
   }, [expenseList]);
 
-  // Imprest Reconciled Math
   const accountableTotal = totalPhysicalCash + totalExpensesToday;
   const dailyVariance = accountableTotal - FLOAT_TARGET;
 
   const handleDenomChange = (key, val) => {
     setDenomValues(prev => ({ ...prev, [key]: val }));
+  };
+
+  // Step increments in multiples of the denomination's value
+  const stepDenom = (key, stepAmount, isAdd) => {
+    const currentVal = parseFloat(denomValues[key]) || 0;
+    const nextVal = isAdd 
+      ? Math.round((currentVal + stepAmount) * 100) / 100 
+      : Math.max(0, Math.round((currentVal - stepAmount) * 100) / 100);
+    setDenomValues(prev => ({
+      ...prev,
+      [key]: nextVal > 0 ? String(nextVal) : ''
+    }));
   };
 
   const handleImageCapture = (e) => {
@@ -248,6 +255,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
     setExpenseList(prev => prev.filter((_, i) => i !== index));
   };
 
+  // Reconcile and save day (One file per day, verified photo uploads)
   const handleSubmitDay = async () => {
     if (totalPhysicalCash === 0 && expenseList.length === 0) {
       setStatusMsg({ type: 'error', text: 'Enter cash denomination values before submitting.' });
@@ -263,9 +271,8 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
         if (exp.receipt && exp.receipt.base64) {
           try {
             const cleanVendor = exp.vendor.replace(/[^a-zA-Z0-9]/g, '_');
-            const upRes = await fetch(HARDWIRED_SCRIPT_URL, {
+            const res = await fetch(HARDWIRED_SCRIPT_URL, {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 action: 'upload_petty_receipt',
                 base64Data: exp.receipt.base64,
@@ -273,23 +280,23 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
                 fileName: `Receipt_${entryDate}_${cleanVendor}.jpg`
               })
             });
-            const upJson = await upRes.json();
-            if (upJson.status === 'success') {
+            const resJson = await res.json();
+            if (resJson && resJson.status === 'success') {
               uploadedReceipts.push({
                 vendor: exp.vendor,
                 amount: exp.amount,
-                fileUrl: upJson.fileUrl
+                fileUrl: resJson.fileUrl
               });
             }
           } catch (e) {
-            console.error("Receipt upload skipped:", e);
+            console.error("Photo upload error:", e);
           }
         }
       }
 
       const payload = {
         action: 'save_petty_cash',
-        id: `pc-${Date.now()}`,
+        id: `pc-${entryDate}`,
         date: entryDate,
         day: entryDay,
         manager: currentUser?.name || 'Duty Manager',
@@ -304,13 +311,11 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
 
       await fetch(HARDWIRED_SCRIPT_URL, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-        mode: 'no-cors'
+        body: JSON.stringify(payload)
       });
 
-      setStatusMsg({ type: 'success', text: `Saved timestamped petty cash record for ${entryDate}!` });
-      loadPettyData();
+      setStatusMsg({ type: 'success', text: `Saved petty cash report for ${entryDate}!` });
+      await loadPettyData();
       setActiveTab('summary');
     } catch (err) {
       console.error(err);
@@ -320,7 +325,6 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
     }
   };
 
-  // Filtered Summary
   const filteredSummaryLogs = useMemo(() => {
     return historyLogs.filter(log => {
       const q = historySearch.toLowerCase();
@@ -357,7 +361,6 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
     return { totExp, closingCash, netVar };
   }, [filteredSummaryLogs]);
 
-  // Save Weekly Report (Spreadsheet + Formatted Doc into Dedicated Folder)
   const handleSaveWeeklyReport = async () => {
     if (filteredSummaryLogs.length === 0) return;
     setExportingDrive(true);
@@ -368,7 +371,6 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
     try {
       const res = await fetch(HARDWIRED_SCRIPT_URL, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action: 'export_petty_cash_summary',
           weekLabel: weekLabel,
@@ -382,7 +384,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
       if (json.status === 'success') {
         setStatusMsg({ 
           type: 'success', 
-          text: `Weekly reports generated: Ledger Sheet & Formatted Document saved to folder!` 
+          text: `Weekly reports saved: Excel sheet & Document created in folder!` 
         });
       }
     } catch (err) {
@@ -419,22 +421,22 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
         </div>
       </header>
 
-      {/* Main Viewport */}
+      {/* Main Viewport Router */}
       {activeTab === 'entry' ? (
 
         /* ====================================================================== */
-        /* TAB 1: DAILY COUNT & CONTINUOUS EDIT                                   */
+        /* TAB 1: DAILY COUNT & ONGOING ADDITIONS                                 */
         /* ====================================================================== */
         <div className="flex-1 flex flex-col overflow-y-auto px-5 py-3 space-y-4 pb-28">
           <div className="flex justify-between items-start">
             <div>
-              <p className="text-gray-500 italic text-xs font-serif">Imprest Safe Breakdown (£1,200 Float)</p>
+              <p className="text-gray-500 italic text-xs font-serif">Imprest Safe System (£1,200 Float)</p>
               <h1 className="text-2xl font-black tracking-tight text-gray-900 mt-0.5">Petty Cash Count</h1>
             </div>
             {existingRecordUrl && (
-              <span className="inline-flex items-center space-x-1 px-2.5 py-1 bg-amber-50 text-amber-900 border border-amber-200 rounded-lg text-[10px] font-bold">
-                <Clock className="w-3 h-3 text-amber-600" />
-                <span>Saved So Far</span>
+              <span className="inline-flex items-center space-x-1 px-2.5 py-1 bg-emerald-50 text-emerald-900 border border-emerald-200 rounded-lg text-[10px] font-bold">
+                <Clock className="w-3 h-3 text-emerald-600" />
+                <span>Day Loaded</span>
               </span>
             )}
           </div>
@@ -445,20 +447,20 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
             </div>
           )}
 
-          {/* Date Selector Header */}
-          <div className="grid grid-cols-12 gap-2 text-xs bg-[#F8F8F8] p-3 rounded-2xl border border-gray-200">
-            <div className="col-span-7">
-              <label className="block text-[10px] font-bold uppercase text-gray-400 mb-1">Select / Toggle Date</label>
+          {/* Sized Date Header Grid */}
+          <div className="grid grid-cols-12 gap-2 text-xs bg-[#F8F8F8] p-2.5 rounded-2xl border border-gray-200 items-center">
+            <div className="col-span-6 min-w-0">
+              <label className="block text-[9px] font-bold uppercase text-gray-400 mb-0.5">Delivery / Entry Date</label>
               <input 
                 type="date"
                 value={entryDate}
                 onChange={(e) => setEntryDate(e.target.value)}
-                className="w-full bg-white border border-gray-200 py-1.5 px-2 rounded-lg text-xs font-bold focus:outline-none"
+                className="w-full bg-white border border-gray-200 py-1 px-2 rounded-lg text-xs font-bold focus:outline-none appearance-none"
               />
             </div>
-            <div className="col-span-5">
-              <label className="block text-[10px] font-bold uppercase text-gray-400 mb-1">Day</label>
-              <div className="w-full py-1.5 px-2 bg-gray-200/80 rounded-lg text-xs font-bold text-gray-700 text-center uppercase tracking-wide">
+            <div className="col-span-6 min-w-0">
+              <label className="block text-[9px] font-bold uppercase text-gray-400 mb-0.5">Day</label>
+              <div className="w-full py-1 px-2 bg-gray-200/80 rounded-lg text-xs font-bold text-gray-700 text-center uppercase tracking-wide truncate">
                 {entryDay}
               </div>
             </div>
@@ -471,7 +473,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
               <span className="font-bold">£{FLOAT_TARGET.toFixed(2)}</span>
             </div>
             <div className="flex justify-between items-baseline text-xs font-mono">
-              <span className="text-gray-400">PHYSICAL CASH (SUM OF DENOMS)</span>
+              <span className="text-gray-400">PHYSICAL CASH (DENOMS)</span>
               <span className="font-bold text-emerald-400">£{totalPhysicalCash.toFixed(2)}</span>
             </div>
             <div className="flex justify-between items-baseline text-xs font-mono">
@@ -486,36 +488,57 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
             </div>
           </div>
 
-          {/* 11 Denominations */}
+          {/* Denominations: Large Notes and Incremental Multiples */}
           <div className="bg-gray-50 border border-gray-200 rounded-2xl p-3.5 space-y-2.5">
             <div className="flex justify-between items-center">
               <span className="block font-bold text-gray-900 uppercase tracking-wider text-[11px]">
-                Safe Cash Denomination Value (£)
+                Safe Cash Denominations (£)
               </span>
               <span className="text-[10px] font-mono text-gray-500 font-bold">
                 Tot: £{totalPhysicalCash.toFixed(2)}
               </span>
             </div>
 
-            <div className="grid grid-cols-2 gap-2 text-xs">
+            <div className="space-y-2 text-xs">
               {DENOMINATIONS.map(d => (
-                <div key={d.id} className="flex items-center bg-white border border-gray-200 rounded-xl px-2.5 py-1.5 focus-within:border-black transition">
-                  <span className="w-10 font-bold text-gray-700 text-xs">{d.label}</span>
-                  <span className="text-gray-400 text-xs mr-1">£</span>
-                  <input
-                    type="number"
-                    step="0.01"
-                    placeholder="0.00"
-                    value={denomValues[d.id]}
-                    onChange={(e) => handleDenomChange(d.id, e.target.value)}
-                    className="w-full text-right font-mono font-bold text-gray-900 bg-transparent focus:outline-none"
-                  />
+                <div key={d.id} className="flex items-center justify-between bg-white border border-gray-200 rounded-xl px-3 py-1.5 focus-within:border-black transition">
+                  <span className="w-24 font-bold text-gray-800 text-xs truncate">{d.label}</span>
+                  
+                  <div className="flex items-center space-x-1.5 flex-1 justify-end">
+                    <button
+                      type="button"
+                      onClick={() => stepDenom(d.id, d.step, false)}
+                      className="p-1 hover:bg-gray-100 rounded text-gray-500 active:scale-95 transition"
+                    >
+                      <Minus className="w-3.5 h-3.5" />
+                    </button>
+                    
+                    <div className="flex items-center w-24 bg-gray-50 px-2 py-0.5 rounded-lg border border-gray-200">
+                      <span className="text-gray-400 text-xs mr-1">£</span>
+                      <input
+                        type="number"
+                        step={d.step}
+                        placeholder="0.00"
+                        value={denomValues[d.id]}
+                        onChange={(e) => handleDenomChange(d.id, e.target.value)}
+                        className="w-full text-right font-mono font-bold text-gray-900 bg-transparent focus:outline-none"
+                      />
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => stepDenom(d.id, d.step, true)}
+                      className="p-1 hover:bg-gray-100 rounded text-gray-800 active:scale-95 transition"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
           </div>
 
-          {/* Add Payout */}
+          {/* Add Payout Form */}
           <form onSubmit={handleAddExpense} className="bg-gray-50 border border-gray-200 rounded-2xl p-3.5 space-y-3 text-xs">
             <span className="block font-bold text-gray-900 uppercase tracking-wider text-[11px]">Add Cash Payout / Receipt</span>
             
@@ -616,7 +639,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
                 Outgoings for {entryDate} ({expenseList.length} items • £{totalExpensesToday.toFixed(2)})
               </span>
               {lastSavedTimestamp && (
-                <span className="text-[10px] text-gray-400 font-mono">Last save: {lastSavedTimestamp.split('_')[1]}</span>
+                <span className="text-[10px] text-gray-400 font-mono">Last save: {lastSavedTimestamp}</span>
               )}
             </div>
 
@@ -632,7 +655,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
                       <span className="font-extrabold text-gray-900 block leading-tight">{item.vendor}</span>
                       <div className="flex items-center space-x-2 text-[10px] text-gray-400 font-mono mt-0.5">
                         <span>{item.category}</span>
-                        {item.receipt && (
+                        {(item.receipt || item.fileUrl) && (
                           <span className="text-emerald-600 font-bold">• Scanned</span>
                         )}
                       </div>
@@ -662,14 +685,14 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
             className="w-full py-3.5 bg-black text-white rounded-2xl text-xs font-bold hover:bg-neutral-800 transition disabled:opacity-50 flex items-center justify-center space-x-2 shadow-sm"
           >
             <Check className="w-4 h-4" />
-            <span>{submitting ? 'Saving Timestamped Count to Drive...' : existingRecordUrl ? 'Update Day Count & Outgoings' : 'Reconcile & Save Day'}</span>
+            <span>{submitting ? 'Saving to Drive Folder...' : existingRecordUrl ? 'Update Day Entry in Drive' : 'Reconcile & Save Day'}</span>
           </button>
         </div>
 
       ) : (
 
         /* ====================================================================== */
-        /* TAB 2: SUMMARY WITH CLEAN DATE TITLES & SAVE WEEKLY REPORT              */
+        /* TAB 2: SUMMARY WITH CLEAN DATE TITLES & WEEKLY REPORT CREATION          */
         /* ====================================================================== */
         <div className="flex-1 flex flex-col overflow-hidden pb-24">
           <div className="px-5 pt-3 pb-2 border-b border-gray-100 flex-shrink-0 space-y-2">
@@ -684,7 +707,6 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
               </button>
             </div>
 
-            {/* View Mode Toggle: Week vs. Date */}
             <div className="grid grid-cols-2 gap-1 bg-[#EDEDED] p-1 rounded-xl text-xs font-bold">
               <button
                 type="button"
@@ -702,7 +724,6 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
               </button>
             </div>
 
-            {/* Filter Date Selector */}
             {summaryViewMode === 'week' ? (
               <div className="flex items-center space-x-2 text-xs">
                 <label className="text-[10px] font-bold uppercase text-gray-400">Anchor Date:</label>
@@ -728,7 +749,6 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
               </div>
             )}
 
-            {/* Search Input */}
             <div className="relative">
               <input
                 type="text"
@@ -744,7 +764,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
               )}
             </div>
 
-            {/* SAVE WEEKLY REPORT BUTTON (DUAL SPREADSHEET + DOCUMENT CREATION) */}
+            {/* Save Weekly Report Button */}
             <button
               type="button"
               disabled={exportingDrive || filteredSummaryLogs.length === 0}
@@ -756,7 +776,6 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
             </button>
           </div>
 
-          {/* Rollup Stats */}
           <div className="px-5 pt-3">
             <div className="bg-neutral-900 text-white p-3.5 rounded-2xl space-y-1.5 text-xs font-mono">
               <div className="flex justify-between">
@@ -776,7 +795,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
             </div>
           </div>
 
-          {/* Summary Logs List Titled Strictly by Date */}
+          {/* Clean Date-Titled Summary List */}
           <div className="flex-1 overflow-y-auto px-5 py-3 space-y-3">
             {filteredSummaryLogs.length === 0 ? (
               <div className="text-center py-16 text-gray-400">
@@ -828,7 +847,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
             )}
           </div>
 
-          {/* Modal Log Viewport with Denominations & Document Link */}
+          {/* Modal Log Details */}
           {selectedLogModal && (
             <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
               <div className="bg-white w-full max-w-sm rounded-3xl overflow-hidden shadow-2xl border border-gray-200 flex flex-col max-h-[80vh]">
@@ -847,7 +866,6 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
                 </div>
 
                 <div className="p-5 overflow-y-auto space-y-3.5 text-xs">
-                  {/* Summary Breakdown */}
                   <div className="bg-neutral-50 border border-neutral-200 p-3 rounded-2xl space-y-1 font-mono text-[11px]">
                     <div className="flex justify-between">
                       <span className="text-gray-500">Physical Cash:</span>
@@ -865,11 +883,10 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
                     </div>
                   </div>
 
-                  {/* Denominations */}
                   {selectedLogModal.denominations && Object.keys(selectedLogModal.denominations).length > 0 && (
                     <div>
                       <span className="font-bold uppercase tracking-wider text-[10px] text-gray-400 block mb-1">Denominations (£)</span>
-                      <div className="grid grid-cols-3 gap-1 bg-gray-50 p-2 rounded-xl text-[10px] font-mono">
+                      <div className="grid grid-cols-2 gap-1.5 bg-gray-50 p-2 rounded-xl text-[10px] font-mono">
                         {DENOMINATIONS.map(d => (
                           <div key={d.id} className="flex justify-between border-b border-gray-100 py-0.5">
                             <span className="text-gray-400">{d.label}:</span>
@@ -880,7 +897,6 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
                     </div>
                   )}
 
-                  {/* Outgoings Breakdown */}
                   <div>
                     <span className="font-bold uppercase tracking-wider text-[10px] text-gray-400 block mb-1">Outgoings</span>
                     <div className="border border-gray-200 rounded-xl divide-y divide-gray-100 overflow-hidden bg-white">
@@ -896,7 +912,6 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
                     </div>
                   </div>
 
-                  {/* Standalone Drive File Link */}
                   {selectedLogModal.fileUrl && (
                     <a
                       href={selectedLogModal.fileUrl}
@@ -905,7 +920,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
                       className="w-full py-2.5 bg-black text-white rounded-xl flex items-center justify-center space-x-1.5 font-bold hover:bg-neutral-800 transition shadow-sm mt-2"
                     >
                       <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
-                      <span>Open Timestamped Ledger</span>
+                      <span>Open Drive Spreadsheet</span>
                       <ExternalLink className="w-3 h-3 text-gray-400 ml-1" />
                     </a>
                   )}
@@ -916,7 +931,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
         </div>
       )}
 
-      {/* Floating Bottom Navigation */}
+      {/* Floating Bottom Nav */}
       <nav className="fixed bottom-4 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-[390px] z-50 rounded-2xl bg-[#111111]/95 backdrop-blur-md text-white py-2.5 px-3 flex justify-around items-center text-xs font-semibold shadow-2xl border border-white/10 select-none">
         <button 
           onClick={() => setActiveTab('entry')} 
