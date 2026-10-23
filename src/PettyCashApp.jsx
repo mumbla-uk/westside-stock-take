@@ -9,17 +9,17 @@ import {
   Search, 
   X, 
   Calendar, 
-  Printer, 
   ExternalLink,
   ChevronRight,
   FileSpreadsheet,
-  Coins
+  FileCheck,
+  RefreshCw,
+  Clock
 } from 'lucide-react';
 
 const HARDWIRED_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzcrqf4q-QWiGq0sxMmXqS7QcsxCVfhkJgPfjxOm6KyPShNUD-zkD9HUZy49rDdrfAYJg/exec";
 const FLOAT_TARGET = 1200.00;
 
-// The 11 standard denominations
 const DENOMINATIONS = [
   { id: 'n50', label: '£50' },
   { id: 'n20', label: '£20' },
@@ -61,7 +61,6 @@ function AppLogo({ className = "w-6 h-6", fallbackTextClass = "font-serif text-x
   return <span className={fallbackTextClass}>T</span>;
 }
 
-// Helper: Calculate start (Monday) and end (Sunday) of week for any date
 function getWeekRange(dateStr) {
   const d = new Date(dateStr);
   const day = d.getDay();
@@ -74,12 +73,11 @@ function getWeekRange(dateStr) {
   return {
     start: format(mon),
     end: format(sun),
-    label: `${mon.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} - ${sun.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}`
+    label: `${format(mon)} to ${format(sun)}`
   };
 }
 
 export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
-  // Tabs: 'entry' | 'summary'
   const [activeTab, setActiveTab] = useState('entry');
 
   // Summary Toggle Mode: 'week' | 'date'
@@ -91,21 +89,22 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
   const [entryDate, setEntryDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [entryDay, setEntryDay] = useState(() => new Date().toLocaleDateString('en-GB', { weekday: 'long' }));
 
-  // Cash In Safe - Denomination Values (User inputs direct £ monetary value)
+  // Cash In Safe: Denominations Monetary Value
   const [denomValues, setDenomValues] = useState({
     n50: '', n20: '', n10: '', n5: '',
     c1: '', c50p: '', c20p: '', c10p: '', c5p: '', c2p: '', c1p: ''
   });
 
-  // Outgoing Expense Line Items
+  // Outgoings List
   const [expenseVendor, setExpenseVendor] = useState('');
   const [expenseAmount, setExpenseAmount] = useState('');
   const [expenseCategory, setExpenseCategory] = useState('Supplies');
   const [receiptImage, setReceiptImage] = useState(null);
   const [receiptPreview, setReceiptPreview] = useState(null);
   const [expenseList, setExpenseList] = useState([]);
+  const [existingRecordUrl, setExistingRecordUrl] = useState('');
 
-  // Historical data
+  // History & Archive
   const [historyLogs, setHistoryLogs] = useState([]);
   const [historySearch, setHistorySearch] = useState('');
   const [selectedLogModal, setSelectedLogModal] = useState(null);
@@ -136,12 +135,43 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
     }
   };
 
+  // Sync Day Name & Auto-Load Day So Far
   useEffect(() => {
     const d = new Date(entryDate);
     if (!isNaN(d.getTime())) {
       setEntryDay(d.toLocaleDateString('en-GB', { weekday: 'long' }));
     }
-  }, [entryDate]);
+
+    // Check if entryDate already exists in historyLogs
+    const existingLog = historyLogs.find(l => l.date === entryDate);
+    if (existingLog) {
+      // Hydrate saved denominations and items for ongoing day editing
+      const dVals = existingLog.denominations || {};
+      setDenomValues({
+        n50: dVals.n50 !== undefined ? String(dVals.n50) : '',
+        n20: dVals.n20 !== undefined ? String(dVals.n20) : '',
+        n10: dVals.n10 !== undefined ? String(dVals.n10) : '',
+        n5:  dVals.n5 !== undefined ? String(dVals.n5) : '',
+        c1:  dVals.c1 !== undefined ? String(dVals.c1) : '',
+        c50p: dVals.c50p !== undefined ? String(dVals.c50p) : '',
+        c20p: dVals.c20p !== undefined ? String(dVals.c20p) : '',
+        c10p: dVals.c10p !== undefined ? String(dVals.c10p) : '',
+        c5p:  dVals.c5 !== undefined ? String(dVals.c5) : '',
+        c2p:  dVals.c2 !== undefined ? String(dVals.c2) : '',
+        c1p:  dVals.c1p !== undefined ? String(dVals.c1p) : ''
+      });
+      setExpenseList(existingLog.items || []);
+      setExistingRecordUrl(existingLog.fileUrl || '');
+    } else {
+      // Clear fields for a new day count
+      setDenomValues({
+        n50: '', n20: '', n10: '', n5: '',
+        c1: '', c50p: '', c20p: '', c10p: '', c5p: '', c2p: '', c1p: ''
+      });
+      setExpenseList([]);
+      setExistingRecordUrl('');
+    }
+  }, [entryDate, historyLogs]);
 
   const loadPettyData = async () => {
     try {
@@ -159,7 +189,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
     loadPettyData();
   }, []);
 
-  // Denomination Sum
+  // Total Physical Cash
   const totalPhysicalCash = useMemo(() => {
     return Object.values(denomValues).reduce((sum, val) => {
       const num = parseFloat(val);
@@ -278,12 +308,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
         mode: 'no-cors'
       });
 
-      setStatusMsg({ type: 'success', text: `Saved petty cash for ${entryDay}!` });
-      setDenomValues({
-        n50: '', n20: '', n10: '', n5: '',
-        c1: '', c50p: '', c20p: '', c10p: '', c5p: '', c2p: '', c1p: ''
-      });
-      setExpenseList([]);
+      setStatusMsg({ type: 'success', text: `Saved petty cash for ${entryDate}!` });
       loadPettyData();
       setActiveTab('summary');
     } catch (err) {
@@ -294,7 +319,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
     }
   };
 
-  // Filtered Summary based on Week (Mon-Sun) or Exact Date
+  // Filtered Summary
   const filteredSummaryLogs = useMemo(() => {
     return historyLogs.filter(log => {
       const q = historySearch.toLowerCase();
@@ -309,13 +334,12 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
       if (summaryViewMode === 'date') {
         return log.date === filterDate;
       } else {
-        // Monday - Sunday cycle check
         return log.date >= selectedWeekRange.start && log.date <= selectedWeekRange.end;
       }
     });
   }, [historyLogs, historySearch, summaryViewMode, filterDate, selectedWeekRange]);
 
-  // Aggregate stats for filtered period
+  // Aggregate stats
   const aggregateSummary = useMemo(() => {
     let totExp = 0;
     let closingCash = 0;
@@ -333,11 +357,13 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
     return { totExp, closingCash, netVar };
   }, [filteredSummaryLogs]);
 
-  // Export summary to Google Drive Folder
-  const handleExportToDrive = async () => {
+  // Save Weekly Report (Creates Spreadsheet + Formatted Doc in Folder)
+  const handleSaveWeeklyReport = async () => {
     if (filteredSummaryLogs.length === 0) return;
     setExportingDrive(true);
     setStatusMsg(null);
+
+    const weekLabel = summaryViewMode === 'week' ? selectedWeekRange.label : filterDate;
 
     try {
       const res = await fetch(HARDWIRED_SCRIPT_URL, {
@@ -345,7 +371,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action: 'export_petty_cash_summary',
-          weekLabel: summaryViewMode === 'week' ? selectedWeekRange.label : `Date_${filterDate}`,
+          weekLabel: weekLabel,
           totalExpenses: aggregateSummary.totExp,
           closingCash: aggregateSummary.closingCash,
           netVariance: aggregateSummary.netVar,
@@ -354,18 +380,17 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
       });
       const json = await res.json();
       if (json.status === 'success') {
-        setStatusMsg({ type: 'success', text: 'Summary spreadsheet saved into Drive folder!' });
+        setStatusMsg({ 
+          type: 'success', 
+          text: `Weekly report generated: Ledger Sheet & Summary Document saved to Drive!` 
+        });
       }
     } catch (err) {
       console.error(err);
-      setStatusMsg({ type: 'error', text: 'Failed to create Drive summary sheet.' });
+      setStatusMsg({ type: 'error', text: 'Failed to generate weekly reports.' });
     } finally {
       setExportingDrive(false);
     }
-  };
-
-  const handlePrint = () => {
-    window.print();
   };
 
   return (
@@ -375,7 +400,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
       className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 overflow-x-hidden relative"
     >
       {/* Top Header */}
-      <header className="flex items-center justify-between px-5 pt-6 pb-2 border-b border-gray-50 flex-shrink-0 bg-white z-10 print:hidden">
+      <header className="flex items-center justify-between px-5 pt-6 pb-2 border-b border-gray-50 flex-shrink-0 bg-white z-10">
         <div className="flex items-center space-x-2">
           {onBackToHub && (
             <button onClick={onBackToHub} className="mr-0.5 p-1 -ml-1 text-gray-500 hover:text-black rounded-lg transition" title="Return to Hub">
@@ -394,16 +419,24 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
         </div>
       </header>
 
-      {/* Main View Router */}
+      {/* Main Viewport Router */}
       {activeTab === 'entry' ? (
 
         /* ====================================================================== */
-        /* TAB 1: DENOMINATION VALUE INPUT & DAILY COUNT                           */
+        /* TAB 1: DAILY COUNT & CONTINUOUS EDIT                                   */
         /* ====================================================================== */
         <div className="flex-1 flex flex-col overflow-y-auto px-5 py-3 space-y-4 pb-28">
-          <div>
-            <p className="text-gray-500 italic text-xs font-serif">Imprest Safe Breakdown (£1,200 Float)</p>
-            <h1 className="text-2xl font-black tracking-tight text-gray-900 mt-0.5">Petty Cash Count</h1>
+          <div className="flex justify-between items-start">
+            <div>
+              <p className="text-gray-500 italic text-xs font-serif">Imprest Safe Breakdown (£1,200 Float)</p>
+              <h1 className="text-2xl font-black tracking-tight text-gray-900 mt-0.5">Petty Cash Count</h1>
+            </div>
+            {existingRecordUrl && (
+              <span className="inline-flex items-center space-x-1 px-2.5 py-1 bg-amber-50 text-amber-900 border border-amber-200 rounded-lg text-[10px] font-bold">
+                <Clock className="w-3 h-3 text-amber-600" />
+                <span>Editing Day In Progress</span>
+              </span>
+            )}
           </div>
 
           {statusMsg && (
@@ -412,10 +445,10 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
             </div>
           )}
 
-          {/* Date & Day Header */}
+          {/* Date Selector Header */}
           <div className="grid grid-cols-12 gap-2 text-xs bg-[#F8F8F8] p-3 rounded-2xl border border-gray-200">
             <div className="col-span-7">
-              <label className="block text-[10px] font-bold uppercase text-gray-400 mb-1">Date</label>
+              <label className="block text-[10px] font-bold uppercase text-gray-400 mb-1">Select / Toggle Date</label>
               <input 
                 type="date"
                 value={entryDate}
@@ -424,7 +457,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
               />
             </div>
             <div className="col-span-5">
-              <label className="block text-[10px] font-bold uppercase text-gray-400 mb-1">Week Day</label>
+              <label className="block text-[10px] font-bold uppercase text-gray-400 mb-1">Day</label>
               <div className="w-full py-1.5 px-2 bg-gray-200/80 rounded-lg text-xs font-bold text-gray-700 text-center uppercase tracking-wide">
                 {entryDay}
               </div>
@@ -453,11 +486,11 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
             </div>
           </div>
 
-          {/* 11 DENOMINATIONS MONETARY VALUE GRID */}
+          {/* 11 Denominations */}
           <div className="bg-gray-50 border border-gray-200 rounded-2xl p-3.5 space-y-2.5">
             <div className="flex justify-between items-center">
               <span className="block font-bold text-gray-900 uppercase tracking-wider text-[11px]">
-                Cash In Safe Count (Enter Total £ Value)
+                Safe Cash Denomination Value (£)
               </span>
               <span className="text-[10px] font-mono text-gray-500 font-bold">
                 Tot: £{totalPhysicalCash.toFixed(2)}
@@ -482,7 +515,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
             </div>
           </div>
 
-          {/* Outgoing Expense Line-Item Builder */}
+          {/* Add Payout */}
           <form onSubmit={handleAddExpense} className="bg-gray-50 border border-gray-200 rounded-2xl p-3.5 space-y-3 text-xs">
             <span className="block font-bold text-gray-900 uppercase tracking-wider text-[11px]">Add Cash Payout / Receipt</span>
             
@@ -576,32 +609,32 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
             </button>
           </form>
 
-          {/* Current Day Payout Queue */}
+          {/* Outgoings So Far for Selected Date */}
           <div className="space-y-2">
             <span className="text-[11px] font-bold uppercase text-gray-400 px-1">
-              Outgoings for {entryDay} ({expenseList.length} items • £{totalExpensesToday.toFixed(2)})
+              Outgoings for {entryDate} ({expenseList.length} items • £{totalExpensesToday.toFixed(2)})
             </span>
 
             {expenseList.length === 0 ? (
               <div className="border border-dashed border-gray-200 rounded-2xl py-6 text-center text-xs text-gray-400">
-                No cash outgoings added yet for this count.
+                No outgoings logged for this date.
               </div>
             ) : (
               <div className="border border-gray-200 rounded-2xl divide-y divide-gray-100 bg-white overflow-hidden shadow-sm">
                 {expenseList.map((item, idx) => (
-                  <div key={item.id} className="p-3 flex items-center justify-between text-xs">
+                  <div key={item.id || idx} className="p-3 flex items-center justify-between text-xs">
                     <div>
                       <span className="font-extrabold text-gray-900 block leading-tight">{item.vendor}</span>
                       <div className="flex items-center space-x-2 text-[10px] text-gray-400 font-mono mt-0.5">
                         <span>{item.category}</span>
                         {item.receipt && (
-                          <span className="text-emerald-600 font-bold">• Receipt Attached</span>
+                          <span className="text-emerald-600 font-bold">• Scanned</span>
                         )}
                       </div>
                     </div>
                     <div className="flex items-center space-x-3">
                       <span className="font-mono text-sm font-black text-gray-900">
-                        £{item.amount.toFixed(2)}
+                        £{Number(item.amount).toFixed(2)}
                       </span>
                       <button 
                         type="button" 
@@ -624,24 +657,25 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
             className="w-full py-3.5 bg-black text-white rounded-2xl text-xs font-bold hover:bg-neutral-800 transition disabled:opacity-50 flex items-center justify-center space-x-2 shadow-sm"
           >
             <Check className="w-4 h-4" />
-            <span>{submitting ? 'Saving to Master Sheet & Drive...' : 'Reconcile & Save Day'}</span>
+            <span>{submitting ? 'Saving to Drive Folder...' : existingRecordUrl ? 'Update Day Count & Outgoings' : 'Reconcile & Save Day'}</span>
           </button>
         </div>
 
       ) : (
 
         /* ====================================================================== */
-        /* TAB 2: TOGGLEABLE WEEKLY & DATE SUMMARY WITH PRINT/EXPORT               */
+        /* TAB 2: SUMMARY WITH CLEAN DATE TITLES & SAVE WEEKLY REPORT              */
         /* ====================================================================== */
         <div className="flex-1 flex flex-col overflow-hidden pb-24">
-          <div className="px-5 pt-3 pb-2 border-b border-gray-100 flex-shrink-0 space-y-2 print:hidden">
+          <div className="px-5 pt-3 pb-2 border-b border-gray-100 flex-shrink-0 space-y-2">
             <div className="flex justify-between items-baseline">
               <div>
-                <p className="text-gray-500 italic text-xs font-serif">Imprest Audit Breakdown</p>
+                <p className="text-gray-500 italic text-xs font-serif">Imprest Audit Ledger</p>
                 <h1 className="text-xl font-black tracking-tight text-gray-900">Petty Cash Summary</h1>
               </div>
-              <button onClick={loadPettyData} className="text-xs font-semibold text-gray-500 hover:text-black underline">
-                Refresh
+              <button onClick={loadPettyData} className="text-xs font-semibold text-gray-500 hover:text-black underline flex items-center space-x-1">
+                <RefreshCw className="w-3 h-3" />
+                <span>Refresh</span>
               </button>
             </div>
 
@@ -652,18 +686,18 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
                 onClick={() => setSummaryViewMode('week')}
                 className={`py-1.5 rounded-lg text-center transition ${summaryViewMode === 'week' ? 'bg-white text-black shadow-sm' : 'text-gray-600'}`}
               >
-                Weekly View (Mon - Sun)
+                Weekly View
               </button>
               <button
                 type="button"
                 onClick={() => setSummaryViewMode('date')}
                 className={`py-1.5 rounded-lg text-center transition ${summaryViewMode === 'date' ? 'bg-white text-black shadow-sm' : 'text-gray-600'}`}
               >
-                By Exact Date
+                By Date
               </button>
             </div>
 
-            {/* Filter Selector Input */}
+            {/* Filter Date Selector */}
             {summaryViewMode === 'week' ? (
               <div className="flex items-center space-x-2 text-xs">
                 <label className="text-[10px] font-bold uppercase text-gray-400">Anchor Date:</label>
@@ -705,29 +739,19 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
               )}
             </div>
 
-            {/* Export & Print Action Buttons */}
-            <div className="grid grid-cols-2 gap-2 pt-1">
-              <button
-                type="button"
-                onClick={handlePrint}
-                className="py-2 bg-gray-100 hover:bg-gray-200 text-gray-900 text-xs font-bold rounded-xl flex items-center justify-center space-x-1.5 transition"
-              >
-                <Printer className="w-3.5 h-3.5" />
-                <span>Print / PDF</span>
-              </button>
-              <button
-                type="button"
-                disabled={exportingDrive || filteredSummaryLogs.length === 0}
-                onClick={handleExportToDrive}
-                className="py-2 bg-black hover:bg-neutral-800 disabled:opacity-40 text-white text-xs font-bold rounded-xl flex items-center justify-center space-x-1.5 transition"
-              >
-                <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
-                <span>{exportingDrive ? 'Saving...' : 'Save to Drive'}</span>
-              </button>
-            </div>
+            {/* SAVE WEEKLY REPORT BUTTON (DUAL SPREADSHEET + DOCUMENT CREATION) */}
+            <button
+              type="button"
+              disabled={exportingDrive || filteredSummaryLogs.length === 0}
+              onClick={handleSaveWeeklyReport}
+              className="w-full py-2.5 bg-black hover:bg-neutral-800 disabled:opacity-40 text-white text-xs font-bold rounded-xl flex items-center justify-center space-x-2 transition shadow-sm"
+            >
+              <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
+              <span>{exportingDrive ? 'Generating Reports in Drive...' : 'Save Weekly Report'}</span>
+            </button>
           </div>
 
-          {/* Rollup Stats Card */}
+          {/* Rollup Stats */}
           <div className="px-5 pt-3">
             <div className="bg-neutral-900 text-white p-3.5 rounded-2xl space-y-1.5 text-xs font-mono">
               <div className="flex justify-between">
@@ -747,12 +771,12 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
             </div>
           </div>
 
-          {/* Summary Logs List */}
+          {/* Summary Logs List Titled Strictly by Date */}
           <div className="flex-1 overflow-y-auto px-5 py-3 space-y-3">
             {filteredSummaryLogs.length === 0 ? (
               <div className="text-center py-16 text-gray-400">
                 <Calendar className="w-10 h-10 mx-auto mb-2 opacity-30" />
-                <p className="text-xs font-semibold text-gray-600">No records found for selected period</p>
+                <p className="text-xs font-semibold text-gray-600">No records found</p>
               </div>
             ) : (
               filteredSummaryLogs.map((log) => {
@@ -765,8 +789,9 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
                   >
                     <div className="flex justify-between items-baseline">
                       <div>
+                        {/* Title strictly has date */}
                         <span className="font-extrabold text-sm text-gray-900 group-hover:text-black">
-                          {log.day} ({log.date})
+                          {log.date}
                         </span>
                         <span className="text-[10px] text-gray-400 block font-mono">Duty: {log.manager}</span>
                       </div>
@@ -774,7 +799,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
                         <span className={`font-mono text-xs font-bold ${varNum === 0 ? 'text-emerald-600' : varNum < 0 ? 'text-red-500' : 'text-amber-500'}`}>
                           {varNum > 0 ? `+£${varNum.toFixed(2)}` : varNum < 0 ? `-£${Math.abs(varNum).toFixed(2)}` : 'Balanced'}
                         </span>
-                        <span className="text-[10px] text-gray-400 block font-mono">Var</span>
+                        <span className="text-[10px] text-gray-400 block font-mono">Variance</span>
                       </div>
                     </div>
 
@@ -790,7 +815,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
                     </div>
 
                     <div className="flex justify-between items-center text-[10px] font-bold text-gray-400 pt-1 group-hover:text-black">
-                      <span>{(log.items || []).length} expenses • {(log.receiptUrls || []).length} scans</span>
+                      <span>{(log.items || []).length} expenses</span>
                       <ChevronRight className="w-3.5 h-3.5" />
                     </div>
                   </div>
@@ -799,7 +824,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
             )}
           </div>
 
-          {/* Modal Log Viewport with Denominations & Receipts */}
+          {/* Modal Log Viewport with Denominations & Document Link */}
           {selectedLogModal && (
             <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
               <div className="bg-white w-full max-w-sm rounded-3xl overflow-hidden shadow-2xl border border-gray-200 flex flex-col max-h-[80vh]">
@@ -809,7 +834,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
                       LOGGED BY {selectedLogModal.manager.toUpperCase()}
                     </span>
                     <h2 className="text-base font-black text-gray-900 leading-snug mt-0.5">
-                      {selectedLogModal.day} ({selectedLogModal.date})
+                      {selectedLogModal.date}
                     </h2>
                   </div>
                   <button onClick={() => setSelectedLogModal(null)} className="p-1.5 text-gray-400 hover:text-black bg-white rounded-full border border-gray-200 shadow-sm">
@@ -836,10 +861,10 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
                     </div>
                   </div>
 
-                  {/* Denomination Values Used */}
+                  {/* Denominations */}
                   {selectedLogModal.denominations && Object.keys(selectedLogModal.denominations).length > 0 && (
                     <div>
-                      <span className="font-bold uppercase tracking-wider text-[10px] text-gray-400 block mb-1">Denomination Breakdown (£)</span>
+                      <span className="font-bold uppercase tracking-wider text-[10px] text-gray-400 block mb-1">Denominations (£)</span>
                       <div className="grid grid-cols-3 gap-1 bg-gray-50 p-2 rounded-xl text-[10px] font-mono">
                         {DENOMINATIONS.map(d => (
                           <div key={d.id} className="flex justify-between border-b border-gray-100 py-0.5">
@@ -851,7 +876,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
                     </div>
                   )}
 
-                  {/* Line Item Expenses */}
+                  {/* Outgoings Breakdown */}
                   <div>
                     <span className="font-bold uppercase tracking-wider text-[10px] text-gray-400 block mb-1">Outgoings</span>
                     <div className="border border-gray-200 rounded-xl divide-y divide-gray-100 overflow-hidden bg-white">
@@ -867,26 +892,18 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
                     </div>
                   </div>
 
-                  {/* Attached Scanned Receipts */}
-                  {(selectedLogModal.receiptUrls || []).length > 0 && (
-                    <div className="space-y-1.5 pt-1">
-                      <span className="font-bold uppercase tracking-wider text-[10px] text-gray-400 block">Attached Scans</span>
-                      {selectedLogModal.receiptUrls.map((r, idx) => (
-                        <a
-                          key={idx}
-                          href={r.fileUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="w-full py-2 px-3 bg-neutral-100 hover:bg-neutral-200 rounded-xl flex items-center justify-between text-xs font-bold text-gray-800 transition"
-                        >
-                          <div className="flex items-center space-x-2">
-                            <FileText className="w-3.5 h-3.5 text-gray-500" />
-                            <span>{r.vendor} (£{Number(r.amount).toFixed(2)})</span>
-                          </div>
-                          <ExternalLink className="w-3 h-3 text-gray-400" />
-                        </a>
-                      ))}
-                    </div>
+                  {/* Open Standalone File */}
+                  {selectedLogModal.fileUrl && (
+                    <a
+                      href={selectedLogModal.fileUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="w-full py-2.5 bg-black text-white rounded-xl flex items-center justify-center space-x-1.5 font-bold hover:bg-neutral-800 transition shadow-sm mt-2"
+                    >
+                      <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
+                      <span>Open Drive File</span>
+                      <ExternalLink className="w-3 h-3 text-gray-400 ml-1" />
+                    </a>
                   )}
                 </div>
               </div>
@@ -896,7 +913,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
       )}
 
       {/* Floating Bottom Navigation */}
-      <nav className="fixed bottom-4 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-[390px] z-50 rounded-2xl bg-[#111111]/95 backdrop-blur-md text-white py-2.5 px-3 flex justify-around items-center text-xs font-semibold shadow-2xl border border-white/10 select-none print:hidden">
+      <nav className="fixed bottom-4 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-[390px] z-50 rounded-2xl bg-[#111111]/95 backdrop-blur-md text-white py-2.5 px-3 flex justify-around items-center text-xs font-semibold shadow-2xl border border-white/10 select-none">
         <button 
           onClick={() => setActiveTab('entry')} 
           className={`flex-1 py-1 text-center rounded-xl transition ${activeTab === 'entry' ? 'text-white bg-white/15 font-bold shadow-inner' : 'text-gray-400 hover:text-white'}`}
