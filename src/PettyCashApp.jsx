@@ -14,7 +14,9 @@ import {
   CheckCircle2,
   Calendar,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  Eye,
+  Edit3
 } from 'lucide-react';
 
 const HARDWIRED_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzcrqf4q-QWiGq0sxMmXqS7QcsxCVfhkJgPfjxOm6KyPShNUD-zkD9HUZy49rDdrfAYJg/exec";
@@ -64,7 +66,6 @@ function AppLogo({ className = "w-6 h-6", fallbackTextClass = "font-serif text-x
   return <span className={fallbackTextClass}>T</span>;
 }
 
-// Compute standard Monday to Sunday week cycle
 function getWeekInfo(dateObj = new Date()) {
   const d = new Date(dateObj);
   const day = d.getDay();
@@ -93,17 +94,16 @@ function getWeekInfo(dateObj = new Date()) {
 }
 
 export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
-  const [activeTab, setActiveTab] = useState('daily'); // 'daily' | 'ledger'
+  // Primary view defaults to Weekly Matrix so whole week is visible immediately
+  const [activeTab, setActiveTab] = useState('ledger'); // 'ledger' | 'daily'
   const [currentWeekOffset, setCurrentWeekOffset] = useState(0);
 
-  // Active Week Info
   const activeWeek = useMemo(() => {
     const base = new Date();
     base.setDate(base.getDate() + currentWeekOffset * 7);
     return getWeekInfo(base);
   }, [currentWeekOffset]);
 
-  // Selected Day (Index 0..6: Monday..Sunday)
   const [selectedDayIndex, setSelectedDayIndex] = useState(() => {
     const today = new Date().getDay();
     return today === 0 ? 6 : today - 1;
@@ -111,7 +111,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
 
   const selectedDayInfo = activeWeek.daysDates[selectedDayIndex];
 
-  // Full Week In-Memory Ledger (Mirror of the Excel Sheet)
+  // In-Memory Master Ledger
   const [weekData, setWeekData] = useState({
     days: {
       Monday: { expenses: [], cashCount: '', denoms: {} },
@@ -124,13 +124,12 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
     }
   });
 
-  // Safe Starting Float & Overrides
   const [startingFloat, setStartingFloat] = useState(DEFAULT_FLOAT);
   const [fileUrl, setFileUrl] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [statusMsg, setStatusMsg] = useState(null);
 
-  // Payout Form Input State
+  // Form State
   const [expenseVendor, setExpenseVendor] = useState('');
   const [expenseAmount, setExpenseAmount] = useState('');
   const [expenseCategory, setExpenseCategory] = useState('Supplies');
@@ -138,22 +137,43 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
   const [receiptPreview, setReceiptPreview] = useState(null);
   const fileInputRef = useRef(null);
 
-  // Monday Top-Up Setup Modal
+  // Monday Setup Modal
   const [showMondayModal, setShowMondayModal] = useState(false);
   const [mondayTopUpAmount, setMondayTopUpAmount] = useState('');
   const [customStartingFloat, setCustomStartingFloat] = useState(DEFAULT_FLOAT);
 
-  // Load Week Data from Script
+  // Gesture handling: Swipe between views
+  const touchStartRef = useRef({ x: 0, y: 0 });
+
+  const handleTouchStart = (e) => {
+    touchStartRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+  };
+
+  const handleTouchEnd = (e) => {
+    if (showMondayModal) return;
+    const deltaX = e.changedTouches[0].clientX - touchStartRef.current.x;
+    const deltaY = e.changedTouches[0].clientY - touchStartRef.current.y;
+
+    if (Math.abs(deltaX) > 60 && Math.abs(deltaX) > Math.abs(deltaY) * 1.5) {
+      if (deltaX < 0 && activeTab === 'ledger') setActiveTab('daily');
+      else if (deltaX > 0) {
+        if (activeTab === 'daily') setActiveTab('ledger');
+        else if (activeTab === 'ledger' && onBackToHub) onBackToHub();
+      }
+    }
+  };
+
+  // Load and hydrate week ledger
   const loadWeekData = async () => {
     try {
       const res = await fetch(`${HARDWIRED_SCRIPT_URL}?action=get_week_ledger&weekAnchor=${activeWeek.anchor}`);
       const json = await res.json();
       if (json && json.status === "success") {
         setStartingFloat(Number(json.startingFloat) || DEFAULT_FLOAT);
+        if (json.fileUrl) setFileUrl(json.fileUrl);
         if (json.weekData && json.weekData.days) {
           setWeekData(json.weekData);
         } else {
-          // Initialize empty week structure
           const emptyDays = {};
           DAYS_OF_WEEK.forEach(d => {
             emptyDays[d] = { expenses: [], cashCount: '', denoms: {} };
@@ -170,11 +190,9 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
     loadWeekData();
   }, [activeWeek.anchor]);
 
-  // Active day's data slice
   const currentDayData = weekData.days[selectedDayInfo.dayName] || { expenses: [], cashCount: '', denoms: {} };
   const currentDayDenoms = currentDayData.denoms || {};
 
-  // Auto-calculated physical cash from active day's denominations
   const totalPhysicalCash = useMemo(() => {
     return Object.values(currentDayDenoms).reduce((sum, val) => {
       const num = parseFloat(val);
@@ -182,7 +200,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
     }, 0);
   }, [currentDayDenoms]);
 
-  // Rolling Totals Across the 7 Columns (Replicating Excel Formulas)
+  // Rolling Imprest Math across the 7 Columns
   const rollingStats = useMemo(() => {
     const daySpends = [];
     const cumulativeExpenses = [];
@@ -193,7 +211,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
     let runningExp = 0;
     let lastCash = 0;
 
-    DAYS_OF_WEEK.forEach((dName, idx) => {
+    DAYS_OF_WEEK.forEach((dName) => {
       const dObj = weekData.days[dName] || { expenses: [], cashCount: '' };
       const dSpend = (dObj.expenses || []).reduce((acc, it) => acc + (parseFloat(it.amount) || 0), 0);
       daySpends.push(dSpend);
@@ -201,7 +219,9 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
       runningExp += dSpend;
       cumulativeExpenses.push(runningExp);
 
-      const cCount = dObj.cashCount !== '' && !isNaN(dObj.cashCount) ? parseFloat(dObj.cashCount) : null;
+      const cCount = (dObj.cashCount !== '' && dObj.cashCount !== undefined && !isNaN(dObj.cashCount)) 
+        ? parseFloat(dObj.cashCount) 
+        : null;
       if (cCount !== null) lastCash = cCount;
       cashCounts.push(cCount);
 
@@ -218,7 +238,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
     return { daySpends, cumulativeExpenses, cashCounts, subTotals, variances, runningExp, lastCash, netWeekVariance };
   }, [weekData, startingFloat]);
 
-  // Sync Whole Week Ledger to Google Drive
+  // Synchronize entire weekly matrix to single spreadsheet in Drive
   const syncWeekToDrive = async (updatedWeekData) => {
     setSubmitting(true);
     setStatusMsg({ type: 'info', text: 'Updating weekly ledger in Google Drive...' });
@@ -244,7 +264,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
 
       if (json && json.status === "success") {
         setFileUrl(json.fileUrl);
-        setStatusMsg({ type: 'success', text: `Weekly ledger synchronized with Google Drive!` });
+        setStatusMsg({ type: 'success', text: `Weekly ledger updated in Google Drive!` });
       }
     } catch (err) {
       console.error(err);
@@ -254,7 +274,6 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
     }
   };
 
-  // Denominations Handlers
   const handleDenomChange = (key, val) => {
     const nextDenoms = { ...currentDayDenoms, [key]: val };
     const calcPhysCash = Object.values(nextDenoms).reduce((sum, v) => sum + (parseFloat(v) || 0), 0);
@@ -281,7 +300,6 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
     handleDenomChange(key, nextVal > 0 ? String(nextVal) : '');
   };
 
-  // Photo Capture
   const handleImageCapture = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -298,7 +316,6 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
     reader.readAsDataURL(file);
   };
 
-  // Add Payout to Active Day Column & Overwrite Ledger
   const handleAddExpense = async (e) => {
     e.preventDefault();
     const amt = parseFloat(expenseAmount);
@@ -362,7 +379,6 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
     }
   };
 
-  // Remove Payout from Active Day Column & Overwrite Ledger
   const handleRemoveExpense = async (index) => {
     const updatedExpenses = currentDayData.expenses.filter((_, i) => i !== index);
     const updatedWeek = {
@@ -379,12 +395,10 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
     await syncWeekToDrive(updatedWeek);
   };
 
-  // Save Physical Cash Count for the Day
   const handleSaveDayCashCount = async () => {
     await syncWeekToDrive(weekData);
   };
 
-  // Monday Setup / Top-Up Handler
   const handleConfirmMondaySetup = async () => {
     setSubmitting(true);
     try {
@@ -412,14 +426,19 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
     }
   };
 
-  // PDF Export
   const handleOpenPdf = () => {
-    const pdfUrl = `${HARDWIRED_SCRIPT_URL}?action=get_week_pdf&weekAnchor=${activeWeek.anchor}`;
-    window.open(pdfUrl, '_blank');
+    if (fileUrl) {
+      const pdfExportUrl = fileUrl.replace(/\/edit.*$/, '/export?format=pdf&portrait=false&gridlines=true');
+      window.open(pdfExportUrl, '_blank');
+    }
   };
 
   return (
-    <div className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 overflow-x-hidden relative">
+    <div 
+      onTouchStart={handleTouchStart}
+      onTouchEnd={handleTouchEnd}
+      className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 overflow-x-hidden relative"
+    >
       {/* Top Header */}
       <header className="flex items-center justify-between px-5 pt-6 pb-2 border-b border-gray-50 flex-shrink-0 bg-white z-10">
         <div className="flex items-center space-x-2">
@@ -448,7 +467,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
         </div>
       </header>
 
-      {/* Week Selector Bar */}
+      {/* Week Navigation Bar */}
       <div className="px-5 py-2.5 bg-gray-50 border-b border-gray-200 flex items-center justify-between flex-shrink-0">
         <button 
           onClick={() => setCurrentWeekOffset(prev => prev - 1)} 
@@ -457,7 +476,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
           <ChevronLeft className="w-4 h-4" />
         </button>
         <div className="text-center">
-          <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 block">Rolling Week Ledger</span>
+          <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 block">Weekly Ledger</span>
           <span className="text-xs font-black text-gray-900 font-mono">{activeWeek.label}</span>
         </div>
         <button 
@@ -468,15 +487,172 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
         </button>
       </div>
 
-      {/* Main View Router */}
-      {activeTab === 'daily' ? (
+      {/* Main Viewport Router */}
+      {activeTab === 'ledger' ? (
 
         /* ====================================================================== */
-        /* TAB 1: DAILY ENTRY COLUMN VIEW                                         */
+        /* VIEW 1: WEEKLY MATRIX (PRIMARY REAL-TIME EXCEL REPLICA)                */
         /* ====================================================================== */
-        <div className="flex-1 flex flex-col overflow-y-auto px-5 py-3 space-y-4 pb-28">
-          {/* Day of Week Selector Pills */}
-          <div className="grid grid-cols-7 gap-1 bg-gray-100 p-1 rounded-2xl">
+        <div className="flex-1 flex flex-col overflow-hidden pb-20">
+          <div className="px-5 pt-3 pb-2 border-b border-gray-100 flex-shrink-0 space-y-2">
+            <div className="flex justify-between items-baseline">
+              <div>
+                <p className="text-gray-500 italic text-xs font-serif">Monday to Sunday Rolling Audit</p>
+                <h1 className="text-xl font-black tracking-tight text-gray-900">Weekly Safe Sheet</h1>
+              </div>
+              <button onClick={loadWeekData} className="text-xs font-semibold text-gray-500 hover:text-black underline flex items-center space-x-1">
+                <RefreshCw className="w-3 h-3" />
+                <span>Refresh</span>
+              </button>
+            </div>
+
+            {/* ACTION BUTTONS: DRIVE & PDF */}
+            <div className="grid grid-cols-2 gap-2 pt-1">
+              <button
+                type="button"
+                disabled={submitting}
+                onClick={() => syncWeekToDrive(weekData)}
+                className="py-2.5 bg-black hover:bg-neutral-800 disabled:opacity-40 text-white text-xs font-bold rounded-xl flex items-center justify-center space-x-1.5 transition shadow-sm"
+              >
+                <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
+                <span>{submitting ? 'Saving...' : 'Save to Drive'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleOpenPdf}
+                className="py-2.5 bg-neutral-100 hover:bg-neutral-200 text-neutral-900 border border-neutral-300 text-xs font-bold rounded-xl flex items-center justify-center space-x-1.5 transition shadow-sm"
+              >
+                <FileDown className="w-3.5 h-3.5 text-neutral-700" />
+                <span>Open as PDF</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Rollup Summary Card */}
+          <div className="px-5 pt-3 flex-shrink-0">
+            <div className="bg-neutral-900 text-white p-3.5 rounded-2xl space-y-1.5 text-xs font-mono">
+              <div className="flex justify-between">
+                <span className="text-gray-400">Total Week Outgoings:</span>
+                <span className="font-bold">£{rollingStats.runningExp.toFixed(2)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-400">Latest Safe Cash:</span>
+                <span className="font-bold text-emerald-400">£{rollingStats.lastCash.toFixed(2)}</span>
+              </div>
+              <div className="flex justify-between border-t border-white/20 pt-1 font-bold">
+                <span>Net Weekly Variance:</span>
+                <span className={rollingStats.netWeekVariance < 0 ? 'text-red-400' : 'text-emerald-400'}>
+                  £{rollingStats.netWeekVariance.toFixed(2)}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Scrollable Weekly Ledger Matrix */}
+          <div className="flex-1 overflow-auto p-5">
+            <div className="border border-gray-200 rounded-2xl overflow-hidden shadow-sm bg-white min-w-[580px]">
+              <table className="w-full text-xs font-mono border-collapse">
+                <thead>
+                  <tr className="bg-black text-white text-[10px] text-center">
+                    <th className="p-2 text-left font-sans">DATE</th>
+                    {activeWeek.daysDates.map(d => (
+                      <th key={d.dayName} className="p-2 font-mono">{d.ukDate.slice(0, 5)}</th>
+                    ))}
+                    <th className="p-2 font-bold bg-neutral-800">TOTAL</th>
+                  </tr>
+                  <tr className="bg-gray-100 text-gray-700 text-[10px] text-center border-b border-gray-200">
+                    <th className="p-2 text-left font-bold">VENDOR</th>
+                    {DAY_SHORT.map(s => (
+                      <th key={s} className="p-2 font-bold">{s}</th>
+                    ))}
+                    <th className="p-2 font-bold bg-gray-200">TOTAL</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {Array.from(new Set(
+                    DAYS_OF_WEEK.flatMap(d => (weekData.days[d]?.expenses || []).map(it => it.vendor))
+                  )).map(vendorName => {
+                    let vendorSum = 0;
+                    return (
+                      <tr key={vendorName} className="hover:bg-gray-50 text-[11px]">
+                        <td className="p-2 font-sans font-bold text-gray-900 truncate max-w-[120px]">{vendorName}</td>
+                        {DAYS_OF_WEEK.map(d => {
+                          const matching = (weekData.days[d]?.expenses || []).filter(it => it.vendor === vendorName);
+                          const dayAmt = matching.reduce((acc, it) => acc + (parseFloat(it.amount) || 0), 0);
+                          vendorSum += dayAmt;
+                          return (
+                            <td key={d} className="p-2 text-right">
+                              {dayAmt > 0 ? `£${dayAmt.toFixed(2)}` : ''}
+                            </td>
+                          );
+                        })}
+                        <td className="p-2 text-right font-bold bg-gray-50">
+                          {vendorSum > 0 ? `£${vendorSum.toFixed(2)}` : ''}
+                        </td>
+                      </tr>
+                    );
+                  })}
+
+                  {/* Excel Formula Row Calculations */}
+                  <tr className="bg-gray-50 border-t-2 border-gray-300 font-bold">
+                    <td className="p-2 font-sans">Total Expenses</td>
+                    {rollingStats.cumulativeExpenses.map((val, idx) => (
+                      <td key={idx} className="p-2 text-right font-mono">£{val.toFixed(2)}</td>
+                    ))}
+                    <td className="p-2 text-right font-mono bg-gray-100">£{rollingStats.runningExp.toFixed(2)}</td>
+                  </tr>
+
+                  <tr className="font-bold">
+                    <td className="p-2 font-sans">Cash Count</td>
+                    {rollingStats.cashCounts.map((val, idx) => (
+                      <td key={idx} className="p-2 text-right font-mono text-emerald-700">
+                        {val !== null ? `£${val.toFixed(2)}` : ''}
+                      </td>
+                    ))}
+                    <td className="p-2 text-right font-mono bg-gray-50 text-emerald-700">£{rollingStats.lastCash.toFixed(2)}</td>
+                  </tr>
+
+                  <tr className="font-bold border-t border-gray-200">
+                    <td className="p-2 font-sans">Sub Total</td>
+                    {rollingStats.subTotals.map((val, idx) => (
+                      <td key={idx} className="p-2 text-right font-mono">£{val.toFixed(2)}</td>
+                    ))}
+                    <td className="p-2 text-right font-mono bg-gray-50">£{(rollingStats.lastCash + rollingStats.runningExp).toFixed(2)}</td>
+                  </tr>
+
+                  <tr className="text-gray-500">
+                    <td className="p-2 font-sans font-bold">Float</td>
+                    {DAYS_OF_WEEK.map((_, idx) => (
+                      <td key={idx} className="p-2 text-right font-mono">£{startingFloat.toFixed(2)}</td>
+                    ))}
+                    <td className="p-2 text-right font-mono bg-gray-50 font-bold">£{startingFloat.toFixed(2)}</td>
+                  </tr>
+
+                  <tr className="font-bold border-t border-gray-200">
+                    <td className="p-2 font-sans">Daily Variance</td>
+                    {rollingStats.variances.map((val, idx) => (
+                      <td key={idx} className={`p-2 text-right font-mono ${val < 0 ? 'text-red-500' : 'text-emerald-600'}`}>
+                        £{val.toFixed(2)}
+                      </td>
+                    ))}
+                    <td className={`p-2 text-right font-mono bg-gray-100 ${rollingStats.netWeekVariance < 0 ? 'text-red-500' : 'text-emerald-600'}`}>
+                      £{rollingStats.netWeekVariance.toFixed(2)}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+      ) : (
+
+        /* ====================================================================== */
+        /* VIEW 2: COLUMN DETAIL (SELECT DAY TO LOG CASH & PAYOUTS)               */
+        /* ====================================================================== */
+        <div className="flex-1 flex flex-col overflow-y-auto px-5 py-3 space-y-4 pb-24">
+          {/* Day Selector Pills */}
+          <div className="grid grid-cols-7 gap-1 bg-gray-100 p-1 rounded-2xl flex-shrink-0">
             {activeWeek.daysDates.map((dayObj, idx) => {
               const isSelected = selectedDayIndex === idx;
               const hasSpend = (weekData.days[dayObj.dayName]?.expenses || []).length > 0;
@@ -506,10 +682,10 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
             </div>
           )}
 
-          {/* Rolling Weekly Ledger Banner for Active Column */}
+          {/* Rolling Stats Card for this Column */}
           <div className="bg-black text-white p-4 rounded-2xl shadow-sm space-y-2 font-mono text-xs">
             <div className="flex justify-between items-baseline">
-              <span className="text-gray-400">STARTING FLOAT</span>
+              <span className="text-gray-400">ACTIVE FLOAT</span>
               <span className="font-bold">£{startingFloat.toFixed(2)}</span>
             </div>
             <div className="flex justify-between items-baseline">
@@ -585,14 +761,14 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
               type="button"
               disabled={submitting}
               onClick={handleSaveDayCashCount}
-              className="w-full py-2 bg-neutral-900 hover:bg-black text-white text-xs font-bold rounded-xl transition flex items-center justify-center space-x-1.5 mt-2"
+              className="w-full py-2 bg-neutral-900 hover:bg-black text-white text-xs font-bold rounded-xl transition flex items-center justify-center space-x-1.5 mt-2 shadow-sm"
             >
               <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
               <span>Update {selectedDayInfo.dayName} Safe Count in Ledger</span>
             </button>
           </div>
 
-          {/* Add Payout to this Day's Column */}
+          {/* Add Payout Form */}
           <form onSubmit={handleAddExpense} className="bg-gray-50 border border-gray-200 rounded-2xl p-3.5 space-y-3 text-xs">
             <span className="block font-bold text-gray-900 uppercase tracking-wider text-[11px]">
               Add Payout to {selectedDayInfo.dayName} Column
@@ -688,7 +864,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
             </button>
           </form>
 
-          {/* Outgoings for Selected Day */}
+          {/* List of Payouts in this Column */}
           <div className="space-y-2">
             <span className="text-[11px] font-bold uppercase text-gray-400 px-1">
               {selectedDayInfo.dayName} Payouts ({(currentDayData.expenses || []).length} items • £{rollingStats.daySpends[selectedDayIndex].toFixed(2)})
@@ -733,167 +909,9 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
             )}
           </div>
         </div>
-
-      ) : (
-
-        /* ====================================================================== */
-        /* TAB 2: ROLLING WEEK LEDGER MATRIX (EXCEL REPLICA)                      */
-        /* ====================================================================== */
-        <div className="flex-1 flex flex-col overflow-hidden pb-24">
-          <div className="px-5 pt-3 pb-2 border-b border-gray-100 flex-shrink-0 space-y-2">
-            <div className="flex justify-between items-baseline">
-              <div>
-                <p className="text-gray-500 italic text-xs font-serif">Rolling Weekly Ledger Matrix</p>
-                <h1 className="text-xl font-black tracking-tight text-gray-900">Weekly Audit Sheet</h1>
-              </div>
-              <button onClick={loadWeekData} className="text-xs font-semibold text-gray-500 hover:text-black underline flex items-center space-x-1">
-                <RefreshCw className="w-3 h-3" />
-                <span>Refresh</span>
-              </button>
-            </div>
-
-            {/* DUAL EXPORTS: DRIVE & PDF */}
-            <div className="grid grid-cols-2 gap-2 pt-1">
-              <button
-                type="button"
-                disabled={submitting}
-                onClick={() => syncWeekToDrive(weekData)}
-                className="py-2.5 bg-black hover:bg-neutral-800 disabled:opacity-40 text-white text-xs font-bold rounded-xl flex items-center justify-center space-x-1.5 transition shadow-sm"
-              >
-                <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
-                <span>{submitting ? 'Saving...' : 'Save to Drive'}</span>
-              </button>
-              <button
-                type="button"
-                onClick={handleOpenPdf}
-                className="py-2.5 bg-neutral-100 hover:bg-neutral-200 text-neutral-900 border border-neutral-300 text-xs font-bold rounded-xl flex items-center justify-center space-x-1.5 transition shadow-sm"
-              >
-                <FileDown className="w-3.5 h-3.5 text-neutral-700" />
-                <span>Open as PDF</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Rollup Summary Box */}
-          <div className="px-5 pt-3">
-            <div className="bg-neutral-900 text-white p-3.5 rounded-2xl space-y-1.5 text-xs font-mono">
-              <div className="flex justify-between">
-                <span className="text-gray-400">Total Week Spend:</span>
-                <span className="font-bold">£{rollingStats.runningExp.toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-400">Latest Physical Cash:</span>
-                <span className="font-bold text-emerald-400">£{rollingStats.lastCash.toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between border-t border-white/20 pt-1 font-bold">
-                <span>Net Weekly Variance:</span>
-                <span className={rollingStats.netWeekVariance < 0 ? 'text-red-400' : 'text-emerald-400'}>
-                  £{rollingStats.netWeekVariance.toFixed(2)}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          {/* Scrollable Weekly Ledger Grid (Exact layout from user's Excel) */}
-          <div className="flex-1 overflow-auto p-5">
-            <div className="border border-gray-200 rounded-2xl overflow-hidden shadow-sm bg-white min-w-[580px]">
-              <table className="w-full text-xs font-mono border-collapse">
-                <thead>
-                  <tr className="bg-black text-white text-[10px] text-center">
-                    <th className="p-2 text-left font-sans">DATE</th>
-                    {activeWeek.daysDates.map(d => (
-                      <th key={d.dayName} className="p-2 font-mono">{d.ukDate.slice(0, 5)}</th>
-                    ))}
-                    <th className="p-2 font-bold bg-neutral-800">TOTAL</th>
-                  </tr>
-                  <tr className="bg-gray-100 text-gray-700 text-[10px] text-center border-b border-gray-200">
-                    <th className="p-2 text-left font-bold">VENDOR</th>
-                    {DAY_SHORT.map(s => (
-                      <th key={s} className="p-2 font-bold">{s}</th>
-                    ))}
-                    <th className="p-2 font-bold bg-gray-200">TOTAL</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {/* Extract list of vendors */}
-                  {Array.from(new Set(
-                    DAYS_OF_WEEK.flatMap(d => (weekData.days[d]?.expenses || []).map(it => it.vendor))
-                  )).map(vendorName => {
-                    let vendorSum = 0;
-                    return (
-                      <tr key={vendorName} className="hover:bg-gray-50 text-[11px]">
-                        <td className="p-2 font-sans font-bold text-gray-900 truncate max-w-[120px]">{vendorName}</td>
-                        {DAYS_OF_WEEK.map(d => {
-                          const matching = (weekData.days[d]?.expenses || []).filter(it => it.vendor === vendorName);
-                          const dayAmt = matching.reduce((acc, it) => acc + (parseFloat(it.amount) || 0), 0);
-                          vendorSum += dayAmt;
-                          return (
-                            <td key={d} className="p-2 text-right">
-                              {dayAmt > 0 ? `£${dayAmt.toFixed(2)}` : ''}
-                            </td>
-                          );
-                        })}
-                        <td className="p-2 text-right font-bold bg-gray-50">
-                          {vendorSum > 0 ? `£${vendorSum.toFixed(2)}` : ''}
-                        </td>
-                      </tr>
-                    );
-                  })}
-
-                  {/* Calculations Rows */}
-                  <tr className="bg-gray-50 border-t-2 border-gray-300 font-bold">
-                    <td className="p-2 font-sans">Total Expenses</td>
-                    {rollingStats.cumulativeExpenses.map((val, idx) => (
-                      <td key={idx} className="p-2 text-right font-mono">£{val.toFixed(2)}</td>
-                    ))}
-                    <td className="p-2 text-right font-mono bg-gray-100">£{rollingStats.runningExp.toFixed(2)}</td>
-                  </tr>
-
-                  <tr className="font-bold">
-                    <td className="p-2 font-sans">Cash Count</td>
-                    {rollingStats.cashCounts.map((val, idx) => (
-                      <td key={idx} className="p-2 text-right font-mono text-emerald-700">
-                        {val !== null ? `£${val.toFixed(2)}` : ''}
-                      </td>
-                    ))}
-                    <td className="p-2 text-right font-mono bg-gray-50 text-emerald-700">£{rollingStats.lastCash.toFixed(2)}</td>
-                  </tr>
-
-                  <tr className="font-bold border-t border-gray-200">
-                    <td className="p-2 font-sans">Sub Total</td>
-                    {rollingStats.subTotals.map((val, idx) => (
-                      <td key={idx} className="p-2 text-right font-mono">£{val.toFixed(2)}</td>
-                    ))}
-                    <td className="p-2 text-right font-mono bg-gray-50">£{(rollingStats.lastCash + rollingStats.runningExp).toFixed(2)}</td>
-                  </tr>
-
-                  <tr className="text-gray-500">
-                    <td className="p-2 font-sans font-bold">Float</td>
-                    {DAYS_OF_WEEK.map((_, idx) => (
-                      <td key={idx} className="p-2 text-right font-mono">£{startingFloat.toFixed(2)}</td>
-                    ))}
-                    <td className="p-2 text-right font-mono bg-gray-50 font-bold">£{startingFloat.toFixed(2)}</td>
-                  </tr>
-
-                  <tr className="font-bold border-t border-gray-200">
-                    <td className="p-2 font-sans">Variance</td>
-                    {rollingStats.variances.map((val, idx) => (
-                      <td key={idx} className={`p-2 text-right font-mono ${val < 0 ? 'text-red-500' : 'text-emerald-600'}`}>
-                        £{val.toFixed(2)}
-                      </td>
-                    ))}
-                    <td className={`p-2 text-right font-mono bg-gray-100 ${rollingStats.netWeekVariance < 0 ? 'text-red-500' : 'text-emerald-600'}`}>
-                      £{rollingStats.netWeekVariance.toFixed(2)}
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
       )}
 
-      {/* Monday Float Top-Up Modal */}
+      {/* Monday Float Setup Modal */}
       {showMondayModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white w-full max-w-sm rounded-3xl overflow-hidden shadow-2xl border border-gray-200 p-5 space-y-4">
@@ -957,19 +975,19 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
         </div>
       )}
 
-      {/* Floating Bottom Nav */}
-      <nav className="fixed bottom-4 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-[390px] z-50 rounded-2xl bg-[#111111]/95 backdrop-blur-md text-white py-2.5 px-3 flex justify-around items-center text-xs font-semibold shadow-2xl border border-white/10 select-none">
-        <button 
-          onClick={() => setActiveTab('daily')} 
-          className={`flex-1 py-1 text-center rounded-xl transition ${activeTab === 'daily' ? 'text-white bg-white/15 font-bold shadow-inner' : 'text-gray-400 hover:text-white'}`}
-        >
-          Daily Column
-        </button>
+      {/* Floating Bottom Nav (Lowered to bottom-2 for native feel) */}
+      <nav className="fixed bottom-2 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-[390px] z-50 rounded-2xl bg-[#111111]/95 backdrop-blur-md text-white py-2 px-3 flex justify-around items-center text-xs font-semibold shadow-2xl border border-white/10 select-none pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))]">
         <button 
           onClick={() => setActiveTab('ledger')} 
-          className={`flex-1 py-1 text-center rounded-xl transition ${activeTab === 'ledger' ? 'text-white bg-white/15 font-bold shadow-inner' : 'text-gray-400 hover:text-white'}`}
+          className={`flex-1 py-1.5 text-center rounded-xl transition ${activeTab === 'ledger' ? 'text-white bg-white/15 font-bold shadow-inner' : 'text-gray-400 hover:text-white'}`}
         >
           Weekly Matrix
+        </button>
+        <button 
+          onClick={() => setActiveTab('daily')} 
+          className={`flex-1 py-1.5 text-center rounded-xl transition ${activeTab === 'daily' ? 'text-white bg-white/15 font-bold shadow-inner' : 'text-gray-400 hover:text-white'}`}
+        >
+          Day Column
         </button>
       </nav>
     </div>
