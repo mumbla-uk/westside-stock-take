@@ -12,9 +12,9 @@ import {
   ExternalLink,
   ChevronRight,
   FileSpreadsheet,
-  FileCheck,
+  Clock,
   RefreshCw,
-  Clock
+  Coins
 } from 'lucide-react';
 
 const HARDWIRED_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzcrqf4q-QWiGq0sxMmXqS7QcsxCVfhkJgPfjxOm6KyPShNUD-zkD9HUZy49rDdrfAYJg/exec";
@@ -89,13 +89,13 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
   const [entryDate, setEntryDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [entryDay, setEntryDay] = useState(() => new Date().toLocaleDateString('en-GB', { weekday: 'long' }));
 
-  // Cash In Safe: Denominations Monetary Value
+  // Denominations Monetary Values
   const [denomValues, setDenomValues] = useState({
     n50: '', n20: '', n10: '', n5: '',
     c1: '', c50p: '', c20p: '', c10p: '', c5p: '', c2p: '', c1p: ''
   });
 
-  // Outgoings List
+  // Outgoings & Receipts
   const [expenseVendor, setExpenseVendor] = useState('');
   const [expenseAmount, setExpenseAmount] = useState('');
   const [expenseCategory, setExpenseCategory] = useState('Supplies');
@@ -103,6 +103,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
   const [receiptPreview, setReceiptPreview] = useState(null);
   const [expenseList, setExpenseList] = useState([]);
   const [existingRecordUrl, setExistingRecordUrl] = useState('');
+  const [lastSavedTimestamp, setLastSavedTimestamp] = useState('');
 
   // History & Archive
   const [historyLogs, setHistoryLogs] = useState([]);
@@ -142,10 +143,8 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
       setEntryDay(d.toLocaleDateString('en-GB', { weekday: 'long' }));
     }
 
-    // Check if entryDate already exists in historyLogs
     const existingLog = historyLogs.find(l => l.date === entryDate);
     if (existingLog) {
-      // Hydrate saved denominations and items for ongoing day editing
       const dVals = existingLog.denominations || {};
       setDenomValues({
         n50: dVals.n50 !== undefined ? String(dVals.n50) : '',
@@ -162,14 +161,15 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
       });
       setExpenseList(existingLog.items || []);
       setExistingRecordUrl(existingLog.fileUrl || '');
+      setLastSavedTimestamp(existingLog.savedAt || '');
     } else {
-      // Clear fields for a new day count
       setDenomValues({
         n50: '', n20: '', n10: '', n5: '',
         c1: '', c50p: '', c20p: '', c10p: '', c5p: '', c2p: '', c1p: ''
       });
       setExpenseList([]);
       setExistingRecordUrl('');
+      setLastSavedTimestamp('');
     }
   }, [entryDate, historyLogs]);
 
@@ -262,6 +262,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
       for (const exp of expenseList) {
         if (exp.receipt && exp.receipt.base64) {
           try {
+            const cleanVendor = exp.vendor.replace(/[^a-zA-Z0-9]/g, '_');
             const upRes = await fetch(HARDWIRED_SCRIPT_URL, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -269,7 +270,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
                 action: 'upload_petty_receipt',
                 base64Data: exp.receipt.base64,
                 mimeType: exp.receipt.type,
-                fileName: `Petty_${entryDate}_${exp.vendor.replace(/\s+/g, '_')}.jpg`
+                fileName: `Receipt_${entryDate}_${cleanVendor}.jpg`
               })
             });
             const upJson = await upRes.json();
@@ -308,7 +309,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
         mode: 'no-cors'
       });
 
-      setStatusMsg({ type: 'success', text: `Saved petty cash for ${entryDate}!` });
+      setStatusMsg({ type: 'success', text: `Saved timestamped petty cash record for ${entryDate}!` });
       loadPettyData();
       setActiveTab('summary');
     } catch (err) {
@@ -339,7 +340,6 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
     });
   }, [historyLogs, historySearch, summaryViewMode, filterDate, selectedWeekRange]);
 
-  // Aggregate stats
   const aggregateSummary = useMemo(() => {
     let totExp = 0;
     let closingCash = 0;
@@ -357,7 +357,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
     return { totExp, closingCash, netVar };
   }, [filteredSummaryLogs]);
 
-  // Save Weekly Report (Creates Spreadsheet + Formatted Doc in Folder)
+  // Save Weekly Report (Spreadsheet + Formatted Doc into Dedicated Folder)
   const handleSaveWeeklyReport = async () => {
     if (filteredSummaryLogs.length === 0) return;
     setExportingDrive(true);
@@ -382,7 +382,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
       if (json.status === 'success') {
         setStatusMsg({ 
           type: 'success', 
-          text: `Weekly report generated: Ledger Sheet & Summary Document saved to Drive!` 
+          text: `Weekly reports generated: Ledger Sheet & Formatted Document saved to folder!` 
         });
       }
     } catch (err) {
@@ -419,7 +419,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
         </div>
       </header>
 
-      {/* Main Viewport Router */}
+      {/* Main Viewport */}
       {activeTab === 'entry' ? (
 
         /* ====================================================================== */
@@ -434,7 +434,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
             {existingRecordUrl && (
               <span className="inline-flex items-center space-x-1 px-2.5 py-1 bg-amber-50 text-amber-900 border border-amber-200 rounded-lg text-[10px] font-bold">
                 <Clock className="w-3 h-3 text-amber-600" />
-                <span>Editing Day In Progress</span>
+                <span>Saved So Far</span>
               </span>
             )}
           </div>
@@ -611,9 +611,14 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
 
           {/* Outgoings So Far for Selected Date */}
           <div className="space-y-2">
-            <span className="text-[11px] font-bold uppercase text-gray-400 px-1">
-              Outgoings for {entryDate} ({expenseList.length} items • £{totalExpensesToday.toFixed(2)})
-            </span>
+            <div className="flex justify-between items-center px-1">
+              <span className="text-[11px] font-bold uppercase text-gray-400">
+                Outgoings for {entryDate} ({expenseList.length} items • £{totalExpensesToday.toFixed(2)})
+              </span>
+              {lastSavedTimestamp && (
+                <span className="text-[10px] text-gray-400 font-mono">Last save: {lastSavedTimestamp.split('_')[1]}</span>
+              )}
+            </div>
 
             {expenseList.length === 0 ? (
               <div className="border border-dashed border-gray-200 rounded-2xl py-6 text-center text-xs text-gray-400">
@@ -657,7 +662,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
             className="w-full py-3.5 bg-black text-white rounded-2xl text-xs font-bold hover:bg-neutral-800 transition disabled:opacity-50 flex items-center justify-center space-x-2 shadow-sm"
           >
             <Check className="w-4 h-4" />
-            <span>{submitting ? 'Saving to Drive Folder...' : existingRecordUrl ? 'Update Day Count & Outgoings' : 'Reconcile & Save Day'}</span>
+            <span>{submitting ? 'Saving Timestamped Count to Drive...' : existingRecordUrl ? 'Update Day Count & Outgoings' : 'Reconcile & Save Day'}</span>
           </button>
         </div>
 
@@ -789,7 +794,6 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
                   >
                     <div className="flex justify-between items-baseline">
                       <div>
-                        {/* Title strictly has date */}
                         <span className="font-extrabold text-sm text-gray-900 group-hover:text-black">
                           {log.date}
                         </span>
@@ -892,7 +896,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
                     </div>
                   </div>
 
-                  {/* Open Standalone File */}
+                  {/* Standalone Drive File Link */}
                   {selectedLogModal.fileUrl && (
                     <a
                       href={selectedLogModal.fileUrl}
@@ -901,7 +905,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
                       className="w-full py-2.5 bg-black text-white rounded-xl flex items-center justify-center space-x-1.5 font-bold hover:bg-neutral-800 transition shadow-sm mt-2"
                     >
                       <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
-                      <span>Open Drive File</span>
+                      <span>Open Timestamped Ledger</span>
                       <ExternalLink className="w-3 h-3 text-gray-400 ml-1" />
                     </a>
                   )}
