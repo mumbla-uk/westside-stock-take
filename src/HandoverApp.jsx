@@ -1,24 +1,27 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   ArrowLeft, 
-  Send, 
+  Search, 
   Plus, 
-  Trash2, 
-  Calendar, 
-  Clock, 
-  CheckCircle2, 
-  MessageSquare, 
-  AlertTriangle, 
   X, 
+  Send, 
+  Calendar, 
+  FileSpreadsheet, 
+  Lock, 
   ExternalLink,
   ChevronRight,
-  FileSpreadsheet,
-  RefreshCw,
-  Search,
+  Sparkles,
   StickyNote
 } from 'lucide-react';
 
 const HARDWIRED_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzcrqf4q-QWiGq0sxMmXqS7QcsxCVfhkJgPfjxOm6KyPShNUD-zkD9HUZy49rDdrfAYJg/exec";
+
+const AVAILABLE_REACTIONS = [
+  { emoji: '👀', label: 'Seen' },
+  { emoji: '👍', label: 'Acknowledged' },
+  { emoji: '❤️', label: 'Love' },
+  { emoji: '🍺', label: 'Cheers' }
+];
 
 function AppLogo({ className = "w-6 h-6", fallbackTextClass = "font-serif text-xl font-bold tracking-tighter" }) {
   const [imgError, setImgError] = useState(false);
@@ -37,61 +40,98 @@ function AppLogo({ className = "w-6 h-6", fallbackTextClass = "font-serif text-x
   return <span className={fallbackTextClass}>T</span>;
 }
 
-export default function HandoverApp({ currentUser, onBackToHub, onLogout }) {
-  const [activeTab, setActiveTab] = useState('new'); // 'new' | 'diary'
+function formatDisplayDate(dateInput) {
+  if (!dateInput) return "Undated Shift";
+  const d = new Date(dateInput);
+  if (isNaN(d.getTime())) return String(dateInput);
 
-  // Shift metadata
-  const [managerName, setManagerName] = useState(currentUser?.name || 'Ross');
-  const [managerRole, setManagerRole] = useState(currentUser?.role || 'Assistant General Manager');
-  const [dateStr, setDateStr] = useState(() => new Date().toISOString().slice(0, 10));
+  const dayName = d.toLocaleDateString('en-GB', { weekday: 'long' });
+  const dayNum = d.getDate();
+  const monthName = d.toLocaleDateString('en-GB', { month: 'long' });
+  const year = d.getFullYear();
 
-  // Takings & Close Time (both blank by default for Day Note flexibility)
-  const [takings, setTakings] = useState('');
-  const [closeTime, setCloseTime] = useState('');
-
-  // Shift notes
-  const [generalNotes, setGeneralNotes] = useState('');
-
-  // 86 List (item name & supplier only, no quantity)
-  const [eightySixItemName, setEightySixItemName] = useState('');
-  const [eightySixSupplier, setEightySixSupplier] = useState('');
-  const [eightySixList, setEightySixList] = useState([]);
-
-  // Tomorrow / Follow up tasks
-  const [taskInput, setTaskInput] = useState('');
-  const [tomorrowTasks, setTomorrowTasks] = useState([]);
-
-  // Diary / History state
-  const [historyList, setHistoryList] = useState([]);
-  const [historySearch, setHistorySearch] = useState('');
-  const [selectedEntryModal, setSelectedEntryModal] = useState(null);
-  const [loadingHistory, setLoadingHistory] = useState(false);
-
-  const [submitting, setSubmitting] = useState(false);
-  const [statusMsg, setStatusMsg] = useState(null);
-
-  // Swipe handling
-  const touchStartRef = useRef({ x: 0, y: 0 });
-
-  const handleTouchStart = (e) => {
-    touchStartRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-  };
-
-  const handleTouchEnd = (e) => {
-    if (selectedEntryModal) return;
-    const deltaX = e.changedTouches[0].clientX - touchStartRef.current.x;
-    const deltaY = e.changedTouches[0].clientY - touchStartRef.current.y;
-
-    if (Math.abs(deltaX) > 60 && Math.abs(deltaX) > Math.abs(deltaY) * 1.5) {
-      if (deltaX < 0 && activeTab === 'new') setActiveTab('diary');
-      else if (deltaX > 0) {
-        if (activeTab === 'diary') setActiveTab('new');
-        else if (activeTab === 'new' && onBackToHub) onBackToHub();
-      }
+  const getOrdinalSuffix = (n) => {
+    if (n > 3 && n < 21) return 'th';
+    switch (n % 10) {
+      case 1:  return "st";
+      case 2:  return "nd";
+      case 3:  return "rd";
+      default: return "th";
     }
   };
 
-  // Generate 15-minute close time increments
+  return `${dayName} ${dayNum}${getOrdinalSuffix(dayNum)} ${monthName} ${year}`;
+}
+
+export default function HandoverApp({ currentUser, initialCatalog = [], initialHistory = [], onBackToHub, onLogout }) {
+  const [currentTab, setCurrentTab] = useState('history'); // 'history' | 'today' | 'settings'
+
+  const parseCatalog = (data) => {
+    if (!data) return [];
+    if (Array.isArray(data)) return data;
+    if (Array.isArray(data.catalog)) return data.catalog;
+    if (Array.isArray(data.data)) return data.data;
+    return [];
+  };
+
+  const [catalog, setCatalog] = useState(() => {
+    const fromProp = parseCatalog(initialCatalog);
+    if (fromProp.length > 0) return fromProp;
+    try {
+      const cached = localStorage.getItem('wst_catalog');
+      return cached ? parseCatalog(JSON.parse(cached)) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const [historyList, setHistoryList] = useState(() => {
+    if (Array.isArray(initialHistory) && initialHistory.length > 0) return initialHistory;
+    try {
+      const cached = localStorage.getItem('wst_history');
+      return cached ? JSON.parse(cached) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const [sheetDuties, setSheetDuties] = useState(() => {
+    try {
+      const cached = localStorage.getItem('wst_duties');
+      return cached ? JSON.parse(cached) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  // Shift Entry Form State
+  const [manager, setManager] = useState(currentUser?.name || 'Ross');
+  const [role, setRole] = useState(currentUser?.role || 'Assistant General Manager');
+  const [shiftDate, setShiftDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [takings, setTakings] = useState('');
+  const [closeTime, setCloseTime] = useState('');
+  const [generalNotes, setGeneralNotes] = useState('');
+
+  // 86 List State
+  const [eightySixInput, setEightySixInput] = useState('');
+  const [eightySixQty, setEightySixQty] = useState('');
+  const [selectedProduct, setSelectedProduct] = useState(null);
+  const [eightySixList, setEightySixList] = useState([]);
+
+  // Tomorrow Tasks State
+  const [tomorrowInput, setTomorrowInput] = useState('');
+  const [tomorrowList, setTomorrowList] = useState([]);
+
+  // Filters & Modal State
+  const [historySearch, setHistorySearch] = useState('');
+  const [historyDateFilter, setHistoryDateFilter] = useState('');
+  const [selectedHistoryItem, setSelectedHistoryItem] = useState(null);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [statusMsg, setStatusMsg] = useState(null);
+
+  // 15-Minute Close Time Increments
   const timeOptions15Min = useMemo(() => {
     const times = [];
     for (let h = 0; h < 24; h++) {
@@ -104,134 +144,270 @@ export default function HandoverApp({ currentUser, onBackToHub, onLogout }) {
     return times;
   }, []);
 
-  // Determine entry classification live
-  const isDayNote = useMemo(() => {
-    return (!takings.trim() || takings === '0' || takings === '0.00') && !closeTime.trim();
-  }, [takings, closeTime]);
+  const touchStartRef = useRef({ x: 0, y: 0 });
 
-  const loadHistory = async () => {
+  const handleTouchStart = (e) => {
+    touchStartRef.current = {
+      x: e.touches[0].clientX,
+      y: e.touches[0].clientY
+    };
+  };
+
+  const handleTouchEnd = (e) => {
+    if (currentTab === 'settings' || selectedHistoryItem) return;
+    const deltaX = e.changedTouches[0].clientX - touchStartRef.current.x;
+    const deltaY = e.changedTouches[0].clientY - touchStartRef.current.y;
+
+    if (Math.abs(deltaX) > 60 && Math.abs(deltaX) > Math.abs(deltaY) * 1.5) {
+      if (deltaX < 0) {
+        if (currentTab === 'history') setCurrentTab('today');
+      } else {
+        if (currentTab === 'today') {
+          setCurrentTab('history');
+        } else if (currentTab === 'history' && onBackToHub) {
+          onBackToHub();
+        }
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (currentUser?.name) setManager(currentUser.name);
+    if (currentUser?.role) setRole(currentUser.role);
+  }, [currentUser]);
+
+  useEffect(() => {
+    const parsed = parseCatalog(initialCatalog);
+    if (parsed.length > 0 && catalog.length === 0) setCatalog(parsed);
+  }, [initialCatalog]);
+
+  useEffect(() => {
+    if (Array.isArray(initialHistory) && initialHistory.length > 0 && historyList.length === 0) {
+      setHistoryList(initialHistory);
+    }
+  }, [initialHistory]);
+
+  const fetchAllHandoverData = async () => {
     setLoadingHistory(true);
     try {
       const res = await fetch(`${HARDWIRED_SCRIPT_URL}?action=all`);
       const json = await res.json();
-      if (json && json.status === 'success' && Array.isArray(json.history)) {
-        setHistoryList(json.history);
+      
+      if (json && json.status === 'success') {
+        if (json.catalog && json.catalog.length > 0) {
+          setCatalog(json.catalog);
+          localStorage.setItem('wst_catalog', JSON.stringify(json.catalog));
+        }
+        if (json.history) {
+          setHistoryList(json.history);
+          localStorage.setItem('wst_history', JSON.stringify(json.history));
+        }
+        if (json.duties && Array.isArray(json.duties)) {
+          setSheetDuties(json.duties);
+          localStorage.setItem('wst_duties', JSON.stringify(json.duties));
+        }
       }
     } catch (err) {
-      console.warn("Could not load handover history:", err);
+      console.error("Failed to sync handover data:", err);
     } finally {
       setLoadingHistory(false);
     }
   };
 
   useEffect(() => {
-    loadHistory();
+    if (catalog.length === 0 || sheetDuties.length === 0) {
+      fetchAllHandoverData();
+    }
   }, []);
 
-  // Add 86 item (without quantity)
-  const handleAdd86 = (e) => {
-    e.preventDefault();
-    if (!eightySixItemName.trim()) return;
+  const handleToggleReaction = async (itemId, emoji, e) => {
+    if (e) e.stopPropagation();
+    const activeUserName = currentUser?.name || manager || 'Staff';
 
-    setEightySixList(prev => [
-      ...prev,
-      {
-        id: `86-${Date.now()}`,
-        name: eightySixItemName.trim(),
-        supplier: eightySixSupplier.trim() || 'Bar'
+    const updateReactionsList = (currentReactions = []) => {
+      const existing = currentReactions.find(r => r.user === activeUserName && r.emoji === emoji);
+      if (existing) {
+        return currentReactions.filter(r => !(r.user === activeUserName && r.emoji === emoji));
       }
-    ]);
+      return [...currentReactions, { emoji, user: activeUserName }];
+    };
 
-    setEightySixItemName('');
-    setEightySixSupplier('');
-  };
+    setHistoryList(prev => {
+      const updated = prev.map(item => {
+        if (item.id === itemId) {
+          return { ...item, reactions: updateReactionsList(item.reactions || []) };
+        }
+        return item;
+      });
+      localStorage.setItem('wst_history', JSON.stringify(updated));
+      return updated;
+    });
 
-  const handleRemove86 = (index) => {
-    setEightySixList(prev => prev.filter((_, i) => i !== index));
-  };
-
-  // Add task
-  const handleAddTask = (e) => {
-    e.preventDefault();
-    if (!taskInput.trim()) return;
-
-    setTomorrowTasks(prev => [...prev, taskInput.trim()]);
-    setTaskInput('');
-  };
-
-  const handleRemoveTask = (index) => {
-    setTomorrowTasks(prev => prev.filter((_, i) => i !== index));
-  };
-
-  // Submit Handover / Day Note
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (!generalNotes.trim() && eightySixList.length === 0 && tomorrowTasks.length === 0) {
-      setStatusMsg({ type: 'error', text: 'Enter notes, 86 items, or tasks before submitting.' });
-      return;
+    if (selectedHistoryItem && selectedHistoryItem.id === itemId) {
+      setSelectedHistoryItem(prev => ({
+        ...prev,
+        reactions: updateReactionsList(prev.reactions || [])
+      }));
     }
 
-    setSubmitting(true);
-    setStatusMsg({ type: 'info', text: isDayNote ? 'Saving day note...' : 'Saving closing handover...' });
+    try {
+      await fetch(HARDWIRED_SCRIPT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({
+          action: 'toggle_reaction',
+          id: itemId,
+          userName: activeUserName,
+          emoji: emoji
+        })
+      });
+    } catch (err) {
+      console.error("Failed to persist reaction:", err);
+    }
+  };
+
+  const catalogSuggestions = useMemo(() => {
+    if (!eightySixInput.trim() || selectedProduct) return [];
+    return catalog.filter(p => 
+      (p.name && p.name.toLowerCase().includes(eightySixInput.toLowerCase())) || 
+      (p.id && p.id.toLowerCase().includes(eightySixInput.toLowerCase()))
+    ).slice(0, 5);
+  }, [catalog, eightySixInput, selectedProduct]);
+
+  const dutySuggestions = useMemo(() => {
+    if (!tomorrowInput.trim()) return [];
+    return sheetDuties.filter(duty => 
+      duty.toLowerCase().includes(tomorrowInput.toLowerCase())
+    ).slice(0, 5);
+  }, [sheetDuties, tomorrowInput]);
+
+  const handleAdd86 = (e) => {
+    e?.preventDefault();
+    if (!eightySixInput.trim()) return;
+
+    setEightySixList(prev => [...prev, {
+      sku: selectedProduct ? selectedProduct.id : 'CUSTOM',
+      name: selectedProduct ? selectedProduct.name : eightySixInput.trim(),
+      supplier: selectedProduct ? selectedProduct.supplier : 'General',
+      unit: selectedProduct ? selectedProduct.unit : 'unit',
+      qty: parseFloat(eightySixQty) || 1
+    }]);
+
+    setEightySixInput(''); 
+    setSelectedProduct(null); 
+    setEightySixQty('');
+  };
+
+  const handleAddTomorrow = (textToAdd) => {
+    const text = textToAdd || tomorrowInput;
+    if (text.trim()) {
+      setTomorrowList(prev => [...prev, text.trim()]);
+      setTomorrowInput('');
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setIsSubmitting(true);
+    setStatusMsg(null);
+
+    const isDayNote = (!takings.trim() || takings === '0' || takings === '0.00') && !closeTime.trim();
+
+    const payload = {
+      action: "handover_report",
+      id: `h-${Date.now()}`,
+      dateStr: shiftDate,
+      manager,
+      role,
+      takings: takings.trim(),
+      closeTime: closeTime.trim(),
+      generalNotes,
+      kitchenNotes: "",
+      eightySixList,
+      tomorrowTasks: tomorrowList
+    };
 
     try {
-      const payload = {
-        action: 'handover_report',
-        id: `h-${Date.now()}`,
-        dateStr: dateStr,
-        manager: managerName,
-        role: managerRole,
-        takings: takings.trim(),
-        closeTime: closeTime.trim(),
-        generalNotes: generalNotes.trim(),
-        eightySixList: eightySixList,
-        tomorrowTasks: tomorrowTasks
-      };
-
       const res = await fetch(HARDWIRED_SCRIPT_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify(payload)
       });
       const json = await res.json();
-
-      if (json && json.status === 'success') {
-        setStatusMsg({
-          type: 'success',
-          text: isDayNote ? 'Day note recorded successfully!' : 'Closing handover submitted and filed to Drive!'
-        });
-
-        // Reset form
-        setTakings('');
-        setCloseTime('');
-        setGeneralNotes('');
-        setEightySixList([]);
-        setTomorrowTasks([]);
-
-        await loadHistory();
-        setActiveTab('diary');
-      } else {
-        setStatusMsg({ type: 'error', text: json?.message || 'Error saving handover.' });
-      }
+      
+      setStatusMsg({ 
+        type: 'success', 
+        text: isDayNote ? 'Day note saved to diary!' : 'Handover saved & filed to Drive folder!' 
+      });
+      
+      setTakings('');
+      setCloseTime('');
+      setGeneralNotes('');
+      setEightySixList([]);
+      setTomorrowList([]);
+      
+      await fetchAllHandoverData();
+      setCurrentTab('history');
     } catch (err) {
-      console.error(err);
-      setStatusMsg({ type: 'error', text: 'Network error saving report.' });
+      setStatusMsg({ type: 'error', text: 'Network error submitting handover report.' });
     } finally {
-      setSubmitting(false);
+      setIsSubmitting(false);
     }
   };
 
-  // Filtered History
+  const latestHandover = historyList.length > 0 ? historyList[0] : null;
+
   const filteredHistory = useMemo(() => {
-    return historyList.filter(item => {
+    const pool = (historySearch || historyDateFilter) ? historyList : historyList.slice(1);
+    return pool.filter(item => {
       const q = historySearch.toLowerCase();
-      const inManager = (item.manager || '').toLowerCase().includes(q);
-      const inDate = (item.dateStr || '').toLowerCase().includes(q);
-      const inNotes = (item.generalNotes || '').toLowerCase().includes(q);
-      const in86 = (item.eightySixList || []).some(x => (x.name || x).toLowerCase().includes(q));
-      return inManager || inDate || inNotes || in86;
+      const matchesSearch = 
+        (item.manager || '').toLowerCase().includes(q) ||
+        (item.generalNotes || '').toLowerCase().includes(q) ||
+        (item.dateStr || '').toLowerCase().includes(q) ||
+        (item.eightySixList || []).some(p => (p.name || p).toLowerCase().includes(q) || (p.sku || '').toLowerCase().includes(q));
+      const matchesDate = historyDateFilter ? item.dateStr === historyDateFilter : true;
+      return matchesSearch && matchesDate;
     });
-  }, [historyList, historySearch]);
+  }, [historyList, historySearch, historyDateFilter]);
+
+  const ReactionBar = ({ item }) => {
+    const reactions = item.reactions || [];
+    const activeUserName = currentUser?.name || manager || 'Staff';
+
+    return (
+      <div className="flex flex-wrap items-center gap-1.5 pt-1.5">
+        {AVAILABLE_REACTIONS.map(rx => {
+          const matching = reactions.filter(r => r.emoji === rx.emoji);
+          const hasReacted = matching.some(r => r.user === activeUserName);
+          const reactors = matching.map(r => r.user).join(', ');
+
+          return (
+            <button
+              key={rx.emoji}
+              type="button"
+              onClick={(e) => handleToggleReaction(item.id, rx.emoji, e)}
+              title={reactors ? `${rx.label} by: ${reactors}` : rx.label}
+              className={`flex items-center space-x-1 px-2 py-0.5 rounded-full text-xs transition border active:scale-95 select-none ${
+                hasReacted
+                  ? 'bg-black text-white border-black font-bold shadow-sm'
+                  : matching.length > 0
+                  ? 'bg-gray-100 text-gray-800 border-gray-300'
+                  : 'bg-white hover:bg-gray-50 text-gray-400 border-gray-200'
+              }`}
+            >
+              <span>{rx.emoji}</span>
+              {matching.length > 0 && (
+                <span className={`text-[10px] font-mono ${hasReacted ? 'text-white' : 'text-gray-700 font-bold'}`}>
+                  {matching.length}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    );
+  };
 
   return (
     <div 
@@ -250,419 +426,239 @@ export default function HandoverApp({ currentUser, onBackToHub, onLogout }) {
           <AppLogo className="w-6 h-6" fallbackTextClass="font-serif text-2xl font-bold tracking-tighter" />
           <span className="font-semibold text-base tracking-tight">West Side Tavern</span>
         </div>
-        <div className="flex items-center space-x-3 text-sm font-medium">
+        <div className="flex items-center space-x-4 text-sm font-medium">
           {onBackToHub ? (
             <button onClick={onBackToHub} className="text-gray-900 hover:text-black font-semibold">Hub</button>
           ) : (
             <button onClick={onLogout} className="text-gray-900 hover:text-black">Logout</button>
           )}
+          <button 
+            onClick={() => setCurrentTab(currentTab === 'settings' ? 'history' : 'settings')}
+            className={`transition ${currentTab === 'settings' ? 'font-bold underline' : 'text-gray-900 hover:text-black'}`}
+          >
+            Settings
+          </button>
         </div>
       </header>
 
-      {/* Main Viewport Router */}
-      {activeTab === 'new' ? (
-
-        /* ====================================================================== */
-        /* TAB 1: NEW ENTRY (HANDOVER OR DAY NOTE)                                */
-        /* ====================================================================== */
-        <div className="flex-1 flex flex-col overflow-y-auto px-5 py-3 space-y-4 pb-24">
-          <div className="flex justify-between items-start">
+      {/* Main Content View */}
+      {currentTab === 'settings' ? (
+        <div className="flex-1 flex flex-col px-5 pt-4 pb-20 overflow-y-auto">
+          <div className="flex items-center justify-between pb-3 border-b border-gray-100">
             <div>
-              <p className="text-gray-500 italic text-xs font-serif">Shift Logbook & Operations</p>
-              <h1 className="text-2xl font-black tracking-tight text-gray-900 mt-0.5">Duty Handover</h1>
+              <p className="text-gray-500 italic text-xs font-serif">Preferences</p>
+              <h1 className="text-2xl font-extrabold tracking-tight mt-0.5">Settings</h1>
             </div>
-            <span className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg text-[10px] font-bold border transition ${
-              isDayNote 
-                ? 'bg-amber-50 text-amber-900 border-amber-200' 
-                : 'bg-emerald-50 text-emerald-900 border-emerald-200'
-            }`}>
-              {isDayNote ? <StickyNote className="w-3 h-3 text-amber-600" /> : <CheckCircle2 className="w-3 h-3 text-emerald-600" />}
-              <span>{isDayNote ? 'Logging as Day Note' : 'Logging as Close'}</span>
-            </span>
+            <button onClick={() => setCurrentTab('history')} className="p-1.5 bg-[#EDEDED] rounded-lg text-gray-700 hover:bg-gray-200">
+              <X className="w-5 h-5" />
+            </button>
           </div>
 
-          {statusMsg && (
-            <div className={`p-2.5 rounded-xl text-xs font-semibold ${statusMsg.type === 'success' ? 'bg-green-50 text-green-800 border border-green-200' : statusMsg.type === 'info' ? 'bg-blue-50 text-blue-800 border border-blue-200' : 'bg-red-50 text-red-800 border border-red-200'}`}>
-              {statusMsg.text}
+          <div className="space-y-4 mt-4 text-xs">
+            <div className="p-3 bg-gray-50 border border-gray-200 rounded-xl space-y-1">
+              <span className="text-[10px] uppercase font-bold text-gray-400">Authenticated Session</span>
+              <p className="text-sm font-extrabold text-gray-900">{manager}</p>
+              <span className="inline-block px-2 py-0.5 rounded text-[10px] font-mono bg-black text-white font-bold">{role}</span>
             </div>
-          )}
 
-          {/* Metadata Card */}
-          <div className="bg-[#F8F8F8] border border-gray-200 rounded-2xl p-3 space-y-2.5 text-xs">
-            <div className="grid grid-cols-12 gap-2">
-              <div className="col-span-7">
-                <label className="block text-[9px] font-bold uppercase text-gray-400 mb-0.5">Manager</label>
-                <input
-                  type="text"
-                  value={managerName}
-                  onChange={(e) => setManagerName(e.target.value)}
-                  className="w-full bg-white border border-gray-200 py-1.5 px-2.5 rounded-xl font-bold text-gray-900 focus:outline-none"
-                />
-              </div>
-              <div className="col-span-5">
-                <label className="block text-[9px] font-bold uppercase text-gray-400 mb-0.5">Date</label>
-                <input
-                  type="date"
-                  value={dateStr}
-                  onChange={(e) => setDateStr(e.target.value)}
-                  className="w-full bg-white border border-gray-200 py-1.5 px-2 rounded-xl font-bold text-gray-900 focus:outline-none"
-                />
+            <div className="space-y-2">
+              <label className="block text-sm font-bold text-gray-900">Google Drive Backend Endpoint</label>
+              <div className="relative mt-2">
+                <input type="text" readOnly value={HARDWIRED_SCRIPT_URL} className="w-full bg-[#EDEDED] py-3 pl-10 pr-4 rounded-lg text-xs font-mono text-gray-500 cursor-not-allowed focus:outline-none" />
+                <Lock className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
               </div>
             </div>
 
-            {/* Takings & 15-Minute Close Time (Leave blank for Day Note) */}
-            <div className="grid grid-cols-12 gap-2 pt-1 border-t border-gray-200/60">
-              <div className="col-span-6">
-                <div className="flex justify-between items-baseline mb-0.5">
-                  <label className="block text-[9px] font-bold uppercase text-gray-400">Total Takings (£)</label>
-                  <span className="text-[8px] text-gray-400 font-mono">Optional</span>
-                </div>
-                <input
-                  type="number"
-                  step="0.01"
-                  placeholder="Leave blank for note"
-                  value={takings}
-                  onChange={(e) => setTakings(e.target.value)}
-                  className="w-full bg-white border border-gray-200 py-1.5 px-2.5 rounded-xl font-mono font-bold text-gray-900 focus:outline-none"
-                />
-              </div>
-              <div className="col-span-6">
-                <div className="flex justify-between items-baseline mb-0.5">
-                  <label className="block text-[9px] font-bold uppercase text-gray-400">Close Time (15m)</label>
-                  <span className="text-[8px] text-gray-400 font-mono">Optional</span>
-                </div>
-                <select
-                  value={closeTime}
-                  onChange={(e) => setCloseTime(e.target.value)}
-                  className="w-full bg-white border border-gray-200 py-1.5 px-2 rounded-xl font-bold text-gray-900 focus:outline-none"
-                >
-                  <option value="">Leave blank (Day Note)</option>
-                  {timeOptions15Min.map((t) => (
-                    <option key={t} value={t}>{t}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
+            <button onClick={() => setCurrentTab('history')} className="w-full py-3 bg-[#C2F19D] text-sm font-semibold rounded-lg text-gray-900 hover:bg-[#b2e88a] transition">
+              Back to Diary
+            </button>
           </div>
-
-          {/* General Shift Notes */}
-          <div className="space-y-1">
-            <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-400 px-1">
-              General Shift Notes & Operational Handover
-            </label>
-            <textarea
-              rows={4}
-              placeholder="Atmosphere, maintenance items, booking pacing, staff highlights, or daytime trade updates..."
-              value={generalNotes}
-              onChange={(e) => setGeneralNotes(e.target.value)}
-              className="w-full bg-gray-50 border border-gray-200 p-3 rounded-2xl text-xs text-gray-900 focus:bg-white focus:outline-none resize-none leading-relaxed transition"
-            />
-          </div>
-
-          {/* 86 List (Out of Stock) - No Quantity Required */}
-          <div className="bg-gray-50 border border-gray-200 rounded-2xl p-3.5 space-y-3 text-xs">
-            <div className="flex justify-between items-baseline">
-              <span className="block font-bold text-gray-900 uppercase tracking-wider text-[11px]">
-                86 List (86'd Items)
-              </span>
-              <span className="text-[10px] text-gray-400 font-mono">{eightySixList.length} items logged</span>
-            </div>
-
-            <form onSubmit={handleAdd86} className="space-y-2">
-              <div className="grid grid-cols-12 gap-2">
-                <div className="col-span-7">
-                  <input
-                    type="text"
-                    placeholder="Product / Item name..."
-                    value={eightySixItemName}
-                    onChange={(e) => setEightySixItemName(e.target.value)}
-                    className="w-full bg-white border border-gray-300 py-2 px-3 rounded-xl text-xs font-medium focus:outline-none"
-                  />
-                </div>
-                <div className="col-span-5">
-                  <input
-                    type="text"
-                    placeholder="Supplier / Area"
-                    value={eightySixSupplier}
-                    onChange={(e) => setEightySixSupplier(e.target.value)}
-                    className="w-full bg-white border border-gray-300 py-2 px-2.5 rounded-xl text-xs font-medium focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              <button
-                type="submit"
-                disabled={!eightySixItemName.trim()}
-                className="w-full py-2 bg-neutral-800 text-white hover:bg-black disabled:opacity-40 rounded-xl text-xs font-bold transition flex items-center justify-center space-x-1"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Add to 86 List</span>
-              </button>
-            </form>
-
-            {eightySixList.length > 0 && (
-              <div className="border border-gray-200 rounded-xl divide-y divide-gray-100 bg-white overflow-hidden shadow-sm">
-                {eightySixList.map((item, idx) => (
-                  <div key={item.id || idx} className="p-2.5 flex items-center justify-between text-xs">
-                    <div>
-                      <span className="font-bold text-gray-900 block">{item.name}</span>
-                      <span className="text-[10px] text-gray-400 font-mono">{item.supplier}</span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => handleRemove86(idx)}
-                      className="text-gray-400 hover:text-red-500 p-1"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Tomorrow / Next Shift Tasks */}
-          <div className="bg-gray-50 border border-gray-200 rounded-2xl p-3.5 space-y-3 text-xs">
-            <span className="block font-bold text-gray-900 uppercase tracking-wider text-[11px]">
-              Follow-Up / Tomorrow Tasks
-            </span>
-
-            <form onSubmit={handleAddTask} className="flex space-x-2">
-              <input
-                type="text"
-                placeholder="Action item for opening manager..."
-                value={taskInput}
-                onChange={(e) => setTaskInput(e.target.value)}
-                className="flex-1 bg-white border border-gray-300 py-2 px-3 rounded-xl text-xs font-medium focus:outline-none"
-              />
-              <button
-                type="submit"
-                disabled={!taskInput.trim()}
-                className="px-4 py-2 bg-neutral-800 text-white hover:bg-black disabled:opacity-40 rounded-xl text-xs font-bold transition flex items-center justify-center"
-              >
-                <Plus className="w-4 h-4" />
-              </button>
-            </form>
-
-            {tomorrowTasks.length > 0 && (
-              <div className="border border-gray-200 rounded-xl divide-y divide-gray-100 bg-white overflow-hidden shadow-sm">
-                {tomorrowTasks.map((t, idx) => (
-                  <div key={idx} className="p-2.5 flex items-center justify-between text-xs">
-                    <span className="font-medium text-gray-900 pr-2">• {t}</span>
-                    <button
-                      type="button"
-                      onClick={() => handleRemoveTask(idx)}
-                      className="text-gray-400 hover:text-red-500 p-1"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Primary Submit Button */}
-          <button
-            type="button"
-            disabled={submitting}
-            onClick={handleSubmit}
-            className="w-full py-3.5 bg-black text-white rounded-2xl text-xs font-bold hover:bg-neutral-800 transition disabled:opacity-50 flex items-center justify-center space-x-2 shadow-sm"
-          >
-            <Send className="w-4 h-4 text-emerald-400" />
-            <span>
-              {submitting 
-                ? 'Saving to Handover Folder...' 
-                : isDayNote 
-                ? 'Save Day Note to Diary' 
-                : 'Submit Closing Handover'}
-            </span>
-          </button>
         </div>
-
-      ) : (
-
-        /* ====================================================================== */
-        /* TAB 2: HISTORICAL DIARY (FILTER BY DAY NOTES & HANDOVERS)              */
-        /* ====================================================================== */
+      ) : currentTab === 'history' ? (
+        
+        /* DIARY VIEW */
         <div className="flex-1 flex flex-col overflow-hidden pb-20">
           <div className="px-5 pt-3 pb-2 border-b border-gray-100 flex-shrink-0 space-y-2">
             <div className="flex justify-between items-baseline">
               <div>
-                <p className="text-gray-500 italic text-xs font-serif">Historical Logbook</p>
+                <p className="text-gray-500 italic text-xs font-serif">Shift Logs</p>
                 <h1 className="text-xl font-black tracking-tight text-gray-900">Handover Diary</h1>
               </div>
-              <button onClick={loadHistory} className="text-xs font-semibold text-gray-500 hover:text-black underline flex items-center space-x-1">
-                <RefreshCw className="w-3 h-3" />
-                <span>Refresh</span>
-              </button>
+              <button onClick={fetchAllHandoverData} className="text-xs font-semibold text-gray-500 hover:text-black underline">Refresh</button>
             </div>
 
-            {/* Search Input */}
             <div className="relative">
               <input
                 type="text"
                 value={historySearch}
                 onChange={(e) => setHistorySearch(e.target.value)}
-                placeholder="Search notes, manager, 86'd items..."
-                className="w-full bg-[#EDEDED] py-2 pl-4 pr-9 rounded-xl text-xs italic placeholder-gray-500 focus:outline-none"
+                placeholder="Search by manager, notes, or 86 item..."
+                className="w-full bg-[#EDEDED] py-2 pl-4 pr-9 rounded-lg text-xs italic placeholder-gray-500 focus:outline-none"
               />
-              {historySearch && (
+              {historySearch ? (
                 <button onClick={() => setHistorySearch('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-black">
                   <X className="w-3.5 h-3.5" />
                 </button>
+              ) : (
+                <Search className="w-3.5 h-3.5 absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+              )}
+            </div>
+
+            <div className="flex items-center space-x-2 text-xs">
+              <label className="text-[10px] font-bold uppercase text-gray-400">Date:</label>
+              <input type="date" value={historyDateFilter} onChange={(e) => setHistoryDateFilter(e.target.value)} className="bg-[#EDEDED] py-1 px-2 rounded-md font-semibold text-[11px] text-gray-800 focus:outline-none" />
+              {historyDateFilter && (
+                <button onClick={() => setHistoryDateFilter('')} className="text-[10px] text-gray-500 hover:text-black underline">Clear date</button>
               )}
             </div>
           </div>
 
-          {/* Diary List */}
-          <div className="flex-1 overflow-y-auto px-5 py-3 space-y-3">
-            {filteredHistory.length === 0 ? (
+          <div className="flex-1 overflow-y-auto px-5 py-3 space-y-4">
+            {loadingHistory ? (
+              <p className="text-center py-12 text-xs text-gray-400 italic">Connecting to archive...</p>
+            ) : historyList.length === 0 ? (
               <div className="text-center py-16 text-gray-400">
                 <Calendar className="w-10 h-10 mx-auto mb-2 opacity-30" />
-                <p className="text-xs font-semibold text-gray-600">
-                  {loadingHistory ? 'Loading diary entries...' : 'No entries found'}
-                </p>
+                <p className="text-xs font-semibold text-gray-600">No shift handovers found</p>
               </div>
             ) : (
-              filteredHistory.map((entry) => {
-                const isEntryDayNote = (!entry.takings || entry.takings === '' || entry.takings === '0.00' || entry.takings === '0') && (!entry.closeTime || entry.closeTime === '');
-                return (
-                  <div
-                    key={entry.id}
-                    onClick={() => setSelectedEntryModal(entry)}
-                    className="border border-gray-200 rounded-2xl p-4 bg-white shadow-sm hover:border-black transition cursor-pointer space-y-2.5 group"
-                  >
-                    <div className="flex justify-between items-baseline">
-                      <div>
-                        <span className="font-extrabold text-sm text-gray-900 group-hover:text-black">
-                          {entry.dateStr}
-                        </span>
-                        <span className="text-[10px] text-gray-400 block font-mono">
-                          Duty: {entry.manager}
-                        </span>
-                      </div>
-                      <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
-                        isEntryDayNote 
-                          ? 'bg-amber-100 text-amber-900' 
-                          : 'bg-black text-white'
-                      }`}>
-                        {isEntryDayNote ? 'Day Note' : 'Closing Handover'}
+              <>
+                {!historySearch && !historyDateFilter && latestHandover && (
+                  <div className="space-y-1">
+                    <div className="flex items-center space-x-1.5 px-1">
+                      <Sparkles className="w-3 h-3 text-emerald-600" />
+                      <span className="text-[10px] font-black uppercase tracking-wider text-emerald-800">
+                        {latestHandover.entryType === 'Day Note' ? 'Most Recent Day Note' : 'Most Recent Handover'}
                       </span>
                     </div>
 
-                    {!isEntryDayNote && (
-                      <div className="grid grid-cols-2 gap-2 text-[11px] font-mono bg-gray-50 p-2 rounded-xl">
-                        <div>
-                          <span className="text-gray-400 block text-[9px] uppercase">Takings</span>
-                          <span className="font-bold text-gray-800">
-                            {entry.takings ? `£${Number(entry.takings).toFixed(2)}` : 'N/A'}
-                          </span>
-                        </div>
-                        <div>
-                          <span className="text-gray-400 block text-[9px] uppercase">Close Time</span>
-                          <span className="font-bold text-gray-800">{entry.closeTime || 'N/A'}</span>
-                        </div>
+                    <div onClick={() => setSelectedHistoryItem(latestHandover)} className="border-2 border-black bg-[#FAFCF8] rounded-2xl p-4 cursor-pointer shadow-sm hover:shadow-md transition active:scale-[0.99] group space-y-2">
+                      <div className="flex justify-between items-baseline">
+                        <span className="font-extrabold text-base text-gray-900">{formatDisplayDate(latestHandover.dateStr || latestHandover.timestamp)}</span>
+                        {latestHandover.takings && latestHandover.takings !== "0.00" && latestHandover.takings !== "0" && (
+                          <span className="font-mono text-sm font-black text-gray-900">£{latestHandover.takings}</span>
+                        )}
                       </div>
-                    )}
+                      <div className="flex items-center space-x-2 text-[10px] text-gray-500 font-mono">
+                        <span>Duty: {latestHandover.manager}</span>
+                        {latestHandover.closeTime && (
+                          <><span>•</span><span>Close: {latestHandover.closeTime}</span></>
+                        )}
+                        <span>•</span>
+                        <span className="text-red-600 font-bold">{(latestHandover.eightySixList || []).length} items 86'd</span>
+                      </div>
+                      {latestHandover.generalNotes && (
+                        <p className="text-xs text-gray-700 italic line-clamp-2 leading-relaxed">"{latestHandover.generalNotes}"</p>
+                      )}
 
-                    {entry.generalNotes && (
-                      <p className="text-xs text-gray-600 line-clamp-2 leading-relaxed font-sans">
-                        {entry.generalNotes}
-                      </p>
-                    )}
+                      <ReactionBar item={latestHandover} />
 
-                    <div className="flex justify-between items-center text-[10px] font-bold text-gray-400 pt-1 group-hover:text-black">
-                      <span>{(entry.eightySixList || []).length} items 86'd • {(entry.tomorrowTasks || []).length} follow-ups</span>
-                      <ChevronRight className="w-3.5 h-3.5" />
+                      <div className="flex justify-between items-center pt-1 text-xs font-bold text-black border-t border-gray-100">
+                        <span>Tap to open full shift briefing</span>
+                        <ChevronRight className="w-4 h-4 group-hover:translate-x-0.5 transition-transform" />
+                      </div>
                     </div>
                   </div>
-                );
-              })
+                )}
+
+                <div className="space-y-2 pt-1">
+                  {!historySearch && !historyDateFilter && filteredHistory.length > 0 && (
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400 px-1 block">Previous Diaries ({filteredHistory.length})</span>
+                  )}
+                  {filteredHistory.map((item) => (
+                    <div key={item.id} onClick={() => setSelectedHistoryItem(item)} className="border border-gray-200 rounded-xl p-3.5 hover:border-black transition cursor-pointer bg-white shadow-sm space-y-1.5 group">
+                      <div className="flex justify-between items-baseline">
+                        <span className="font-bold text-xs text-gray-900 group-hover:text-black">{formatDisplayDate(item.dateStr || item.timestamp)}</span>
+                        {item.takings && item.takings !== "0.00" && item.takings !== "0" ? (
+                          <span className="font-mono text-xs font-bold text-gray-900">£{item.takings}</span>
+                        ) : (
+                          <span className="text-[9px] font-bold uppercase bg-amber-50 text-amber-800 px-1.5 py-0.5 rounded">Day Note</span>
+                        )}
+                      </div>
+                      <div className="flex items-center space-x-2 text-[10px] text-gray-400 font-mono">
+                        <span>{item.manager}</span>
+                        {item.closeTime && <><span>•</span><span>{item.closeTime}</span></>}
+                        <span>•</span>
+                        <span>{(item.eightySixList || []).length} on 86</span>
+                      </div>
+                      {item.generalNotes && <p className="text-xs text-gray-500 line-clamp-1 italic">"{item.generalNotes}"</p>}
+
+                      <ReactionBar item={item} />
+                    </div>
+                  ))}
+                </div>
+              </>
             )}
           </div>
 
-          {/* Read Modal for Historical Entry */}
-          {selectedEntryModal && (
+          {/* Detailed Modal Popup */}
+          {selectedHistoryItem && (
             <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-              <div className="bg-white w-full max-w-sm rounded-3xl overflow-hidden shadow-2xl border border-gray-200 flex flex-col max-h-[85vh]">
+              <div className="bg-white w-full max-w-sm rounded-3xl overflow-hidden shadow-2xl border border-gray-200 flex flex-col max-h-[80vh]">
                 <div className="px-5 pt-5 pb-3 border-b border-gray-100 flex justify-between items-start bg-gray-50/50">
                   <div>
                     <span className="text-[10px] font-mono uppercase text-gray-400 block font-bold">
-                      {selectedEntryModal.manager.toUpperCase()} • {selectedEntryModal.entryType || 'LOG'}
+                      LOGGED BY {selectedHistoryItem.manager.toUpperCase()} • {selectedHistoryItem.entryType || 'HANDOVER'}
                     </span>
-                    <h2 className="text-base font-black text-gray-900 leading-snug mt-0.5">
-                      {selectedEntryModal.dateStr}
-                    </h2>
+                    <h2 className="text-base font-black text-gray-900 leading-snug mt-0.5">{formatDisplayDate(selectedHistoryItem.dateStr || selectedHistoryItem.timestamp)}</h2>
+                    {selectedHistoryItem.takings && selectedHistoryItem.takings !== "0.00" && selectedHistoryItem.takings !== "0" && (
+                      <span className="text-xs font-mono font-bold text-gray-900 mt-1 block">
+                        Takings: £{selectedHistoryItem.takings} {selectedHistoryItem.closeTime ? `| Close: ${selectedHistoryItem.closeTime}` : ''}
+                      </span>
+                    )}
                   </div>
-                  <button onClick={() => setSelectedEntryModal(null)} className="p-1.5 text-gray-400 hover:text-black bg-white rounded-full border border-gray-200 shadow-sm">
+                  <button onClick={() => setSelectedHistoryItem(null)} className="p-1.5 text-gray-400 hover:text-black bg-white rounded-full border border-gray-200 shadow-sm">
                     <X className="w-4 h-4" />
                   </button>
                 </div>
 
-                <div className="p-5 overflow-y-auto space-y-4 text-xs">
-                  {selectedEntryModal.takings && selectedEntryModal.takings !== '0.00' && (
-                    <div className="grid grid-cols-2 gap-2 text-xs font-mono bg-neutral-50 p-2.5 rounded-xl border border-neutral-200">
-                      <div>
-                        <span className="text-gray-400 block text-[9px] uppercase font-bold">Takings</span>
-                        <span className="font-black text-gray-900">£{Number(selectedEntryModal.takings).toFixed(2)}</span>
-                      </div>
-                      <div>
-                        <span className="text-gray-400 block text-[9px] uppercase font-bold">Close Time</span>
-                        <span className="font-black text-gray-900">{selectedEntryModal.closeTime || 'N/A'}</span>
-                      </div>
-                    </div>
-                  )}
+                <div className="p-5 overflow-y-auto space-y-3.5 text-xs">
+                  <div className="p-2.5 bg-gray-50 rounded-xl border border-gray-100">
+                    <span className="font-bold uppercase tracking-wider text-[10px] text-gray-400 block mb-1">Manager Acknowledgements</span>
+                    <ReactionBar item={selectedHistoryItem} />
+                  </div>
 
-                  {selectedEntryModal.generalNotes && (
-                    <div>
-                      <span className="font-bold uppercase tracking-wider text-[10px] text-gray-400 block mb-1">
-                        General Notes
-                      </span>
-                      <p className="bg-gray-50 p-3 rounded-xl text-gray-800 leading-relaxed font-sans whitespace-pre-wrap">
-                        {selectedEntryModal.generalNotes}
-                      </p>
-                    </div>
-                  )}
+                  <div>
+                    <span className="font-bold uppercase tracking-wider text-[10px] text-gray-400 block mb-1">General Notes</span>
+                    <p className="p-3 bg-gray-50 rounded-xl text-gray-800 leading-relaxed italic border border-gray-100 whitespace-pre-line">
+                      {selectedHistoryItem.generalNotes || 'No notes logged.'}
+                    </p>
+                  </div>
 
-                  {(selectedEntryModal.eightySixList || []).length > 0 && (
-                    <div>
-                      <span className="font-bold uppercase tracking-wider text-[10px] text-gray-400 block mb-1">
-                        86 List
-                      </span>
+                  <div>
+                    <span className="font-bold uppercase tracking-wider text-[10px] text-gray-400 block mb-1">86 List (Out of Stock SKUs)</span>
+                    {(selectedHistoryItem.eightySixList || []).length === 0 ? (
+                      <p className="p-2 text-gray-400 italic">No items out of stock.</p>
+                    ) : (
                       <div className="border border-gray-200 rounded-xl divide-y divide-gray-100 overflow-hidden bg-white">
-                        {selectedEntryModal.eightySixList.map((item, idx) => (
-                          <div key={idx} className="p-2 flex justify-between items-center text-xs">
-                            <span className="font-bold text-gray-900">{item.name || item}</span>
-                            <span className="text-[10px] text-gray-400 font-mono">{item.supplier || 'Bar'}</span>
+                        {selectedHistoryItem.eightySixList.map((prod, i) => (
+                          <div key={i} className="p-2 flex justify-between items-center text-xs">
+                            <div><span className="font-bold text-gray-900">{prod.name || prod}</span>{prod.sku && <span className="font-mono text-[9px] text-gray-400 ml-1.5">[{prod.sku}]</span>}</div>
+                            <span className="font-mono text-[11px] font-bold text-red-600 bg-red-50 px-2 py-0.5 rounded">{prod.qty || 1} {prod.unit || 'unit'}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {selectedHistoryItem.tomorrowTasks && selectedHistoryItem.tomorrowTasks.length > 0 && (
+                    <div>
+                      <span className="font-bold uppercase tracking-wider text-[10px] text-gray-400 block mb-1">Tomorrow / Handover Actions</span>
+                      <div className="p-3 bg-gray-50 rounded-xl border border-gray-100 space-y-1">
+                        {selectedHistoryItem.tomorrowTasks.map((t, idx) => (
+                          <div key={idx} className="flex items-center space-x-1.5 text-gray-800">
+                            <span className="text-[10px] text-gray-400">•</span>
+                            <span>{t}</span>
                           </div>
                         ))}
                       </div>
                     </div>
                   )}
 
-                  {(selectedEntryModal.tomorrowTasks || []).length > 0 && (
-                    <div>
-                      <span className="font-bold uppercase tracking-wider text-[10px] text-gray-400 block mb-1">
-                        Follow-Up / Tomorrow Tasks
-                      </span>
-                      <div className="bg-gray-50 p-2.5 rounded-xl space-y-1">
-                        {selectedEntryModal.tomorrowTasks.map((t, idx) => (
-                          <p key={idx} className="text-gray-800 font-medium">• {t}</p>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {selectedEntryModal.fileUrl && (
-                    <a
-                      href={selectedEntryModal.fileUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="w-full py-2.5 bg-black text-white rounded-xl flex items-center justify-center space-x-1.5 font-bold hover:bg-neutral-800 transition text-[11px] shadow-sm mt-2"
-                    >
-                      <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
-                      <span>Open Handover File in Drive</span>
+                  {selectedHistoryItem.fileUrl && (
+                    <a href={selectedHistoryItem.fileUrl} target="_blank" rel="noreferrer" className="w-full py-2.5 bg-black text-white rounded-xl flex items-center justify-center space-x-1.5 font-bold hover:bg-gray-800 transition shadow-sm mt-2">
+                      <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
+                      <span>Open Drive Spreadsheet</span>
                       <ExternalLink className="w-3 h-3 text-gray-400 ml-1" />
                     </a>
                   )}
@@ -671,22 +667,218 @@ export default function HandoverApp({ currentUser, onBackToHub, onLogout }) {
             </div>
           )}
         </div>
+      ) : (
+        
+        /* NEW ENTRY VIEW */
+        <div className="flex-1 flex flex-col overflow-y-auto px-5 py-3 space-y-5 pb-24">
+          <div className="border-b border-gray-100 pb-3 space-y-3">
+            <div>
+              <p className="text-gray-500 italic text-xs font-serif">Shift Wrap-Up</p>
+              <h1 className="text-xl font-black tracking-tight text-gray-900">{formatDisplayDate(shiftDate)}</h1>
+            </div>
+            {statusMsg && (
+              <div className={`p-2.5 rounded-xl text-xs font-semibold ${statusMsg.type === 'success' ? 'bg-green-50 text-green-800 border border-green-200' : 'bg-red-50 text-red-800 border border-red-200'}`}>{statusMsg.text}</div>
+            )}
+            
+            <div className="grid grid-cols-12 gap-1.5 text-xs">
+              <div className="col-span-4 min-w-0">
+                <label className="block text-[10px] font-bold uppercase text-gray-400 mb-1 truncate">Shift Date</label>
+                <input type="date" value={shiftDate} onChange={(e) => setShiftDate(e.target.value)} className="w-full min-w-0 bg-[#EDEDED] py-2 px-1.5 rounded-lg font-semibold text-gray-900 text-[11px] focus:outline-none appearance-none" />
+              </div>
+              <div className="col-span-4 min-w-0">
+                <label className="block text-[10px] font-bold uppercase text-gray-400 mb-1 truncate">Duty Manager</label>
+                <input type="text" readOnly value={`${manager} (${role})`} className="w-full min-w-0 bg-[#EDEDED] py-2 px-2.5 rounded-lg font-semibold text-gray-900 text-[11px] cursor-not-allowed focus:outline-none" />
+              </div>
+              <div className="col-span-4 min-w-0">
+                <label className="block text-[10px] font-bold uppercase text-gray-400 mb-1 truncate">Close Time</label>
+                <select value={closeTime} onChange={(e) => setCloseTime(e.target.value)} className="w-full min-w-0 bg-[#EDEDED] py-2 px-1 rounded-lg font-semibold text-gray-900 text-[11px] focus:outline-none">
+                  <option value="">Blank (Day Note)</option>
+                  {timeOptions15Min.map((t) => (
+                    <option key={t} value={t}>{t}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="flex items-center space-x-3 pt-1">
+              <label className="text-sm font-extrabold text-gray-900">Takings (£):</label>
+              <div className="relative bg-[#EDEDED] rounded-lg px-3 py-1.5 flex items-center">
+                <span className="text-xs font-bold text-gray-500 mr-1">£</span>
+                <input 
+                  type="text" 
+                  placeholder="Leave blank for note"
+                  value={takings} 
+                  onChange={(e) => setTakings(e.target.value)} 
+                  className="w-36 text-xs font-bold bg-transparent text-gray-900 focus:outline-none placeholder-gray-400" 
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* LARGE GENERAL NOTES BOX */}
+          <div className="space-y-1">
+            <div className="flex justify-between items-baseline">
+              <label className="block text-xs font-extrabold text-gray-900">General Notes</label>
+              <span className={`text-[10px] font-mono ${generalNotes.length >= 1200 ? 'text-red-500 font-bold' : 'text-gray-400'}`}>
+                {generalNotes.length}/1250
+              </span>
+            </div>
+            <div className="relative bg-[#EDEDED] rounded-xl p-3 focus-within:bg-gray-100 transition">
+              <textarea 
+                rows={6} 
+                maxLength={1250} 
+                value={generalNotes} 
+                onChange={(e) => setGeneralNotes(e.target.value)} 
+                placeholder="Log all shift reckonings, customer feedback, tap or cellar observations, maintenance items, incidentals, and daytime or kitchen clean notes..." 
+                className="w-full text-xs text-gray-900 bg-transparent focus:outline-none resize-none leading-relaxed placeholder-gray-400" 
+              />
+            </div>
+          </div>
+
+          {/* 86 LIST */}
+          <div className="space-y-2 bg-gray-50 border border-gray-200 rounded-xl p-3.5">
+            <div className="flex justify-between items-center">
+              <span className="block font-bold text-gray-900 uppercase tracking-wider text-[11px]">86 List (Stock SKU Lookup)</span>
+              <span className="text-[10px] text-gray-400 font-mono">{catalog.length} SKUs ready</span>
+            </div>
+            
+            <form onSubmit={handleAdd86} className="space-y-2">
+              <div className="relative">
+                <input
+                  type="text"
+                  value={eightySixInput}
+                  onChange={(e) => { setEightySixInput(e.target.value); setSelectedProduct(null); }}
+                  placeholder="Search product catalog or enter item..."
+                  className="w-full bg-white border border-gray-300 py-2 pl-3 pr-8 rounded-lg text-xs italic focus:outline-none placeholder-gray-400"
+                />
+                {eightySixInput && (
+                  <button type="button" onClick={() => { setEightySixInput(''); setSelectedProduct(null); }} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-black">
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+                {catalogSuggestions.length > 0 && !selectedProduct && (
+                  <div className="absolute z-20 left-0 right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg divide-y divide-gray-100 max-h-40 overflow-y-auto">
+                    {catalogSuggestions.map(prod => (
+                      <button key={prod.id} type="button" onClick={() => { setSelectedProduct(prod); setEightySixInput(prod.name); }} className="w-full text-left px-3 py-2 text-xs hover:bg-gray-100 flex items-center justify-between">
+                        <div><span className="font-bold text-gray-900">{prod.name}</span><span className="text-[10px] text-gray-400 font-mono ml-2">[{prod.id}]</span></div>
+                        <span className="text-[10px] text-gray-500 italic">({prod.unit})</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="grid grid-cols-12 gap-2">
+                <div className="col-span-4">
+                  <input 
+                    type="number" 
+                    step="any" 
+                    value={eightySixQty} 
+                    onChange={(e) => setEightySixQty(e.target.value)} 
+                    placeholder="Qty" 
+                    className="w-full bg-white border border-gray-300 py-1.5 px-2.5 rounded-lg text-xs font-bold text-center focus:outline-none placeholder-gray-400" 
+                  />
+                </div>
+                <div className="col-span-8">
+                  <button type="submit" disabled={!eightySixInput.trim()} className="w-full py-1.5 bg-black text-white hover:bg-gray-800 disabled:opacity-40 rounded-lg text-xs font-bold transition flex items-center justify-center space-x-1">
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Add to 86 List</span>
+                  </button>
+                </div>
+              </div>
+            </form>
+
+            <div className="divide-y divide-gray-200 pt-1">
+              {eightySixList.length === 0 ? (
+                <p className="text-[11px] text-gray-400 italic py-2 text-center">No items 86'd this shift.</p>
+              ) : (
+                eightySixList.map((item, idx) => (
+                  <div key={idx} className="flex justify-between items-center py-2 text-xs">
+                    <div>
+                      <span className="font-bold text-gray-900">{item.name}</span>
+                      <div className="flex items-center space-x-1.5 text-[10px] text-gray-400 font-mono">
+                        <span>SKU: {item.sku}</span><span>•</span><span>{item.supplier}</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <span className="font-mono text-[11px] font-bold text-red-600 bg-red-50 px-2 py-0.5 rounded">{item.qty} {item.unit}</span>
+                      <button type="button" onClick={() => setEightySixList(prev => prev.filter((_, i) => i !== idx))} className="text-gray-400 hover:text-red-500 font-mono px-1">✕</button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          {/* TOMORROW TASKS */}
+          <div className="space-y-2">
+            <div className="flex justify-between items-center">
+              <label className="block text-xs font-extrabold text-gray-900">Tomorrow / Handover Actions</label>
+              {sheetDuties.length > 0 && (
+                <span className="text-[10px] text-gray-400 font-mono">{sheetDuties.length} Duties live</span>
+              )}
+            </div>
+            
+            <div className="relative">
+              <input 
+                type="text" 
+                value={tomorrowInput} 
+                onChange={(e) => setTomorrowInput(e.target.value)} 
+                onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), handleAddTomorrow())} 
+                placeholder="Search duties or type custom task..." 
+                className="w-full bg-[#EDEDED] rounded-xl py-2 px-3 text-xs focus:outline-none pr-10 placeholder-gray-400" 
+              />
+              <button type="button" onClick={() => handleAddTomorrow()} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-600 font-bold hover:text-black">→</button>
+            </div>
+
+            {dutySuggestions.length > 0 && (
+              <div className="border border-neutral-200 rounded-xl overflow-hidden divide-y divide-neutral-100 bg-[#FBFBFB]">
+                {dutySuggestions.map((suggestion, idx) => (
+                  <button 
+                    key={idx} 
+                    type="button" 
+                    onClick={() => handleAddTomorrow(suggestion)} 
+                    className="w-full text-left px-3 py-2 text-xs text-black flex justify-between items-center hover:bg-neutral-100"
+                  >
+                    <span>{suggestion}</span>
+                    <span className="text-neutral-400 font-mono text-[11px]">+ Add Duty</span>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <div className="divide-y divide-gray-100 pt-1">
+              {tomorrowList.length === 0 ? (
+                <p className="text-[11px] text-gray-400 italic py-2 text-center">No tomorrow tasks assigned yet.</p>
+              ) : (
+                tomorrowList.map((item, idx) => (
+                  <div key={idx} className="flex justify-between items-center py-2 text-xs text-gray-900 font-medium">
+                    <span>{item}</span>
+                    <button type="button" onClick={() => setTomorrowList(prev => prev.filter((_, i) => i !== idx))} className="text-gray-400 hover:text-black px-1 font-mono">✕</button>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div className="pt-2">
+            <button 
+              type="button" 
+              onClick={handleSubmit} 
+              disabled={isSubmitting} 
+              className="w-full py-3 bg-[#141414] text-white rounded-xl text-xs font-bold hover:bg-black transition disabled:opacity-50 flex items-center justify-center space-x-1.5"
+            >
+              <Send className="w-3.5 h-3.5" />
+              <span>{isSubmitting ? 'Saving to Drive Folder...' : 'Submit Handover Report'}</span>
+            </button>
+          </div>
+        </div>
       )}
 
-      {/* Floating Bottom Nav */}
+      {/* Floating Bottom Navigation */}
       <nav className="fixed bottom-2 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-[390px] z-50 rounded-2xl bg-[#111111]/95 backdrop-blur-md text-white py-2 px-3 flex justify-around items-center text-xs font-semibold shadow-2xl border border-white/10 select-none pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))]">
-        <button 
-          onClick={() => setActiveTab('new')} 
-          className={`flex-1 py-1.5 text-center rounded-xl transition ${activeTab === 'new' ? 'text-white bg-white/15 font-bold shadow-inner' : 'text-gray-400 hover:text-white'}`}
-        >
-          New Entry
-        </button>
-        <button 
-          onClick={() => setActiveTab('diary')} 
-          className={`flex-1 py-1.5 text-center rounded-xl transition ${activeTab === 'diary' ? 'text-white bg-white/15 font-bold shadow-inner' : 'text-gray-400 hover:text-white'}`}
-        >
-          Handover Diary
-        </button>
+        <button onClick={() => setCurrentTab('history')} className={`flex-1 py-1.5 text-center rounded-xl transition ${currentTab === 'history' ? 'text-white bg-white/15 font-bold shadow-inner' : 'text-gray-400 hover:text-white'}`}>Diary</button>
+        <button onClick={() => setCurrentTab('today')} className={`flex-1 py-1.5 text-center rounded-xl transition ${currentTab === 'today' ? 'text-white bg-white/15 font-bold shadow-inner' : 'text-gray-400 hover:text-white'}`}>New Entry</button>
       </nav>
     </div>
   );

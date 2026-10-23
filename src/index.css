@@ -1,3 +1,53 @@
-@import "tailwindcss/base";
-@import "tailwindcss/components";
-@import "tailwindcss/utilities";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Base iOS app rigidity & viewport lock */
+html, body {
+  touch-action: manipulation;
+  overscroll-behavior-y: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+}
+
+/* 16px minimum prevents iOS Safari input zoom */
+input, select, textarea {
+  font-size: 16px !important;
+  touch-action: manipulation;
+}
+
+/* Allow text selection inside editable fields */
+input, textarea {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* Force portrait prompt if rotated on phone */
+@media screen and (orientation: landscape) and (max-height: 500px) {
+  #root::after {
+    content: "Please rotate your phone to portrait mode";
+    position: fixed;
+    inset: 0;
+    background: #000000;
+    color: #ffffff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    z-index: 999999;
+  }
+}
+
+/* Hide scrollbars for clean UI */
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
