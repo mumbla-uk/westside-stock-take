@@ -12,7 +12,9 @@ import {
   ClipboardList, 
   FileSpreadsheet, 
   ExternalLink,
-  Send
+  Send,
+  CheckCircle2,
+  ListTodo
 } from 'lucide-react';
 import { useTwoFingerSwipe } from './useTwoFingerSwipe';
 
@@ -68,6 +70,11 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
   const [selectedAreas, setSelectedAreas] = useState([]);
   const [view, setView] = useState('main'); // 'main' | 'settings'
 
+  // Order Mode state: allows interactive item checking and order confirmation
+  const [orderMode, setOrderMode] = useState(false);
+  const [checkedItemIds, setCheckedItemIds] = useState(new Set());
+  const [placedSuppliers, setPlacedSuppliers] = useState(new Set());
+
   const parseCatalog = (data) => {
     if (!data) return [];
     if (Array.isArray(data)) return data;
@@ -121,7 +128,6 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
 
   const { dayName, weekBeginningStr, fullDateStr } = useMemo(() => getFormattedDates(), []);
 
-  // TWO-FINGER SWIPE NAVIGATION HOOK
   const swipeHandlers = useTwoFingerSwipe({
     disabled: view === 'settings',
     onSwipeLeft: () => {
@@ -192,12 +198,23 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
     setOrderOverrides(prev => ({ ...prev, [id]: Math.max(0, (prev[id] ?? 0) + delta) }));
   };
 
-const handleSaveToSheet = async () => {
+  const toggleCheckItem = (id) => {
+    setCheckedItemIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  // Stocktake save: updates master sheet AND compiles snapshot record into Drive folder
+  const handleSaveToSheet = async () => {
     setSaving(true);
     setStatusMsg(null);
     try {
       const payload = {
         action: 'save_counts',
+        manager: currentUser?.name || 'Duty Manager',
         items: products.map(p => ({
           id: p.id,
           count: counts[p.id] ?? 0
@@ -212,7 +229,8 @@ const handleSaveToSheet = async () => {
       const json = await res.json();
 
       if (json && json.status === 'success') {
-        setStatusMsg({ type: 'success', text: 'Stock counts saved to Google Sheet!' });
+        setStatusMsg({ type: 'success', text: 'Stock counts saved & compiled to Drive folder!' });
+        if (json.fileUrl) setDriveFileUrl(json.fileUrl);
       } else {
         setStatusMsg({ type: 'error', text: json?.message || 'Error saving counts.' });
       }
@@ -294,9 +312,13 @@ const handleSaveToSheet = async () => {
     setTimeout(() => setCopyFeedback(null), 2000);
   };
 
-  const handleSaveSupplierOrderToDrive = async (supplierName, items) => {
+  // Unified save & place handler for orders
+  const handleSaveSupplierOrder = async (supplierName, items, isPlaced = false) => {
     setSavingToDrive(true);
-    setStatusMsg({ type: 'info', text: `Saving ${supplierName} order into Drive folder...` });
+    setStatusMsg({ 
+      type: 'info', 
+      text: isPlaced ? `Marking ${supplierName} order as placed...` : `Saving ${supplierName} order to folder...` 
+    });
 
     try {
       const payload = {
@@ -304,13 +326,15 @@ const handleSaveToSheet = async () => {
         supplier: supplierName,
         date: new Date().toISOString().slice(0, 10),
         manager: currentUser?.name || 'Duty Manager',
+        isPlaced: isPlaced,
         items: items.map(it => ({
           sku: it.id,
           name: it.name,
           orderQty: it.orderQty,
           unit: it.unit || 'unit',
           par: it.par || 0,
-          currentCount: counts[it.id] ?? 0
+          currentCount: counts[it.id] ?? 0,
+          checked: checkedItemIds.has(it.id)
         }))
       };
 
@@ -322,14 +346,81 @@ const handleSaveToSheet = async () => {
       const json = await res.json();
 
       if (json && json.status === 'success') {
-        setStatusMsg({ type: 'success', text: `${supplierName} order saved to Order Lists folder!` });
+        setStatusMsg({ 
+          type: 'success', 
+          text: isPlaced 
+            ? `${supplierName} marked as placed & team alerted!` 
+            : `${supplierName} order saved to folder!` 
+        });
+        if (isPlaced) {
+          setPlacedSuppliers(prev => new Set(prev).add(supplierName));
+        }
         if (json.fileUrl) setDriveFileUrl(json.fileUrl);
       } else {
-        setStatusMsg({ type: 'error', text: 'Error saving order list to Drive.' });
+        setStatusMsg({ type: 'error', text: 'Error saving order to Drive.' });
       }
     } catch (err) {
       console.error(err);
-      setStatusMsg({ type: 'error', text: 'Network error saving order list.' });
+      setStatusMsg({ type: 'error', text: 'Network error saving order.' });
+    } finally {
+      setSavingToDrive(false);
+    }
+  };
+
+  // Save all orders in a single consolidated action
+  const handleSaveAllOrders = async (isPlaced = false) => {
+    const suppliers = Object.keys(ordersBySupplier);
+    if (suppliers.length === 0) return;
+
+    setSavingToDrive(true);
+    setStatusMsg({ type: 'info', text: isPlaced ? "Marking all orders as placed..." : "Saving all orders to folder..." });
+
+    try {
+      const allItems = [];
+      suppliers.forEach(sup => {
+        ordersBySupplier[sup].forEach(it => {
+          allItems.push({
+            sku: it.id,
+            name: `[${sup}] ${it.name}`,
+            orderQty: it.orderQty,
+            unit: it.unit || 'unit',
+            par: it.par || 0,
+            currentCount: counts[it.id] ?? 0,
+            checked: checkedItemIds.has(it.id)
+          });
+        });
+      });
+
+      const payload = {
+        action: 'save_order_list',
+        supplier: 'Consolidated All Suppliers',
+        date: new Date().toISOString().slice(0, 10),
+        manager: currentUser?.name || 'Duty Manager',
+        isPlaced: isPlaced,
+        items: allItems
+      };
+
+      const res = await fetch(HARDWIRED_SCRIPT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(payload)
+      });
+      const json = await res.json();
+
+      if (json && json.status === 'success') {
+        setStatusMsg({ 
+          type: 'success', 
+          text: isPlaced ? "All orders placed & team notified!" : "All supplier orders saved to folder!" 
+        });
+        if (isPlaced) {
+          setPlacedSuppliers(new Set(suppliers));
+        }
+        if (json.fileUrl) setDriveFileUrl(json.fileUrl);
+      } else {
+        setStatusMsg({ type: 'error', text: 'Error saving all orders.' });
+      }
+    } catch (err) {
+      setStatusMsg({ type: 'error', text: 'Network error saving orders.' });
     } finally {
       setSavingToDrive(false);
     }
@@ -340,7 +431,7 @@ const handleSaveToSheet = async () => {
       {...swipeHandlers}
       className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 overflow-x-hidden relative"
     >
-      {/* Top Header with Safe Area Notch Clearance */}
+      {/* Top Header */}
       <header className="flex items-center justify-between px-5 pt-[max(1.5rem,env(safe-area-inset-top))] pb-2 border-b border-gray-100 flex-shrink-0 bg-white z-20">
         <div className="flex items-center space-x-2">
           {onBackToHub && (
@@ -380,7 +471,6 @@ const handleSaveToSheet = async () => {
           </div>
 
           <div className="space-y-4 text-[11px]">
-            {/* Direct Master Sheet Link */}
             <div className="p-3 bg-gray-50 border border-gray-200 rounded-xl space-y-2">
               <div className="flex items-center justify-between">
                 <div>
@@ -431,7 +521,7 @@ const handleSaveToSheet = async () => {
         /* TAB 2: PAR-LEVEL ORDERS BY SUPPLIER */
         <div className="flex-1 flex flex-col overflow-hidden pb-20">
           <div className="px-5 pt-3 pb-2 border-b border-gray-100 flex-shrink-0">
-            <div className="flex justify-between items-start mb-1.5">
+            <div className="flex justify-between items-start mb-2">
               <div>
                 <div className="flex items-center space-x-1.5">
                   <p className="text-gray-500 italic text-[11px] font-serif">Par-Level Reorder Calculations</p>
@@ -439,18 +529,60 @@ const handleSaveToSheet = async () => {
                 </div>
                 <h1 className="text-xl font-black tracking-tight text-gray-900">Orders by Supplier</h1>
               </div>
+
+              {/* Order Mode Toggle */}
               <button
-                onClick={handleCopyAll}
-                disabled={Object.keys(ordersBySupplier).length === 0}
-                className="flex items-center space-x-1 px-2.5 py-1 bg-[#F3F3F3] hover:bg-gray-200 disabled:opacity-40 rounded-lg text-xs font-bold text-gray-900 transition"
+                type="button"
+                onClick={() => setOrderMode(!orderMode)}
+                className={`flex items-center space-x-1 px-2.5 py-1 rounded-lg text-[10px] font-bold border transition ${
+                  orderMode 
+                    ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm' 
+                    : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+                }`}
               >
-                {copyFeedback === 'ALL' ? <Check className="w-3 h-3 text-green-600" /> : <Copy className="w-3 h-3" />}
-                <span>{copyFeedback === 'ALL' ? 'Copied' : 'Copy All'}</span>
+                <ListTodo className="w-3 h-3" />
+                <span>{orderMode ? 'Order Mode ON' : 'Order Mode'}</span>
               </button>
             </div>
 
+            {/* Top Bulk Action Bar */}
+            <div className="flex items-center justify-between pt-0.5">
+              <span className="text-[10px] text-gray-400 font-mono">
+                {Object.keys(ordersBySupplier).length} Suppliers active
+              </span>
+
+              <div className="flex items-center space-x-1.5">
+                <button
+                  onClick={handleCopyAll}
+                  disabled={Object.keys(ordersBySupplier).length === 0}
+                  className="flex items-center space-x-1 px-2 py-0.5 bg-[#F3F3F3] hover:bg-gray-200 disabled:opacity-40 rounded-md text-[10px] font-bold text-gray-800 transition"
+                >
+                  {copyFeedback === 'ALL' ? <Check className="w-3 h-3 text-green-600" /> : <Copy className="w-2.5 h-2.5" />}
+                  <span>{copyFeedback === 'ALL' ? 'Copied' : 'Copy All'}</span>
+                </button>
+                <button
+                  disabled={savingToDrive || Object.keys(ordersBySupplier).length === 0}
+                  onClick={() => handleSaveAllOrders(false)}
+                  className="flex items-center space-x-1 px-2 py-0.5 bg-[#F3F3F3] hover:bg-gray-200 disabled:opacity-40 rounded-md text-[10px] font-bold text-gray-800 transition"
+                >
+                  <FileSpreadsheet className="w-2.5 h-2.5 text-gray-600" />
+                  <span>Save All</span>
+                </button>
+                {orderMode && (
+                  <button
+                    disabled={savingToDrive || Object.keys(ordersBySupplier).length === 0}
+                    onClick={() => handleSaveAllOrders(true)}
+                    className="flex items-center space-x-1 px-2 py-0.5 bg-black text-white hover:bg-neutral-800 disabled:opacity-40 rounded-md text-[10px] font-bold transition shadow-sm"
+                  >
+                    <CheckCircle2 className="w-2.5 h-2.5 text-emerald-400" />
+                    <span>Place All</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
             {statusMsg && (
-              <div className={`p-2 rounded-xl text-[11px] font-semibold my-1 ${statusMsg.type === 'success' ? 'bg-green-50 text-green-800 border border-green-200' : statusMsg.type === 'info' ? 'bg-blue-50 text-blue-800 border border-blue-200' : 'bg-red-50 text-red-800 border border-red-200'}`}>
+              <div className={`p-2 rounded-xl text-[11px] font-semibold mt-2 ${statusMsg.type === 'success' ? 'bg-green-50 text-green-800 border border-green-200' : statusMsg.type === 'info' ? 'bg-blue-50 text-blue-800 border border-blue-200' : 'bg-red-50 text-red-800 border border-red-200'}`}>
                 {statusMsg.text}
               </div>
             )}
@@ -472,60 +604,109 @@ const handleSaveToSheet = async () => {
               Object.keys(ordersBySupplier).map(supplier => {
                 const items = ordersBySupplier[supplier];
                 const totalUnits = items.reduce((sum, item) => sum + item.orderQty, 0);
+                const isSupplierPlaced = placedSuppliers.has(supplier);
+                const allItemsChecked = items.every(it => checkedItemIds.has(it.id));
+
                 return (
-                  <div key={supplier} className="border border-gray-200 rounded-2xl overflow-hidden bg-white shadow-sm">
+                  <div key={supplier} className={`border rounded-2xl overflow-hidden bg-white shadow-sm transition-all ${isSupplierPlaced ? 'border-emerald-300 bg-emerald-50/10' : 'border-gray-200'}`}>
                     <div className="bg-[#F8F8F8] px-3.5 py-2 flex items-center justify-between border-b border-gray-200">
-                      <div>
+                      <div className="flex items-center space-x-1.5">
                         <span className="text-xs font-black text-gray-900 uppercase tracking-wide">{supplier}</span>
-                        <span className="text-[10px] text-gray-500 font-mono ml-2 font-bold">({totalUnits} units)</span>
+                        <span className="text-[10px] text-gray-500 font-mono font-bold">({totalUnits} units)</span>
+                        {isSupplierPlaced && (
+                          <span className="text-[8px] font-mono font-bold uppercase bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded">Placed ✓</span>
+                        )}
                       </div>
                       <div className="flex items-center space-x-1.5">
                         <button 
                           onClick={() => handleCopySupplier(supplier, items)} 
                           className="flex items-center space-x-1 px-2 py-0.5 bg-white border border-gray-200 rounded-md text-[10px] font-bold text-gray-800 hover:bg-gray-50 transition"
                         >
-                          {copyFeedback === supplier ? <Check className="w-3 h-3 text-green-600" /> : <Copy className="w-3 h-3" />}
+                          {copyFeedback === supplier ? <Check className="w-3 h-3 text-green-600" /> : <Copy className="w-2.5 h-2.5" />}
                           <span>{copyFeedback === supplier ? 'Copied' : 'Copy'}</span>
                         </button>
                         <button
                           disabled={savingToDrive}
-                          onClick={() => handleSaveSupplierOrderToDrive(supplier, items)}
-                          className="flex items-center space-x-1 px-2 py-0.5 bg-black text-white rounded-md text-[10px] font-bold hover:bg-neutral-800 transition"
+                          onClick={() => handleSaveSupplierOrder(supplier, items, false)}
+                          className="flex items-center space-x-1 px-2 py-0.5 bg-white border border-gray-200 rounded-md text-[10px] font-bold text-gray-800 hover:bg-gray-50 transition"
                         >
-                          <Send className="w-2.5 h-2.5 text-emerald-400" />
-                          <span>Save Drive</span>
+                          <Send className="w-2.5 h-2.5 text-gray-600" />
+                          <span>Save</span>
                         </button>
+                        {orderMode && (
+                          <button
+                            disabled={savingToDrive || isSupplierPlaced}
+                            onClick={() => handleSaveSupplierOrder(supplier, items, true)}
+                            className={`flex items-center space-x-1 px-2 py-0.5 rounded-md text-[10px] font-bold transition shadow-sm ${
+                              isSupplierPlaced
+                                ? 'bg-emerald-100 text-emerald-800 cursor-not-allowed'
+                                : 'bg-black text-white hover:bg-neutral-800'
+                            }`}
+                          >
+                            <CheckCircle2 className="w-2.5 h-2.5 text-emerald-400" />
+                            <span>{isSupplierPlaced ? 'Placed' : 'Confirm Placed'}</span>
+                          </button>
+                        )}
                       </div>
                     </div>
 
                     <div className="divide-y divide-gray-100">
-                      {items.map(item => (
-                        <div key={item.id} className="grid grid-cols-12 items-center px-3.5 py-2 text-xs">
-                          <div className="col-span-7 pr-2">
-                            <span className="font-bold text-gray-900 block leading-tight text-[11px]">{item.name}</span>
-                            <span className="text-[9px] text-gray-400 italic font-mono">
-                              {item.id} | Par: {item.par} | Count: {counts[item.id] ?? 0}
-                            </span>
+                      {items.map(item => {
+                        const isChecked = checkedItemIds.has(item.id);
+                        return (
+                          <div 
+                            key={item.id} 
+                            onClick={() => { if (orderMode) toggleCheckItem(item.id); }}
+                            className={`grid grid-cols-12 items-center px-3.5 py-2 text-xs transition-colors ${
+                              orderMode ? 'cursor-pointer hover:bg-gray-50' : ''
+                            } ${isChecked && orderMode ? 'bg-emerald-50/40 opacity-75' : ''}`}
+                          >
+                            <div className="col-span-7 pr-2 flex items-center space-x-2">
+                              {orderMode && (
+                                <input
+                                  type="checkbox"
+                                  checked={isChecked}
+                                  onChange={() => toggleCheckItem(item.id)}
+                                  className="w-3.5 h-3.5 rounded text-black border-gray-300 focus:ring-0 cursor-pointer"
+                                />
+                              )}
+                              <div>
+                                <span className={`font-bold block leading-tight text-[11px] ${isChecked && orderMode ? 'line-through text-gray-400' : 'text-gray-900'}`}>
+                                  {item.name}
+                                </span>
+                                <span className="text-[9px] text-gray-400 italic font-mono">
+                                  {item.id} | Par: {item.par} | Count: {counts[item.id] ?? 0}
+                                </span>
+                              </div>
+                            </div>
+                            <div className="col-span-5 flex items-center justify-end space-x-1">
+                              {!orderMode ? (
+                                <>
+                                  <button 
+                                    onClick={() => updateOrderAmount(item.id, -1)} 
+                                    className="p-1 text-gray-700 hover:bg-gray-100 rounded transition"
+                                  >
+                                    <Minus className="w-3 h-3" />
+                                  </button>
+                                  <span className="w-8 py-0.5 bg-[#EDEDED] text-center font-mono font-bold text-gray-900 rounded text-xs">
+                                    {item.orderQty}
+                                  </span>
+                                  <button 
+                                    onClick={() => updateOrderAmount(item.id, 1)} 
+                                    className="p-1 text-gray-700 hover:bg-gray-100 rounded transition"
+                                  >
+                                    <Plus className="w-3 h-3" />
+                                  </button>
+                                </>
+                              ) : (
+                                <span className="font-mono text-xs font-bold px-2 py-0.5 bg-gray-100 rounded text-gray-800">
+                                  {item.orderQty} {item.unit}
+                                </span>
+                              )}
+                            </div>
                           </div>
-                          <div className="col-span-5 flex items-center justify-end space-x-1">
-                            <button 
-                              onClick={() => updateOrderAmount(item.id, -1)} 
-                              className="p-1 text-gray-700 hover:bg-gray-100 rounded transition"
-                            >
-                              <Minus className="w-3 h-3" />
-                            </button>
-                            <span className="w-8 py-0.5 bg-[#EDEDED] text-center font-mono font-bold text-gray-900 rounded text-xs">
-                              {item.orderQty}
-                            </span>
-                            <button 
-                              onClick={() => updateOrderAmount(item.id, 1)} 
-                              className="p-1 text-gray-700 hover:bg-gray-100 rounded transition"
-                            >
-                              <Plus className="w-3 h-3" />
-                            </button>
-                          </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 );
@@ -540,7 +721,7 @@ const handleSaveToSheet = async () => {
                 className="w-full py-2 bg-emerald-50 text-emerald-900 border border-emerald-200 rounded-xl flex items-center justify-center space-x-1.5 font-bold hover:bg-emerald-100 transition text-[11px]"
               >
                 <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-700" />
-                <span>Open Saved Order in Drive</span>
+                <span>Open Saved Record in Drive</span>
                 <ExternalLink className="w-3 h-3 text-emerald-600 ml-1" />
               </a>
             )}
