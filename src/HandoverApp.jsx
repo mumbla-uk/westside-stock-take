@@ -67,7 +67,16 @@ function formatDisplayDate(dateInput) {
   return `${dayName} ${dayNum}${getOrdinalSuffix(dayNum)} ${monthName} ${year}`;
 }
 
-export default function HandoverApp({ currentUser, initialCatalog = [], initialHistory = [], onBackToHub, onLogout, onSendNotification }) {
+export default function HandoverApp({ 
+  currentUser, 
+  initialCatalog = [], 
+  initialHistory = [], 
+  initialDeepLink = null,
+  onClearDeepLink,
+  onBackToHub, 
+  onLogout, 
+  onSendNotification 
+}) {
   const [currentTab, setCurrentTab] = useState('history');
 
   const parseCatalog = (data) => {
@@ -144,6 +153,18 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
   });
   const [showNotifications, setShowNotifications] = useState(false);
   const [pushEnabled, setPushEnabled] = useState(false);
+
+  // Auto-open deep linked entry when arrived from notification
+  useEffect(() => {
+    if (initialDeepLink && initialDeepLink.entryId && historyList.length > 0) {
+      const target = historyList.find(item => String(item.id).trim() === String(initialDeepLink.entryId).trim());
+      if (target) {
+        setCurrentTab('history');
+        setSelectedHistoryItem(target);
+        if (onClearDeepLink) onClearDeepLink();
+      }
+    }
+  }, [initialDeepLink, historyList, onClearDeepLink]);
 
   useEffect(() => {
     if (window.OneSignalDeferred) {

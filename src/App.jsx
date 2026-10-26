@@ -8,10 +8,10 @@ import {
   Coins, 
   Truck, 
   ClipboardList, 
-  LogOut,
-  ChevronRight,
-  Delete,
-  Bell
+  LogOut, 
+  ChevronRight, 
+  Delete, 
+  Bell 
 } from 'lucide-react';
 import { useTwoFingerSwipe } from './useTwoFingerSwipe';
 
@@ -36,6 +36,8 @@ function AppLogo({ className = "w-6 h-6", fallbackTextClass = "font-serif text-x
 
 export default function App() {
   const [activeModule, setActiveModule] = useState('hub');
+  const [deepLinkData, setDeepLinkData] = useState(null);
+
   const [currentUser, setCurrentUser] = useState(() => {
     try {
       const cached = localStorage.getItem('wst_auth_user');
@@ -58,6 +60,7 @@ export default function App() {
   const swipeHandlers = useTwoFingerSwipe({
     disabled: activeModule === 'hub' || showFirstOpenPushModal,
     onSwipeRight: () => {
+      setDeepLinkData(null);
       setActiveModule('hub');
     }
   });
@@ -77,7 +80,7 @@ export default function App() {
     fetchStaff();
   }, []);
 
-  // Sync logged-in manager with OneSignal external_id via login()
+  // Sync user with OneSignal via external_id
   useEffect(() => {
     if (!currentUser) return;
 
@@ -96,6 +99,21 @@ export default function App() {
       });
     }
   }, [currentUser]);
+
+  // Deep-link notification click listener
+  useEffect(() => {
+    if (window.OneSignalDeferred) {
+      window.OneSignalDeferred.push(function(OneSignal) {
+        OneSignal.Notifications.addEventListener('click', function(event) {
+          const additionalData = event.notification ? event.notification.additionalData : null;
+          if (additionalData && additionalData.module) {
+            setActiveModule(additionalData.module);
+            setDeepLinkData(additionalData);
+          }
+        });
+      });
+    }
+  }, []);
 
   const triggerPushNotification = async ({ title, message, targetManager = null }) => {
     try {
@@ -200,6 +218,7 @@ export default function App() {
     pinRef.current = '';
     setPinDigits('');
     isCheckingRef.current = false;
+    setDeepLinkData(null);
     setActiveModule('hub');
   };
 
@@ -299,7 +318,12 @@ export default function App() {
       <div {...swipeHandlers} className="h-screen w-full">
         <HandoverApp
           currentUser={currentUser}
-          onBackToHub={() => setActiveModule('hub')}
+          initialDeepLink={deepLinkData}
+          onClearDeepLink={() => setDeepLinkData(null)}
+          onBackToHub={() => {
+            setDeepLinkData(null);
+            setActiveModule('hub');
+          }}
           onLogout={handleLogout}
           onSendNotification={triggerPushNotification}
         />
