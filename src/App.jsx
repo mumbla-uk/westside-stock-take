@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import HandoverApp from './HandoverApp';
 import PettyCashApp from './PettyCashApp';
 import GoodsReceivedApp from './GoodsReceivedApp';
@@ -48,6 +48,10 @@ export default function App() {
   const [authError, setAuthError] = useState(false);
   const [staffRoster, setStaffRoster] = useState([]);
 
+  // Synchronous ref to prevent double-clicks and race conditions during fast typing
+  const pinRef = useRef('');
+  const isCheckingRef = useRef(false);
+
   // Two-finger swipe right on an open module returns directly to the Hub
   const swipeHandlers = useTwoFingerSwipe({
     disabled: activeModule === 'hub',
@@ -72,47 +76,64 @@ export default function App() {
     fetchStaff();
   }, []);
 
-  // Verify PIN whenever 4 digits are entered
+  // Verify PIN whenever 4 digits are reached
   const verifyPin = (enteredPin) => {
+    isCheckingRef.current = true;
     const found = staffRoster.find(s => String(s.pin).trim() === enteredPin.trim());
     if (found) {
       setCurrentUser(found);
       localStorage.setItem('wst_auth_user', JSON.stringify(found));
+      pinRef.current = '';
       setPinDigits('');
       setAuthError(false);
+      isCheckingRef.current = false;
     } else if (enteredPin === '1234') {
       const fallbackUser = { pin: '1234', name: 'Ross', role: 'Assistant General Manager' };
       setCurrentUser(fallbackUser);
       localStorage.setItem('wst_auth_user', JSON.stringify(fallbackUser));
+      pinRef.current = '';
       setPinDigits('');
       setAuthError(false);
+      isCheckingRef.current = false;
     } else {
       setAuthError(true);
       setTimeout(() => {
+        pinRef.current = '';
         setPinDigits('');
         setAuthError(false);
+        isCheckingRef.current = false;
       }, 700);
     }
   };
 
   const handleKeypadPress = (val) => {
-    if (pinDigits.length >= 4) return;
-    const nextPin = pinDigits + val;
+    // Ignore input if checking or error animation active
+    if (isCheckingRef.current || authError) return;
+    if (pinRef.current.length >= 4) return;
+
+    const nextPin = pinRef.current + String(val);
+    pinRef.current = nextPin;
     setPinDigits(nextPin);
+
     if (nextPin.length === 4) {
       verifyPin(nextPin);
     }
   };
 
   const handleBackspace = () => {
-    setPinDigits(prev => prev.slice(0, -1));
+    if (isCheckingRef.current || authError) return;
+    const nextPin = pinRef.current.slice(0, -1);
+    pinRef.current = nextPin;
+    setPinDigits(nextPin);
     setAuthError(false);
   };
 
   const handleLogout = () => {
     localStorage.removeItem('wst_auth_user');
     setCurrentUser(null);
+    pinRef.current = '';
     setPinDigits('');
+    isCheckingRef.current = false;
     setActiveModule('hub');
   };
 
@@ -182,7 +203,12 @@ export default function App() {
             {/* Clear Button */}
             <button
               type="button"
-              onClick={() => { setPinDigits(''); setAuthError(false); }}
+              onClick={() => {
+                if (isCheckingRef.current || authError) return;
+                pinRef.current = '';
+                setPinDigits('');
+                setAuthError(false);
+              }}
               className="w-16 h-16 rounded-full text-xs font-bold text-gray-400 hover:text-black mx-auto flex items-center justify-center transition active:scale-95"
             >
               Clear
