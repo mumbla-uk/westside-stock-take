@@ -10,16 +10,21 @@ import {
   Lock, 
   ExternalLink,
   ChevronRight,
-  Sparkles
+  Sparkles,
+  Bell,
+  MessageCircle,
+  MoreHorizontal
 } from 'lucide-react';
+import { useTwoFingerSwipe } from './useTwoFingerSwipe';
 
 const HARDWIRED_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzcrqf4q-QWiGq0sxMmXqS7QcsxCVfhkJgPfjxOm6KyPShNUD-zkD9HUZy49rDdrfAYJg/exec";
 
+// Required Reactions
 const AVAILABLE_REACTIONS = [
-  { emoji: '👀', label: 'Seen' },
-  { emoji: '👍', label: 'Acknowledged' },
   { emoji: '❤️', label: 'Love' },
-  { emoji: '🍺', label: 'Cheers' }
+  { emoji: '👍', label: 'Like' },
+  { emoji: '🍻', label: 'Cheers' },
+  { emoji: '😂', label: 'Laugh' }
 ];
 
 function AppLogo({ className = "w-6 h-6", fallbackTextClass = "font-serif text-xl font-bold tracking-tighter" }) {
@@ -121,14 +126,21 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
   const [tomorrowInput, setTomorrowInput] = useState('');
   const [tomorrowList, setTomorrowList] = useState([]);
 
-  // Filter / History State
+  // Modals & Drawers
   const [historySearch, setHistorySearch] = useState('');
   const [historyDateFilter, setHistoryDateFilter] = useState('');
   const [selectedHistoryItem, setSelectedHistoryItem] = useState(null);
+  const [reactorsModalItem, setReactorsModalItem] = useState(null);
   const [loadingHistory, setLoadingHistory] = useState(false);
-
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [statusMsg, setStatusMsg] = useState(null);
+
+  // Comments State inside Full Brief Modal
+  const [commentInput, setCommentInput] = useState('');
+  const [submittingComment, setSubmittingComment] = useState(false);
+
+  // Notifications State
+  const [showNotifications, setShowNotifications] = useState(false);
 
   // 15-Minute Close Time Increments
   const timeOptions15Min = useMemo(() => {
@@ -143,50 +155,20 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
     return times;
   }, []);
 
-  // TWO-FINGER SWIPE GESTURE DETECTION
-  const touchStartRef = useRef({ x: 0, y: 0, touches: 0 });
-
-  const handleTouchStart = (e) => {
-    touchStartRef.current = {
-      x: e.touches.length === 2 
-        ? (e.touches[0].clientX + e.touches[1].clientX) / 2 
-        : e.touches[0].clientX,
-      y: e.touches.length === 2 
-        ? (e.touches[0].clientY + e.touches[1].clientY) / 2 
-        : e.touches[0].clientY,
-      touches: e.touches.length
-    };
-  };
-
-  const handleTouchEnd = (e) => {
-    if (touchStartRef.current.touches !== 2) return;
-    if (currentTab === 'settings' || selectedHistoryItem) return;
-
-    const touchList = e.changedTouches;
-    const endX = touchList.length >= 2 
-      ? (touchList[0].clientX + touchList[1].clientX) / 2 
-      : touchList[0].clientX;
-    const endY = touchList.length >= 2 
-      ? (touchList[0].clientY + touchList[1].clientY) / 2 
-      : touchList[0].clientY;
-
-    const deltaX = endX - touchStartRef.current.x;
-    const deltaY = endY - touchStartRef.current.y;
-
-    if (Math.abs(deltaX) > 60 && Math.abs(deltaX) > Math.abs(deltaY) * 1.5) {
-      if (deltaX < 0) {
-        // Two-finger swipe left -> New Entry
-        if (currentTab === 'history') setCurrentTab('today');
-      } else {
-        // Two-finger swipe right -> Diary or Back to Hub
-        if (currentTab === 'today') {
-          setCurrentTab('history');
-        } else if (currentTab === 'history' && onBackToHub) {
-          onBackToHub();
-        }
+  // TWO-FINGER SWIPE HOOK
+  const swipeHandlers = useTwoFingerSwipe({
+    disabled: currentTab === 'settings' || Boolean(selectedHistoryItem) || Boolean(reactorsModalItem) || showNotifications,
+    onSwipeLeft: () => {
+      if (currentTab === 'history') setCurrentTab('today');
+    },
+    onSwipeRight: () => {
+      if (currentTab === 'today') {
+        setCurrentTab('history');
+      } else if (currentTab === 'history' && onBackToHub) {
+        onBackToHub();
       }
     }
-  };
+  });
 
   useEffect(() => {
     if (currentUser?.name) setManager(currentUser.name);
@@ -237,6 +219,44 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
     }
   }, []);
 
+  // Notifications calculation: comments or reactions on entries authored by currentUser
+  const myNotifications = useMemo(() => {
+    const currentUserName = currentUser?.name || manager;
+    const notifs = [];
+
+    historyList.forEach(entry => {
+      if (entry.manager === currentUserName) {
+        // Reactions by others
+        (entry.reactions || []).forEach(rx => {
+          if (rx.user !== currentUserName) {
+            notifs.push({
+              id: `rx-${entry.id}-${rx.user}-${rx.emoji}`,
+              entry,
+              type: 'reaction',
+              text: `${rx.user} reacted ${rx.emoji} to your ${entry.entryType || 'entry'}`,
+              dateStr: entry.dateStr
+            });
+          }
+        });
+        // Comments by others
+        (entry.comments || []).forEach(c => {
+          if (c.user !== currentUserName) {
+            notifs.push({
+              id: `c-${c.id || Math.random()}`,
+              entry,
+              type: 'comment',
+              text: `${c.user} commented: "${c.text.slice(0, 45)}${c.text.length > 45 ? '...' : ''}"`,
+              dateStr: entry.dateStr
+            });
+          }
+        });
+      }
+    });
+
+    return notifs;
+  }, [historyList, currentUser, manager]);
+
+  // Reaction Toggle Handler
   const handleToggleReaction = async (itemId, emoji, e) => {
     if (e) e.stopPropagation();
     const activeUserName = currentUser?.name || manager || 'Staff';
@@ -246,7 +266,7 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
       if (existing) {
         return currentReactions.filter(r => !(r.user === activeUserName && r.emoji === emoji));
       }
-      return [...currentReactions, { emoji, user: activeUserName }];
+      return [...currentReactions, { emoji, user: activeUserName, timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }];
     };
 
     setHistoryList(prev => {
@@ -280,6 +300,63 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
       });
     } catch (err) {
       console.error("Failed to persist reaction:", err);
+    }
+  };
+
+  // Add Comment Handler inside Brief Modal
+  const handleAddComment = async (e) => {
+    e.preventDefault();
+    if (!commentInput.trim() || !selectedHistoryItem) return;
+
+    setSubmittingComment(true);
+    const activeUserName = currentUser?.name || manager || 'Staff';
+    const activeUserRole = currentUser?.role || role || 'Manager';
+
+    const newCommentObj = {
+      id: `c-${Date.now()}`,
+      user: activeUserName,
+      role: activeUserRole,
+      text: commentInput.trim(),
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    };
+
+    const updatedComments = [...(selectedHistoryItem.comments || []), newCommentObj];
+
+    setSelectedHistoryItem(prev => ({
+      ...prev,
+      comments: updatedComments
+    }));
+
+    setHistoryList(prev => {
+      const updated = prev.map(item => {
+        if (item.id === selectedHistoryItem.id) {
+          return { ...item, comments: updatedComments };
+        }
+        return item;
+      });
+      localStorage.setItem('wst_history', JSON.stringify(updated));
+      return updated;
+    });
+
+    const commentTextToSend = commentInput.trim();
+    setCommentInput('');
+
+    try {
+      await fetch(HARDWIRED_SCRIPT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({
+          action: 'add_comment',
+          id: selectedHistoryItem.id,
+          userName: activeUserName,
+          role: activeUserRole,
+          text: commentTextToSend
+        })
+      });
+    } catch (err) {
+      console.error("Failed to post comment:", err);
+    } finally {
+      setSubmittingComment(false);
     }
   };
 
@@ -388,23 +465,22 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
     });
   }, [historyList, historySearch, historyDateFilter]);
 
+  // Reaction Bar Component with "..." (Inspect Reactors)
   const ReactionBar = ({ item }) => {
     const reactions = item.reactions || [];
     const activeUserName = currentUser?.name || manager || 'Staff';
 
     return (
-      <div className="flex flex-wrap items-center gap-1.5 pt-1.5">
+      <div className="flex flex-wrap items-center gap-1.5 pt-1">
         {AVAILABLE_REACTIONS.map(rx => {
           const matching = reactions.filter(r => r.emoji === rx.emoji);
           const hasReacted = matching.some(r => r.user === activeUserName);
-          const reactors = matching.map(r => r.user).join(', ');
 
           return (
             <button
               key={rx.emoji}
               type="button"
               onClick={(e) => handleToggleReaction(item.id, rx.emoji, e)}
-              title={reactors ? `${rx.label} by: ${reactors}` : rx.label}
               className={`flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] transition border active:scale-95 select-none ${
                 hasReacted
                   ? 'bg-black text-white border-black font-bold shadow-sm'
@@ -422,18 +498,32 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
             </button>
           );
         })}
+
+        {/* "..." Button: Opens Reactors Modal */}
+        {reactions.length > 0 && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setReactorsModalItem(item);
+            }}
+            className="px-1.5 py-0.5 rounded-full text-[10px] bg-gray-100 hover:bg-gray-200 border border-gray-200 text-gray-600 transition"
+            title="See who reacted"
+          >
+            <MoreHorizontal className="w-3 h-3" />
+          </button>
+        )}
       </div>
     );
   };
 
   return (
     <div 
-      onTouchStart={handleTouchStart}
-      onTouchEnd={handleTouchEnd}
+      {...swipeHandlers}
       className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 overflow-x-hidden relative"
     >
-      {/* Top Header */}
-      <header className="flex items-center justify-between px-5 pt-6 pb-2 border-b border-gray-50 flex-shrink-0 bg-white z-10">
+      {/* Top Header with Safe Area Padding */}
+      <header className="flex items-center justify-between px-5 pt-[max(1.5rem,env(safe-area-inset-top))] pb-2 border-b border-gray-100 flex-shrink-0 bg-white z-20">
         <div className="flex items-center space-x-2">
           {onBackToHub && (
             <button onClick={onBackToHub} className="mr-0.5 p-1 -ml-1 text-gray-500 hover:text-black rounded-lg transition" title="Return to Hub">
@@ -443,20 +533,64 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
           <AppLogo className="w-6 h-6" fallbackTextClass="font-serif text-2xl font-bold tracking-tighter" />
           <span className="font-semibold text-base tracking-tight">West Side Tavern</span>
         </div>
-        <div className="flex items-center space-x-4 text-xs font-medium">
-          {onBackToHub ? (
-            <button onClick={onBackToHub} className="text-gray-900 hover:text-black font-semibold">Hub</button>
-          ) : (
-            <button onClick={onLogout} className="text-gray-900 hover:text-black">Logout</button>
-          )}
+
+        {/* Right Nav: Notifications Dropdown Bell & Settings */}
+        <div className="flex items-center space-x-3 text-xs font-medium relative">
+          <button
+            onClick={() => setShowNotifications(prev => !prev)}
+            className="relative p-1.5 text-gray-700 hover:text-black rounded-full hover:bg-gray-100 transition"
+            title="Notifications"
+          >
+            <Bell className="w-4 h-4" />
+            {myNotifications.length > 0 && (
+              <span className="absolute -top-0.5 -right-0.5 w-4 h-4 rounded-full bg-red-600 text-white font-mono text-[9px] font-bold flex items-center justify-center">
+                {myNotifications.length > 9 ? '9+' : myNotifications.length}
+              </span>
+            )}
+          </button>
+
           <button 
-            onClick={() => setCurrentTab(currentTab === 'settings' ? 'history' : 'settings')}
+            onClick={() => {
+              setShowNotifications(false);
+              setCurrentTab(currentTab === 'settings' ? 'history' : 'settings');
+            }}
             className={`transition ${currentTab === 'settings' ? 'font-bold underline' : 'text-gray-900 hover:text-black'}`}
           >
             Settings
           </button>
         </div>
       </header>
+
+      {/* Notifications Dropdown Tray */}
+      {showNotifications && (
+        <div className="absolute top-[max(3.8rem,calc(env(safe-area-inset-top)+2.5rem))] right-4 z-40 w-72 bg-white rounded-2xl shadow-2xl border border-gray-200 overflow-hidden divide-y divide-gray-100 animate-in fade-in slide-in-from-top-2 duration-150">
+          <div className="p-3 bg-gray-50 flex justify-between items-center">
+            <span className="text-[10px] font-black uppercase tracking-wider text-gray-500">Activity On Your Posts</span>
+            <button onClick={() => setShowNotifications(false)} className="text-gray-400 hover:text-black p-0.5">
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+          <div className="max-h-64 overflow-y-auto divide-y divide-gray-100">
+            {myNotifications.length === 0 ? (
+              <p className="p-4 text-center text-xs text-gray-400 italic">No new notifications</p>
+            ) : (
+              myNotifications.map((n) => (
+                <div 
+                  key={n.id}
+                  onClick={() => {
+                    setSelectedHistoryItem(n.entry);
+                    setShowNotifications(false);
+                  }}
+                  className="p-3 hover:bg-gray-50 cursor-pointer text-xs space-y-0.5 transition"
+                >
+                  <p className="font-semibold text-gray-900 leading-snug">{n.text}</p>
+                  <span className="text-[10px] text-gray-400 font-mono block">{n.dateStr}</span>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Main Content View */}
       {currentTab === 'settings' ? (
@@ -479,7 +613,7 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
             </div>
 
             <div className="space-y-2">
-              <label className="block text-xs font-bold text-gray-900">Google Drive Backend Endpoint</label>
+              <label className="block text-xs font-bold text-gray-900">Google Drive Backend</label>
               <div className="relative mt-2">
                 <input type="text" readOnly value={HARDWIRED_SCRIPT_URL} className="w-full bg-[#EDEDED] py-2.5 pl-9 pr-3 rounded-lg text-[10px] font-mono text-gray-500 cursor-not-allowed focus:outline-none" />
                 <Lock className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -568,10 +702,18 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
                         <p className="text-[11px] text-gray-700 italic line-clamp-2 leading-relaxed">"{latestHandover.generalNotes}"</p>
                       )}
 
-                      <ReactionBar item={latestHandover} />
+                      <div className="flex items-center justify-between pt-0.5">
+                        <ReactionBar item={latestHandover} />
+                        {(latestHandover.comments || []).length > 0 && (
+                          <span className="inline-flex items-center space-x-1 text-[10px] text-gray-500 font-bold bg-gray-100 px-2 py-0.5 rounded-full">
+                            <MessageCircle className="w-3 h-3" />
+                            <span>{(latestHandover.comments || []).length}</span>
+                          </span>
+                        )}
+                      </div>
 
                       <div className="flex justify-between items-center pt-1 text-[10px] font-bold text-black border-t border-gray-100">
-                        <span>Tap to open briefing</span>
+                        <span>Tap to open briefing & comments</span>
                         <ChevronRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
                       </div>
                     </div>
@@ -600,7 +742,15 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
                       </div>
                       {item.generalNotes && <p className="text-[11px] text-gray-500 line-clamp-1 italic">"{item.generalNotes}"</p>}
 
-                      <ReactionBar item={item} />
+                      <div className="flex items-center justify-between pt-0.5">
+                        <ReactionBar item={item} />
+                        {(item.comments || []).length > 0 && (
+                          <span className="inline-flex items-center space-x-1 text-[10px] text-gray-500 font-bold bg-gray-100 px-2 py-0.5 rounded-full">
+                            <MessageCircle className="w-3 h-3" />
+                            <span>{(item.comments || []).length}</span>
+                          </span>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -608,10 +758,10 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
             )}
           </div>
 
-          {/* Detailed Modal Popup */}
+          {/* Centered Modal: Full Brief & Commenting */}
           {selectedHistoryItem && (
             <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-              <div className="bg-white w-full max-w-sm rounded-3xl overflow-hidden shadow-2xl border border-gray-200 flex flex-col max-h-[80vh]">
+              <div className="bg-white w-full max-w-sm rounded-3xl overflow-hidden shadow-2xl border border-gray-200 flex flex-col max-h-[85vh]">
                 <div className="px-5 pt-5 pb-3 border-b border-gray-100 flex justify-between items-start bg-gray-50/50">
                   <div>
                     <span className="text-[9px] font-mono uppercase text-gray-400 block font-bold">
@@ -629,10 +779,13 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
                   </button>
                 </div>
 
-                <div className="p-4 overflow-y-auto space-y-3 text-[11px]">
-                  <div className="p-2 bg-gray-50 rounded-xl border border-gray-100">
-                    <span className="font-bold uppercase tracking-wider text-[9px] text-gray-400 block mb-1">Acknowledgements</span>
-                    <ReactionBar item={selectedHistoryItem} />
+                <div className="p-4 overflow-y-auto space-y-3.5 text-[11px]">
+                  {/* Reaction Bar in Modal */}
+                  <div className="p-2.5 bg-gray-50 rounded-xl border border-gray-100 flex items-center justify-between">
+                    <div>
+                      <span className="font-bold uppercase tracking-wider text-[9px] text-gray-400 block mb-1">Acknowledgements</span>
+                      <ReactionBar item={selectedHistoryItem} />
+                    </div>
                   </div>
 
                   <div>
@@ -672,6 +825,47 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
                     </div>
                   )}
 
+                  {/* Comments Section */}
+                  <div className="border-t border-gray-100 pt-3 space-y-2">
+                    <span className="font-bold uppercase tracking-wider text-[9px] text-gray-400 block">
+                      Manager Discussion ({(selectedHistoryItem.comments || []).length})
+                    </span>
+
+                    <div className="space-y-2">
+                      {(selectedHistoryItem.comments || []).length === 0 ? (
+                        <p className="text-[10px] text-gray-400 italic">No comments yet. Start the conversation below.</p>
+                      ) : (
+                        (selectedHistoryItem.comments || []).map((c) => (
+                          <div key={c.id} className="p-2 bg-gray-50 rounded-xl space-y-0.5 border border-gray-100">
+                            <div className="flex justify-between items-baseline">
+                              <span className="font-bold text-gray-900 text-[10px]">{c.user}</span>
+                              <span className="text-[8px] text-gray-400 font-mono">{c.timestamp}</span>
+                            </div>
+                            <p className="text-gray-700 leading-snug">{c.text}</p>
+                          </div>
+                        ))
+                      )}
+                    </div>
+
+                    {/* Add Comment Form */}
+                    <form onSubmit={handleAddComment} className="flex items-center space-x-1.5 pt-1">
+                      <input
+                        type="text"
+                        placeholder="Write a reply or note..."
+                        value={commentInput}
+                        onChange={(e) => setCommentInput(e.target.value)}
+                        className="flex-1 bg-gray-100 py-1.5 px-2.5 rounded-xl text-xs focus:bg-white focus:outline-none border border-transparent focus:border-gray-300 transition"
+                      />
+                      <button
+                        type="submit"
+                        disabled={submittingComment || !commentInput.trim()}
+                        className="p-2 bg-black text-white hover:bg-neutral-800 disabled:opacity-40 rounded-xl transition"
+                      >
+                        <Send className="w-3 h-3" />
+                      </button>
+                    </form>
+                  </div>
+
                   {selectedHistoryItem.fileUrl && (
                     <a href={selectedHistoryItem.fileUrl} target="_blank" rel="noreferrer" className="w-full py-2 bg-black text-white rounded-xl flex items-center justify-center space-x-1.5 font-bold hover:bg-gray-800 transition shadow-sm mt-1 text-[10px]">
                       <FileSpreadsheet className="w-3 h-3 text-emerald-400" />
@@ -679,6 +873,28 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
                       <ExternalLink className="w-2.5 h-2.5 text-gray-400 ml-1" />
                     </a>
                   )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Modal: Who Reacted Details Drawer */}
+          {reactorsModalItem && (
+            <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+              <div className="bg-white w-full max-w-xs rounded-3xl overflow-hidden shadow-2xl border border-gray-200 flex flex-col max-h-[60vh]">
+                <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+                  <span className="text-xs font-black text-gray-900">Reactions</span>
+                  <button onClick={() => setReactorsModalItem(null)} className="p-1 text-gray-400 hover:text-black">
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                <div className="p-4 overflow-y-auto divide-y divide-gray-100">
+                  {(reactorsModalItem.reactions || []).map((rx, idx) => (
+                    <div key={idx} className="py-2 flex items-center justify-between text-xs">
+                      <span className="font-bold text-gray-800">{rx.user}</span>
+                      <span className="text-sm">{rx.emoji}</span>
+                    </div>
+                  ))}
                 </div>
               </div>
             </div>
@@ -731,7 +947,7 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
             </div>
           </div>
 
-          {/* LARGE GENERAL NOTES BOX */}
+          {/* Large General Notes Box */}
           <div className="space-y-1">
             <div className="flex justify-between items-baseline">
               <label className="block text-[11px] font-extrabold text-gray-900">General Notes</label>
@@ -750,7 +966,7 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
             </div>
           </div>
 
-          {/* 86 LIST */}
+          {/* 86 List */}
           <div className="space-y-2 bg-gray-50 border border-gray-200 rounded-xl p-3">
             <div className="flex justify-between items-center">
               <span className="block font-bold text-gray-900 uppercase tracking-wider text-[10px]">86 List (Stock SKU Lookup)</span>
@@ -825,7 +1041,7 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
             </div>
           </div>
 
-          {/* TOMORROW TASKS */}
+          {/* Tomorrow Tasks */}
           <div className="space-y-1.5">
             <div className="flex justify-between items-center">
               <label className="block text-[11px] font-extrabold text-gray-900">Tomorrow / Handover Actions</label>
@@ -890,8 +1106,8 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
         </div>
       )}
 
-      {/* Floating Bottom Navigation */}
-      <nav className="fixed bottom-2 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-[390px] z-50 rounded-2xl bg-[#111111]/95 backdrop-blur-md text-white py-2 px-3 flex justify-around items-center text-xs font-semibold shadow-2xl border border-white/10 select-none pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))]">
+      {/* Floating Bottom Navigation with Safe Area Inset */}
+      <nav className="fixed bottom-2 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-[390px] z-30 rounded-2xl bg-[#111111]/95 backdrop-blur-md text-white py-2 px-3 flex justify-around items-center text-xs font-semibold shadow-2xl border border-white/10 select-none pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))]">
         <button onClick={() => setCurrentTab('history')} className={`flex-1 py-1 text-center rounded-xl transition ${currentTab === 'history' ? 'text-white bg-white/15 font-bold shadow-inner' : 'text-gray-400 hover:text-white'}`}>Diary</button>
         <button onClick={() => setCurrentTab('today')} className={`flex-1 py-1 text-center rounded-xl transition ${currentTab === 'today' ? 'text-white bg-white/15 font-bold shadow-inner' : 'text-gray-400 hover:text-white'}`}>New Entry</button>
       </nav>
