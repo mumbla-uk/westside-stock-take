@@ -8,10 +8,9 @@ import {
   Coins, 
   Truck, 
   ClipboardList, 
-  Lock, 
   LogOut,
   ChevronRight,
-  ShieldCheck
+  Delete
 } from 'lucide-react';
 import { useTwoFingerSwipe } from './useTwoFingerSwipe';
 
@@ -39,17 +38,17 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState(() => {
     try {
       const cached = localStorage.getItem('wst_auth_user');
-      return cached ? JSON.parse(cached) : { pin: '1234', name: 'Ross', role: 'Assistant General Manager' };
+      return cached ? JSON.parse(cached) : null;
     } catch {
-      return { pin: '1234', name: 'Ross', role: 'Assistant General Manager' };
+      return null;
     }
   });
 
-  const [pinInput, setPinInput] = useState('');
+  const [pinDigits, setPinDigits] = useState('');
   const [authError, setAuthError] = useState(false);
   const [staffRoster, setStaffRoster] = useState([]);
 
-  // Swipe gesture: two-finger swipe right on active module returns to Hub
+  // Two-finger swipe right on an open module returns directly to the Hub
   const swipeHandlers = useTwoFingerSwipe({
     disabled: activeModule === 'hub',
     onSwipeRight: () => {
@@ -57,7 +56,7 @@ export default function App() {
     }
   });
 
-  // Fetch staff roster on boot
+  // Fetch staff roster on startup
   useEffect(() => {
     const fetchStaff = async () => {
       try {
@@ -73,80 +72,150 @@ export default function App() {
     fetchStaff();
   }, []);
 
-  const handlePinSubmit = (e) => {
-    e.preventDefault();
-    const found = staffRoster.find(s => String(s.pin).trim() === pinInput.trim());
+  // Verify PIN whenever 4 digits are entered
+  const verifyPin = (enteredPin) => {
+    const found = staffRoster.find(s => String(s.pin).trim() === enteredPin.trim());
     if (found) {
       setCurrentUser(found);
       localStorage.setItem('wst_auth_user', JSON.stringify(found));
-      setPinInput('');
+      setPinDigits('');
       setAuthError(false);
-    } else if (pinInput.trim() === '1234') {
+    } else if (enteredPin === '1234') {
       const fallbackUser = { pin: '1234', name: 'Ross', role: 'Assistant General Manager' };
       setCurrentUser(fallbackUser);
       localStorage.setItem('wst_auth_user', JSON.stringify(fallbackUser));
-      setPinInput('');
+      setPinDigits('');
       setAuthError(false);
     } else {
       setAuthError(true);
-      setPinInput('');
+      setTimeout(() => {
+        setPinDigits('');
+        setAuthError(false);
+      }, 700);
     }
+  };
+
+  const handleKeypadPress = (val) => {
+    if (pinDigits.length >= 4) return;
+    const nextPin = pinDigits + val;
+    setPinDigits(nextPin);
+    if (nextPin.length === 4) {
+      verifyPin(nextPin);
+    }
+  };
+
+  const handleBackspace = () => {
+    setPinDigits(prev => prev.slice(0, -1));
+    setAuthError(false);
   };
 
   const handleLogout = () => {
     localStorage.removeItem('wst_auth_user');
     setCurrentUser(null);
+    setPinDigits('');
     setActiveModule('hub');
   };
 
-  // If no logged in user, show PIN authentication overlay
+  // --------------------------------------------------------------------------
+  // SCREEN 1: ON-SCREEN NUMERIC KEYPAD LOGIN
+  // --------------------------------------------------------------------------
   if (!currentUser) {
     return (
-      <div className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 justify-center px-8 pt-[max(1.5rem,env(safe-area-inset-top))] pb-[max(1.5rem,env(safe-area-inset-bottom))]">
-        <div className="text-center space-y-3 mb-8">
+      <div className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 justify-between px-8 pt-[max(2.5rem,env(safe-area-inset-top))] pb-[max(2rem,env(safe-area-inset-bottom))] select-none">
+        
+        {/* Top Header & Branding */}
+        <div className="text-center space-y-3 pt-4">
           <div className="w-14 h-14 bg-black rounded-3xl mx-auto flex items-center justify-center shadow-lg">
             <AppLogo className="w-8 h-8 invert" fallbackTextClass="font-serif text-2xl font-bold text-white" />
           </div>
           <div>
             <h1 className="text-xl font-black tracking-tight text-gray-900">West Side Tavern</h1>
-            <p className="text-xs text-gray-500 font-serif italic mt-0.5">Manager Operations Portal</p>
+            <p className="text-xs text-gray-400 font-serif italic mt-0.5">Manager Operations Portal</p>
           </div>
         </div>
 
-        <form onSubmit={handlePinSubmit} className="space-y-4">
-          <div className="space-y-1">
-            <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-400 text-center">
-              Enter Staff PIN
-            </label>
-            <input
-              type="password"
-              inputMode="numeric"
-              maxLength={4}
-              value={pinInput}
-              onChange={(e) => setPinInput(e.target.value)}
-              className="w-full bg-[#EDEDED] py-3.5 text-center text-2xl tracking-[0.5em] font-mono font-black rounded-2xl focus:bg-gray-100 focus:outline-none"
-              autoFocus
-            />
+        {/* 4-Digit Indicator Dots */}
+        <div className="py-2 text-center space-y-3">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">
+            Enter 4-Digit Passcode
+          </p>
+          
+          <div className={`flex justify-center items-center space-x-4 ${authError ? 'animate-bounce' : ''}`}>
+            {[0, 1, 2, 3].map((idx) => {
+              const isFilled = pinDigits.length > idx;
+              return (
+                <div
+                  key={idx}
+                  className={`w-3.5 h-3.5 rounded-full transition-all duration-150 ${
+                    authError 
+                      ? 'bg-red-500 scale-110'
+                      : isFilled
+                      ? 'bg-black scale-110'
+                      : 'bg-gray-200'
+                  }`}
+                />
+              );
+            })}
           </div>
 
-          {authError && (
-            <p className="text-[11px] text-red-600 font-bold text-center">Invalid PIN. Please try again.</p>
-          )}
+          <div className="h-4">
+            {authError && (
+              <p className="text-[11px] text-red-600 font-bold">Incorrect PIN. Try again.</p>
+            )}
+          </div>
+        </div>
 
-          <button
-            type="submit"
-            disabled={pinInput.length < 4}
-            className="w-full py-3 bg-black text-white hover:bg-neutral-800 disabled:opacity-40 rounded-xl text-xs font-bold transition flex items-center justify-center space-x-1.5 shadow-sm"
-          >
-            <ShieldCheck className="w-4 h-4 text-emerald-400" />
-            <span>Unlock Portal</span>
-          </button>
-        </form>
+        {/* Keypad Grid (1-9, Clear, 0, Backspace) */}
+        <div className="w-full max-w-xs mx-auto pb-4">
+          <div className="grid grid-cols-3 gap-y-3 gap-x-6 text-center">
+            {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((num) => (
+              <button
+                key={num}
+                type="button"
+                onClick={() => handleKeypadPress(num)}
+                className="w-16 h-16 rounded-full bg-gray-50 hover:bg-gray-100 active:bg-gray-200 text-xl font-black text-gray-900 mx-auto flex items-center justify-center transition active:scale-95 shadow-sm border border-gray-100"
+              >
+                {num}
+              </button>
+            ))}
+
+            {/* Clear Button */}
+            <button
+              type="button"
+              onClick={() => { setPinDigits(''); setAuthError(false); }}
+              className="w-16 h-16 rounded-full text-xs font-bold text-gray-400 hover:text-black mx-auto flex items-center justify-center transition active:scale-95"
+            >
+              Clear
+            </button>
+
+            {/* Zero */}
+            <button
+              type="button"
+              onClick={() => handleKeypadPress('0')}
+              className="w-16 h-16 rounded-full bg-gray-50 hover:bg-gray-100 active:bg-gray-200 text-xl font-black text-gray-900 mx-auto flex items-center justify-center transition active:scale-95 shadow-sm border border-gray-100"
+            >
+              0
+            </button>
+
+            {/* Backspace Button */}
+            <button
+              type="button"
+              onClick={handleBackspace}
+              disabled={pinDigits.length === 0}
+              className="w-16 h-16 rounded-full text-gray-500 hover:text-black active:scale-95 disabled:opacity-20 mx-auto flex items-center justify-center transition"
+            >
+              <Delete className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+
       </div>
     );
   }
 
-  // Active Module Router
+  // --------------------------------------------------------------------------
+  // SCREEN 2: ACTIVE APP MODULE ROUTER
+  // --------------------------------------------------------------------------
   if (activeModule === 'handover') {
     return (
       <div {...swipeHandlers} className="h-screen w-full">
@@ -195,10 +264,12 @@ export default function App() {
     );
   }
 
-  // Default: HUB PORTAL HOME
+  // --------------------------------------------------------------------------
+  // SCREEN 3: PORTAL HUB HOME
+  // --------------------------------------------------------------------------
   return (
     <div className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 overflow-hidden relative">
-      {/* Top Header with Dynamic Island / Notch Inset Clearance */}
+      {/* Top Header with Notch Inset Clearance */}
       <header className="flex items-center justify-between px-5 pt-[max(1.5rem,env(safe-area-inset-top))] pb-3 border-b border-gray-100 flex-shrink-0 bg-white z-20">
         <div className="flex items-center space-x-2">
           <AppLogo className="w-6 h-6" fallbackTextClass="font-serif text-2xl font-bold tracking-tighter" />
@@ -280,7 +351,7 @@ export default function App() {
           <ChevronRight className="w-4 h-4 text-gray-400 group-hover:translate-x-0.5 transition-transform" />
         </div>
 
-        {/* Order Lists Module Card */}
+        {/* Stocktake & Orders Module Card */}
         <div 
           onClick={() => setActiveModule('orders')}
           className="border border-gray-200 rounded-2xl p-4 bg-white shadow-sm hover:border-black transition cursor-pointer flex items-center justify-between group active:scale-[0.99]"
@@ -290,8 +361,8 @@ export default function App() {
               <ClipboardList className="w-5 h-5 text-neutral-800" />
             </div>
             <div>
-              <span className="font-extrabold text-sm text-gray-900 group-hover:text-black block">Order Lists</span>
-              <span className="text-[10px] text-gray-500 font-sans block">Supplier par orders & auto-calculations</span>
+              <span className="font-extrabold text-sm text-gray-900 group-hover:text-black block">Stocktake & Orders</span>
+              <span className="text-[10px] text-gray-500 font-sans block">Count stock, par-level math & supplier order lists</span>
             </div>
           </div>
           <ChevronRight className="w-4 h-4 text-gray-400 group-hover:translate-x-0.5 transition-transform" />
@@ -300,7 +371,7 @@ export default function App() {
         {/* App Info Footer */}
         <div className="pt-6 text-center text-[10px] text-gray-400 font-mono space-y-1">
           <p>Two-finger swipe right returns to this Hub from any module.</p>
-          <p className="opacity-70">PWA v2.4 • Standalone iOS Configured</p>
+          <p className="opacity-70">PWA v2.4 • Standalone iOS Keypad Active</p>
         </div>
       </div>
     </div>
