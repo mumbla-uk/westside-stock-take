@@ -150,6 +150,38 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
   });
   const [showNotifications, setShowNotifications] = useState(false);
 
+  // OneSignal Push Notification Opt-In State
+  const [pushEnabled, setPushEnabled] = useState(false);
+
+  useEffect(() => {
+    if (window.OneSignalDeferred) {
+      window.OneSignalDeferred.push(async function(OneSignal) {
+        const isOptedIn = await OneSignal.User.PushSubscription.optedIn;
+        setPushEnabled(Boolean(isOptedIn));
+        if (isOptedIn) {
+          await OneSignal.User.addAlias("manager_name", manager);
+          await OneSignal.User.addTag("role", role);
+        }
+      });
+    }
+  }, [manager, role]);
+
+  const handleTogglePush = async () => {
+    if (!window.OneSignalDeferred) return;
+
+    window.OneSignalDeferred.push(async function(OneSignal) {
+      if (!pushEnabled) {
+        await OneSignal.User.PushSubscription.optIn();
+        await OneSignal.User.addAlias("manager_name", manager);
+        await OneSignal.User.addTag("role", role);
+        setPushEnabled(true);
+      } else {
+        await OneSignal.User.PushSubscription.optOut();
+        setPushEnabled(false);
+      }
+    });
+  };
+
   // 15-Minute Close Time Increments
   const timeOptions15Min = useMemo(() => {
     const times = [];
@@ -638,7 +670,7 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
 
       {/* Main Content View */}
       {currentTab === 'settings' ? (
-        <div className="flex-1 flex flex-col px-5 pt-4 pb-20 overflow-y-auto">
+        <div className="flex-1 flex flex-col px-5 pt-4 pb-20 overflow-y-auto space-y-4">
           <div className="flex items-center justify-between pb-3 border-b border-gray-100">
             <div>
               <p className="text-gray-500 italic text-[11px] font-serif">Preferences</p>
@@ -649,13 +681,37 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
             </button>
           </div>
 
-          <div className="space-y-4 mt-4 text-[11px]">
+          <div className="space-y-4 text-[11px]">
+            {/* Authenticated Session Card */}
             <div className="p-3 bg-gray-50 border border-gray-200 rounded-xl space-y-1">
               <span className="text-[9px] uppercase font-bold text-gray-400">Authenticated Session</span>
               <p className="text-xs font-extrabold text-gray-900">{manager}</p>
               <span className="inline-block px-1.5 py-0.5 rounded text-[9px] font-mono bg-black text-white font-bold">{role}</span>
             </div>
 
+            {/* iOS Web Push Notification Toggle Card */}
+            <div className="p-3 bg-gray-50 border border-gray-200 rounded-xl space-y-2">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-[9px] uppercase font-bold text-gray-400 block">iOS Push Notifications</span>
+                  <p className="text-xs font-bold text-gray-900">Handover & Activity Alerts</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleTogglePush}
+                  className={`px-3 py-1 rounded-full text-[10px] font-bold transition ${
+                    pushEnabled ? 'bg-emerald-600 text-white' : 'bg-gray-200 text-gray-700'
+                  }`}
+                >
+                  {pushEnabled ? 'Enabled ✓' : 'Enable'}
+                </button>
+              </div>
+              <p className="text-[9px] text-gray-400 leading-tight">
+                Sends instant alerts when a manager submits a shift handover, reacts, or replies to your brief. (Must be saved to Home Screen on iOS).
+              </p>
+            </div>
+
+            {/* Backend URL info */}
             <div className="space-y-2">
               <label className="block text-xs font-bold text-gray-900">Google Drive Backend</label>
               <div className="relative mt-2">
@@ -809,7 +865,7 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
                 <div className="px-5 pt-5 pb-3 border-b border-gray-100 flex justify-between items-start bg-gray-50/50">
                   <div>
                     <span className="text-[9px] font-mono uppercase text-gray-400 block font-bold">
-                     LOGGED BY {selectedHistoryItem.manager.toUpperCase()} • {selectedHistoryItem.entryType || 'HANDOVER'}
+                      LOGGED BY {selectedHistoryItem.manager.toUpperCase()} • {selectedHistoryItem.entryType || 'HANDOVER'}
                     </span>
                     <h2 className="text-sm font-black text-gray-900 leading-snug mt-0.5">{formatDisplayDate(selectedHistoryItem.dateStr || selectedHistoryItem.timestamp)}</h2>
                     {selectedHistoryItem.takings && selectedHistoryItem.takings !== "0.00" && selectedHistoryItem.takings !== "0" && (
