@@ -455,10 +455,10 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
       {/* Week Navigation Bar */}
       <div className="px-5 py-2 bg-gray-50 border-b border-gray-200 flex items-center justify-between flex-shrink-0">
         <button 
-          onClick={() => setCurrentWeekOffset(prev => prev - 1)} 
-          className="p-1 hover:bg-gray-200 rounded-lg text-gray-600 transition"
+        onClick={() => setCurrentWeekOffset(prev => prev - 1)} 
+        className="p-1 hover:bg-gray-200 rounded-lg text-gray-600 transition"
         >
-          <ChevronLeft className="w-3.5 h-3.5" />
+        <ChevronLeft className="w-3.5 h-3.5" />
         </button>
         <div className="text-center">
           <span className="text-[9px] font-bold uppercase tracking-wider text-gray-400 block">Weekly Ledger</span>

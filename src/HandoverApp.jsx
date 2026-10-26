@@ -809,7 +809,7 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
                 <div className="px-5 pt-5 pb-3 border-b border-gray-100 flex justify-between items-start bg-gray-50/50">
                   <div>
                     <span className="text-[9px] font-mono uppercase text-gray-400 block font-bold">
-                      LOGGED BY {selectedHistoryItem.manager.toUpperCase()} • {selectedHistoryItem.entryType || 'HANDOVER'}
+                     LOGGED BY {selectedHistoryItem.manager.toUpperCase()} • {selectedHistoryItem.entryType || 'HANDOVER'}
                     </span>
                     <h2 className="text-sm font-black text-gray-900 leading-snug mt-0.5">{formatDisplayDate(selectedHistoryItem.dateStr || selectedHistoryItem.timestamp)}</h2>
                     {selectedHistoryItem.takings && selectedHistoryItem.takings !== "0.00" && selectedHistoryItem.takings !== "0" && (

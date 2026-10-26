@@ -315,7 +315,7 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
                   <div>
                     <span className="font-extrabold text-gray-900 block leading-tight text-[11px]">{item.name}</span>
                     <span className="text-[9px] text-gray-400 font-mono">
-                      {item.qty} {item.unit} • £{item.unitEx.toFixed(2)} ex
+                     {item.qty} {item.unit} • £{item.unitEx.toFixed(2)} ex
                     </span>
                   </div>
                   <div className="flex items-center space-x-2">
