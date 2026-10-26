@@ -192,17 +192,25 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
     setOrderOverrides(prev => ({ ...prev, [id]: Math.max(0, (prev[id] ?? 0) + delta) }));
   };
 
-  const handleSaveToSheet = async () => {
+const handleSaveToSheet = async () => {
     setSaving(true);
     setStatusMsg(null);
     try {
-      const payload = products.map(p => ({ id: p.id, count: counts[p.id] ?? 0 }));
+      const payload = {
+        action: 'save_counts',
+        items: products.map(p => ({
+          id: p.id,
+          count: counts[p.id] ?? 0
+        }))
+      };
+
       const res = await fetch(HARDWIRED_SCRIPT_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify(payload)
       });
       const json = await res.json();
+
       if (json && json.status === 'success') {
         setStatusMsg({ type: 'success', text: 'Stock counts saved to Google Sheet!' });
       } else {
