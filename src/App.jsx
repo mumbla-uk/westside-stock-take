@@ -10,7 +10,8 @@ import {
   ClipboardList, 
   LogOut,
   ChevronRight,
-  Delete
+  Delete,
+  Bell
 } from 'lucide-react';
 import { useTwoFingerSwipe } from './useTwoFingerSwipe';
 
@@ -34,7 +35,7 @@ function AppLogo({ className = "w-6 h-6", fallbackTextClass = "font-serif text-x
 }
 
 export default function App() {
-  const [activeModule, setActiveModule] = useState('hub'); // 'hub' | 'handover' | 'petty' | 'goods' | 'orders'
+  const [activeModule, setActiveModule] = useState('hub');
   const [currentUser, setCurrentUser] = useState(() => {
     try {
       const cached = localStorage.getItem('wst_auth_user');
@@ -48,19 +49,21 @@ export default function App() {
   const [authError, setAuthError] = useState(false);
   const [staffRoster, setStaffRoster] = useState([]);
 
-  // Synchronous ref to prevent double-clicks and race conditions during fast typing
+  // Rapid keypad race-condition prevention refs
   const pinRef = useRef('');
   const isCheckingRef = useRef(false);
 
-  // Two-finger swipe right on an open module returns directly to the Hub
+  // Push notification state
+  const [pushEnabled, setPushEnabled] = useState(false);
+  const [showFirstOpenPushModal, setShowFirstOpenPushModal] = useState(false);
+
   const swipeHandlers = useTwoFingerSwipe({
-    disabled: activeModule === 'hub',
+    disabled: activeModule === 'hub' || showFirstOpenPushModal,
     onSwipeRight: () => {
       setActiveModule('hub');
     }
   });
 
-  // Fetch staff roster on startup
   useEffect(() => {
     const fetchStaff = async () => {
       try {
@@ -76,7 +79,69 @@ export default function App() {
     fetchStaff();
   }, []);
 
-  // Verify PIN whenever 4 digits are reached
+  // Sync logged-in manager with OneSignal aliases
+  useEffect(() => {
+    if (!currentUser) return;
+
+    const hasPrompted = localStorage.getItem('wst_push_prompted');
+    if (window.OneSignalDeferred) {
+      window.OneSignalDeferred.push(async function(OneSignal) {
+        const isOptedIn = await OneSignal.User.PushSubscription.optedIn;
+        setPushEnabled(Boolean(isOptedIn));
+
+        if (isOptedIn) {
+          await OneSignal.User.addAlias("manager_name", currentUser.name);
+          await OneSignal.User.addTag("role", currentUser.role);
+        } else if (!hasPrompted) {
+          setShowFirstOpenPushModal(true);
+        }
+      });
+    }
+  }, [currentUser]);
+
+  // Universal push dispatcher callable by any module
+  const triggerPushNotification = async ({ title, message, targetManager = null }) => {
+    try {
+      await fetch(HARDWIRED_SCRIPT_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({
+          action: 'send_push',
+          title,
+          message,
+          sender: currentUser?.name || 'Manager',
+          targetManager
+        })
+      });
+    } catch (err) {
+      console.error("Failed to dispatch push notification:", err);
+    }
+  };
+
+  const handleEnablePushFromModal = async () => {
+    localStorage.setItem('wst_push_prompted', 'true');
+    setShowFirstOpenPushModal(false);
+    if (!window.OneSignalDeferred) return;
+
+    window.OneSignalDeferred.push(async function(OneSignal) {
+      try {
+        await OneSignal.User.PushSubscription.optIn();
+        if (currentUser) {
+          await OneSignal.User.addAlias("manager_name", currentUser.name);
+          await OneSignal.User.addTag("role", currentUser.role);
+        }
+        setPushEnabled(true);
+      } catch (err) {
+        console.warn("Push permission error or denied:", err);
+      }
+    });
+  };
+
+  const handleDismissFirstOpenPushModal = () => {
+    localStorage.setItem('wst_push_prompted', 'true');
+    setShowFirstOpenPushModal(false);
+  };
+
   const verifyPin = (enteredPin) => {
     isCheckingRef.current = true;
     const found = staffRoster.find(s => String(s.pin).trim() === enteredPin.trim());
@@ -107,7 +172,6 @@ export default function App() {
   };
 
   const handleKeypadPress = (val) => {
-    // Ignore input if checking or error animation active
     if (isCheckingRef.current || authError) return;
     if (pinRef.current.length >= 4) return;
 
@@ -143,8 +207,6 @@ export default function App() {
   if (!currentUser) {
     return (
       <div className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 justify-between px-8 pt-[max(2.5rem,env(safe-area-inset-top))] pb-[max(2rem,env(safe-area-inset-bottom))] select-none">
-        
-        {/* Top Header & Branding */}
         <div className="text-center space-y-3 pt-4">
           <div className="w-14 h-14 bg-black rounded-3xl mx-auto flex items-center justify-center shadow-lg">
             <AppLogo className="w-8 h-8 invert" fallbackTextClass="font-serif text-2xl font-bold text-white" />
@@ -155,7 +217,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* 4-Digit Indicator Dots */}
         <div className="py-2 text-center space-y-3">
           <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400">
             Enter 4-Digit Passcode
@@ -186,7 +247,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* Keypad Grid (1-9, Clear, 0, Backspace) */}
         <div className="w-full max-w-xs mx-auto pb-4">
           <div className="grid grid-cols-3 gap-y-3 gap-x-6 text-center">
             {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((num) => (
@@ -200,7 +260,6 @@ export default function App() {
               </button>
             ))}
 
-            {/* Clear Button */}
             <button
               type="button"
               onClick={() => {
@@ -214,7 +273,6 @@ export default function App() {
               Clear
             </button>
 
-            {/* Zero */}
             <button
               type="button"
               onClick={() => handleKeypadPress('0')}
@@ -223,7 +281,6 @@ export default function App() {
               0
             </button>
 
-            {/* Backspace Button */}
             <button
               type="button"
               onClick={handleBackspace}
@@ -234,7 +291,6 @@ export default function App() {
             </button>
           </div>
         </div>
-
       </div>
     );
   }
@@ -249,6 +305,7 @@ export default function App() {
           currentUser={currentUser}
           onBackToHub={() => setActiveModule('hub')}
           onLogout={handleLogout}
+          onSendNotification={triggerPushNotification}
         />
       </div>
     );
@@ -261,6 +318,7 @@ export default function App() {
           currentUser={currentUser}
           onBackToHub={() => setActiveModule('hub')}
           onLogout={handleLogout}
+          onSendNotification={triggerPushNotification}
         />
       </div>
     );
@@ -273,6 +331,7 @@ export default function App() {
           currentUser={currentUser}
           onBackToHub={() => setActiveModule('hub')}
           onLogout={handleLogout}
+          onSendNotification={triggerPushNotification}
         />
       </div>
     );
@@ -285,6 +344,7 @@ export default function App() {
           currentUser={currentUser}
           onBackToHub={() => setActiveModule('hub')}
           onLogout={handleLogout}
+          onSendNotification={triggerPushNotification}
         />
       </div>
     );
@@ -295,7 +355,6 @@ export default function App() {
   // --------------------------------------------------------------------------
   return (
     <div className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 overflow-hidden relative">
-      {/* Top Header with Notch Inset Clearance */}
       <header className="flex items-center justify-between px-5 pt-[max(1.5rem,env(safe-area-inset-top))] pb-3 border-b border-gray-100 flex-shrink-0 bg-white z-20">
         <div className="flex items-center space-x-2">
           <AppLogo className="w-6 h-6" fallbackTextClass="font-serif text-2xl font-bold tracking-tighter" />
@@ -320,13 +379,11 @@ export default function App() {
         </div>
       </header>
 
-      {/* Hub Modules Grid */}
       <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
         <div>
           <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-2">Management Tools</p>
         </div>
 
-        {/* Handover Diary Module Card */}
         <div 
           onClick={() => setActiveModule('handover')}
           className="border-2 border-black rounded-2xl p-4 bg-white shadow-sm hover:shadow-md transition cursor-pointer flex items-center justify-between group active:scale-[0.99]"
@@ -343,7 +400,6 @@ export default function App() {
           <ChevronRight className="w-4 h-4 text-gray-400 group-hover:translate-x-0.5 transition-transform" />
         </div>
 
-        {/* Petty Cash Module Card */}
         <div 
           onClick={() => setActiveModule('petty')}
           className="border border-gray-200 rounded-2xl p-4 bg-white shadow-sm hover:border-black transition cursor-pointer flex items-center justify-between group active:scale-[0.99]"
@@ -360,7 +416,6 @@ export default function App() {
           <ChevronRight className="w-4 h-4 text-gray-400 group-hover:translate-x-0.5 transition-transform" />
         </div>
 
-        {/* Goods Received Module Card */}
         <div 
           onClick={() => setActiveModule('goods')}
           className="border border-gray-200 rounded-2xl p-4 bg-white shadow-sm hover:border-black transition cursor-pointer flex items-center justify-between group active:scale-[0.99]"
@@ -377,7 +432,6 @@ export default function App() {
           <ChevronRight className="w-4 h-4 text-gray-400 group-hover:translate-x-0.5 transition-transform" />
         </div>
 
-        {/* Stocktake & Orders Module Card */}
         <div 
           onClick={() => setActiveModule('orders')}
           className="border border-gray-200 rounded-2xl p-4 bg-white shadow-sm hover:border-black transition cursor-pointer flex items-center justify-between group active:scale-[0.99]"
@@ -394,12 +448,46 @@ export default function App() {
           <ChevronRight className="w-4 h-4 text-gray-400 group-hover:translate-x-0.5 transition-transform" />
         </div>
 
-        {/* App Info Footer */}
         <div className="pt-6 text-center text-[10px] text-gray-400 font-mono space-y-1">
           <p>Two-finger swipe right returns to this Hub from any module.</p>
           <p className="opacity-70">PWA v2.4 • Standalone iOS Keypad Active</p>
         </div>
       </div>
+
+      {/* Global First-Open Push Prompt Modal */}
+      {showFirstOpenPushModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-xs rounded-3xl overflow-hidden shadow-2xl border border-gray-200 p-5 space-y-3.5 animate-in fade-in zoom-in-95 duration-200">
+            <div className="w-12 h-12 bg-black rounded-2xl flex items-center justify-center mx-auto shadow-md">
+              <Bell className="w-6 h-6 text-emerald-400" />
+            </div>
+
+            <div className="text-center space-y-1">
+              <h2 className="text-base font-black text-gray-900 tracking-tight">Enable Operations Alerts</h2>
+              <p className="text-xs text-gray-500 leading-snug">
+                Receive instant alerts for shift handovers, comments, deliveries, and petty cash float updates.
+              </p>
+            </div>
+
+            <div className="space-y-2 pt-1">
+              <button
+                type="button"
+                onClick={handleEnablePushFromModal}
+                className="w-full py-2.5 bg-black hover:bg-neutral-800 text-white rounded-xl text-xs font-bold transition shadow-sm"
+              >
+                Allow Notifications
+              </button>
+              <button
+                type="button"
+                onClick={handleDismissFirstOpenPushModal}
+                className="w-full py-2 text-xs font-semibold text-gray-400 hover:text-gray-700 transition"
+              >
+                Not Now
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

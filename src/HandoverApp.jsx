@@ -67,8 +67,8 @@ function formatDisplayDate(dateInput) {
   return `${dayName} ${dayNum}${getOrdinalSuffix(dayNum)} ${monthName} ${year}`;
 }
 
-export default function HandoverApp({ currentUser, initialCatalog = [], initialHistory = [], onBackToHub, onLogout }) {
-  const [currentTab, setCurrentTab] = useState('history'); // 'history' | 'today' | 'settings'
+export default function HandoverApp({ currentUser, initialCatalog = [], initialHistory = [], onBackToHub, onLogout, onSendNotification }) {
+  const [currentTab, setCurrentTab] = useState('history');
 
   const parseCatalog = (data) => {
     if (!data) return [];
@@ -108,7 +108,6 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
     }
   });
 
-  // Shift Entry Form State - ALL BLANK ON STARTUP
   const [manager, setManager] = useState(currentUser?.name || 'Ross');
   const [role, setRole] = useState(currentUser?.role || 'Assistant General Manager');
   const [shiftDate, setShiftDate] = useState(() => new Date().toISOString().slice(0, 10));
@@ -116,17 +115,14 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
   const [closeTime, setCloseTime] = useState('');
   const [generalNotes, setGeneralNotes] = useState('');
 
-  // 86 List State
   const [eightySixInput, setEightySixInput] = useState('');
   const [eightySixQty, setEightySixQty] = useState('');
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [eightySixList, setEightySixList] = useState([]);
 
-  // Tomorrow Task State
   const [tomorrowInput, setTomorrowInput] = useState('');
   const [tomorrowList, setTomorrowList] = useState([]);
 
-  // Modals & Drawers
   const [historySearch, setHistorySearch] = useState('');
   const [historyDateFilter, setHistoryDateFilter] = useState('');
   const [selectedHistoryItem, setSelectedHistoryItem] = useState(null);
@@ -135,11 +131,9 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [statusMsg, setStatusMsg] = useState(null);
 
-  // Comments State
   const [commentInput, setCommentInput] = useState('');
   const [submittingComment, setSubmittingComment] = useState(false);
 
-  // Persistent Read Notifications Tracking
   const [readNotifIds, setReadNotifIds] = useState(() => {
     try {
       const cached = localStorage.getItem('wst_read_notifs');
@@ -149,8 +143,6 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
     }
   });
   const [showNotifications, setShowNotifications] = useState(false);
-
-  // OneSignal Push Notification Opt-In State
   const [pushEnabled, setPushEnabled] = useState(false);
 
   useEffect(() => {
@@ -182,7 +174,6 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
     });
   };
 
-  // 15-Minute Close Time Increments
   const timeOptions15Min = useMemo(() => {
     const times = [];
     for (let h = 0; h < 24; h++) {
@@ -195,7 +186,6 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
     return times;
   }, []);
 
-  // TWO-FINGER SWIPE HOOK
   const swipeHandlers = useTwoFingerSwipe({
     disabled: currentTab === 'settings' || Boolean(selectedHistoryItem) || Boolean(reactorsModalItem) || showNotifications,
     onSwipeLeft: () => {
@@ -259,14 +249,13 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
     }
   }, []);
 
-  // Extract all activity on posts authored by currentUser
+  // Filter out self-notifications for the in-app bell drawer
   const allNotifications = useMemo(() => {
     const currentUserName = currentUser?.name || manager;
     const notifs = [];
 
     historyList.forEach(entry => {
       if (entry.manager === currentUserName) {
-        // Reactions
         (entry.reactions || []).forEach(rx => {
           if (rx.user !== currentUserName) {
             notifs.push({
@@ -278,7 +267,6 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
             });
           }
         });
-        // Comments
         (entry.comments || []).forEach(c => {
           if (c.user !== currentUserName) {
             notifs.push({
@@ -296,7 +284,6 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
     return notifs;
   }, [historyList, currentUser, manager]);
 
-  // Unread notifications calculation
   const unreadNotifications = useMemo(() => {
     return allNotifications.filter(n => !readNotifIds.includes(n.id));
   }, [allNotifications, readNotifIds]);
@@ -487,7 +474,7 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify(payload)
       });
-      const json = await res.json();
+      await res.json();
       
       setStatusMsg({ 
         type: 'success', 
@@ -580,7 +567,6 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
       {...swipeHandlers}
       className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 overflow-x-hidden relative"
     >
-      {/* Top Header with Dynamic Island / Notch Inset Clearance */}
       <header className="flex items-center justify-between px-5 pt-[max(1.5rem,env(safe-area-inset-top))] pb-2 border-b border-gray-100 flex-shrink-0 bg-white z-20">
         <div className="flex items-center space-x-2">
           {onBackToHub && (
@@ -592,7 +578,6 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
           <span className="font-semibold text-base tracking-tight">West Side Tavern</span>
         </div>
 
-        {/* Right Nav: Unread Notifications Dropdown & Settings */}
         <div className="flex items-center space-x-3 text-xs font-medium relative">
           <button
             onClick={() => setShowNotifications(prev => !prev)}
@@ -619,7 +604,7 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
         </div>
       </header>
 
-      {/* Notifications Dropdown Tray (Only Shows & Badges New Activity) */}
+      {/* Notifications Drawer */}
       {showNotifications && (
         <div className="absolute top-[max(3.8rem,calc(env(safe-area-inset-top)+2.5rem))] right-4 z-40 w-72 bg-white rounded-2xl shadow-2xl border border-gray-200 overflow-hidden divide-y divide-gray-100 animate-in fade-in slide-in-from-top-2 duration-150">
           <div className="p-3 bg-gray-50 flex justify-between items-center">
@@ -668,7 +653,7 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
         </div>
       )}
 
-      {/* Main Content View */}
+      {/* Main View Router */}
       {currentTab === 'settings' ? (
         <div className="flex-1 flex flex-col px-5 pt-4 pb-20 overflow-y-auto space-y-4">
           <div className="flex items-center justify-between pb-3 border-b border-gray-100">
@@ -682,14 +667,12 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
           </div>
 
           <div className="space-y-4 text-[11px]">
-            {/* Authenticated Session Card */}
             <div className="p-3 bg-gray-50 border border-gray-200 rounded-xl space-y-1">
               <span className="text-[9px] uppercase font-bold text-gray-400">Authenticated Session</span>
               <p className="text-xs font-extrabold text-gray-900">{manager}</p>
               <span className="inline-block px-1.5 py-0.5 rounded text-[9px] font-mono bg-black text-white font-bold">{role}</span>
             </div>
 
-            {/* iOS Web Push Notification Toggle Card */}
             <div className="p-3 bg-gray-50 border border-gray-200 rounded-xl space-y-2">
               <div className="flex items-center justify-between">
                 <div>
@@ -711,7 +694,6 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
               </p>
             </div>
 
-            {/* Backend URL info */}
             <div className="space-y-2">
               <label className="block text-xs font-bold text-gray-900">Google Drive Backend</label>
               <div className="relative mt-2">
@@ -727,7 +709,6 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
         </div>
       ) : currentTab === 'history' ? (
         
-        /* DIARY VIEW */
         <div className="flex-1 flex flex-col overflow-hidden pb-20">
           <div className="px-5 pt-3 pb-2 border-b border-gray-100 flex-shrink-0 space-y-2">
             <div className="flex justify-between items-baseline">
@@ -858,7 +839,6 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
             )}
           </div>
 
-          {/* Centered Modal: Briefing & Live Commenting */}
           {selectedHistoryItem && (
             <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
               <div className="bg-white w-full max-w-sm rounded-3xl overflow-hidden shadow-2xl border border-gray-200 flex flex-col max-h-[85vh]">
@@ -880,7 +860,6 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
                 </div>
 
                 <div className="p-4 overflow-y-auto space-y-3.5 text-[11px]">
-                  {/* Reaction Bar in Modal */}
                   <div className="p-2.5 bg-gray-50 rounded-xl border border-gray-100 flex items-center justify-between">
                     <div>
                       <span className="font-bold uppercase tracking-wider text-[9px] text-gray-400 block mb-1">Acknowledgements</span>
@@ -925,7 +904,6 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
                     </div>
                   )}
 
-                  {/* Comments Section */}
                   <div className="border-t border-gray-100 pt-3 space-y-2">
                     <span className="font-bold uppercase tracking-wider text-[9px] text-gray-400 block">
                       Manager Discussion ({(selectedHistoryItem.comments || []).length})
@@ -977,7 +955,6 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
             </div>
           )}
 
-          {/* Modal: Who Reacted Details */}
           {reactorsModalItem && (
             <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
               <div className="bg-white w-full max-w-xs rounded-3xl overflow-hidden shadow-2xl border border-gray-200 flex flex-col max-h-[60vh]">
@@ -1001,7 +978,6 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
         </div>
       ) : (
         
-        /* NEW ENTRY VIEW */
         <div className="flex-1 flex flex-col overflow-y-auto px-5 py-3 space-y-4 pb-20">
           <div className="border-b border-gray-100 pb-3 space-y-2.5">
             <div>
@@ -1046,7 +1022,6 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
             </div>
           </div>
 
-          {/* Large General Notes Box */}
           <div className="space-y-1">
             <div className="flex justify-between items-baseline">
               <label className="block text-[11px] font-extrabold text-gray-900">General Notes</label>
@@ -1065,7 +1040,6 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
             </div>
           </div>
 
-          {/* 86 List */}
           <div className="space-y-2 bg-gray-50 border border-gray-200 rounded-xl p-3">
             <div className="flex justify-between items-center">
               <span className="block font-bold text-gray-900 uppercase tracking-wider text-[10px]">86 List (Stock SKU Lookup)</span>
@@ -1140,7 +1114,6 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
             </div>
           </div>
 
-          {/* Tomorrow Tasks */}
           <div className="space-y-1.5">
             <div className="flex justify-between items-center">
               <label className="block text-[11px] font-extrabold text-gray-900">Tomorrow / Handover Actions</label>
@@ -1205,7 +1178,6 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
         </div>
       )}
 
-      {/* Floating Bottom Navigation with Safe Area Padding */}
       <nav className="fixed bottom-2 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-[390px] z-30 rounded-2xl bg-[#111111]/95 backdrop-blur-md text-white py-2 px-3 flex justify-around items-center text-xs font-semibold shadow-2xl border border-white/10 select-none pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))]">
         <button onClick={() => setCurrentTab('history')} className={`flex-1 py-1 text-center rounded-xl transition ${currentTab === 'history' ? 'text-white bg-white/15 font-bold shadow-inner' : 'text-gray-400 hover:text-white'}`}>Diary</button>
         <button onClick={() => setCurrentTab('today')} className={`flex-1 py-1 text-center rounded-xl transition ${currentTab === 'today' ? 'text-white bg-white/15 font-bold shadow-inner' : 'text-gray-400 hover:text-white'}`}>New Entry</button>
