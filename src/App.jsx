@@ -49,11 +49,9 @@ export default function App() {
   const [authError, setAuthError] = useState(false);
   const [staffRoster, setStaffRoster] = useState([]);
 
-  // Rapid keypad race-condition prevention refs
   const pinRef = useRef('');
   const isCheckingRef = useRef(false);
 
-  // Push notification state
   const [pushEnabled, setPushEnabled] = useState(false);
   const [showFirstOpenPushModal, setShowFirstOpenPushModal] = useState(false);
 
@@ -79,27 +77,26 @@ export default function App() {
     fetchStaff();
   }, []);
 
-  // Sync logged-in manager with OneSignal aliases
+  // Sync logged-in manager with OneSignal external_id via login()
   useEffect(() => {
     if (!currentUser) return;
 
     const hasPrompted = localStorage.getItem('wst_push_prompted');
     if (window.OneSignalDeferred) {
       window.OneSignalDeferred.push(async function(OneSignal) {
+        await OneSignal.login(currentUser.name.trim());
+        await OneSignal.User.addTag("role", currentUser.role);
+
         const isOptedIn = await OneSignal.User.PushSubscription.optedIn;
         setPushEnabled(Boolean(isOptedIn));
 
-        if (isOptedIn) {
-          await OneSignal.User.addAlias("manager_name", currentUser.name);
-          await OneSignal.User.addTag("role", currentUser.role);
-        } else if (!hasPrompted) {
+        if (!isOptedIn && !hasPrompted) {
           setShowFirstOpenPushModal(true);
         }
       });
     }
   }, [currentUser]);
 
-  // Universal push dispatcher callable by any module
   const triggerPushNotification = async ({ title, message, targetManager = null }) => {
     try {
       await fetch(HARDWIRED_SCRIPT_URL, {
@@ -127,7 +124,7 @@ export default function App() {
       try {
         await OneSignal.User.PushSubscription.optIn();
         if (currentUser) {
-          await OneSignal.User.addAlias("manager_name", currentUser.name);
+          await OneSignal.login(currentUser.name.trim());
           await OneSignal.User.addTag("role", currentUser.role);
         }
         setPushEnabled(true);
@@ -194,6 +191,11 @@ export default function App() {
 
   const handleLogout = () => {
     localStorage.removeItem('wst_auth_user');
+    if (window.OneSignalDeferred) {
+      window.OneSignalDeferred.push(async function(OneSignal) {
+        await OneSignal.logout();
+      });
+    }
     setCurrentUser(null);
     pinRef.current = '';
     setPinDigits('');
@@ -201,9 +203,6 @@ export default function App() {
     setActiveModule('hub');
   };
 
-  // --------------------------------------------------------------------------
-  // SCREEN 1: ON-SCREEN NUMERIC KEYPAD LOGIN
-  // --------------------------------------------------------------------------
   if (!currentUser) {
     return (
       <div className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 justify-between px-8 pt-[max(2.5rem,env(safe-area-inset-top))] pb-[max(2rem,env(safe-area-inset-bottom))] select-none">
@@ -295,9 +294,6 @@ export default function App() {
     );
   }
 
-  // --------------------------------------------------------------------------
-  // SCREEN 2: ACTIVE APP MODULE ROUTER
-  // --------------------------------------------------------------------------
   if (activeModule === 'handover') {
     return (
       <div {...swipeHandlers} className="h-screen w-full">
@@ -350,9 +346,6 @@ export default function App() {
     );
   }
 
-  // --------------------------------------------------------------------------
-  // SCREEN 3: PORTAL HUB HOME
-  // --------------------------------------------------------------------------
   return (
     <div className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 overflow-hidden relative">
       <header className="flex items-center justify-between px-5 pt-[max(1.5rem,env(safe-area-inset-top))] pb-3 border-b border-gray-100 flex-shrink-0 bg-white z-20">
@@ -454,7 +447,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* Global First-Open Push Prompt Modal */}
       {showFirstOpenPushModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white w-full max-w-xs rounded-3xl overflow-hidden shadow-2xl border border-gray-200 p-5 space-y-3.5 animate-in fade-in zoom-in-95 duration-200">

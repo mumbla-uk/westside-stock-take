@@ -150,8 +150,8 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
       window.OneSignalDeferred.push(async function(OneSignal) {
         const isOptedIn = await OneSignal.User.PushSubscription.optedIn;
         setPushEnabled(Boolean(isOptedIn));
-        if (isOptedIn) {
-          await OneSignal.User.addAlias("manager_name", manager);
+        if (isOptedIn && manager) {
+          await OneSignal.login(manager.trim());
           await OneSignal.User.addTag("role", role);
         }
       });
@@ -164,7 +164,7 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
     window.OneSignalDeferred.push(async function(OneSignal) {
       if (!pushEnabled) {
         await OneSignal.User.PushSubscription.optIn();
-        await OneSignal.User.addAlias("manager_name", manager);
+        await OneSignal.login(manager.trim());
         await OneSignal.User.addTag("role", role);
         setPushEnabled(true);
       } else {
@@ -249,7 +249,6 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
     }
   }, []);
 
-  // Filter out self-notifications for the in-app bell drawer
   const allNotifications = useMemo(() => {
     const currentUserName = currentUser?.name || manager;
     const notifs = [];
@@ -604,7 +603,6 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
         </div>
       </header>
 
-      {/* Notifications Drawer */}
       {showNotifications && (
         <div className="absolute top-[max(3.8rem,calc(env(safe-area-inset-top)+2.5rem))] right-4 z-40 w-72 bg-white rounded-2xl shadow-2xl border border-gray-200 overflow-hidden divide-y divide-gray-100 animate-in fade-in slide-in-from-top-2 duration-150">
           <div className="p-3 bg-gray-50 flex justify-between items-center">
@@ -653,7 +651,6 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
         </div>
       )}
 
-      {/* Main View Router */}
       {currentTab === 'settings' ? (
         <div className="flex-1 flex flex-col px-5 pt-4 pb-20 overflow-y-auto space-y-4">
           <div className="flex items-center justify-between pb-3 border-b border-gray-100">
@@ -708,7 +705,6 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
           </div>
         </div>
       ) : currentTab === 'history' ? (
-        
         <div className="flex-1 flex flex-col overflow-hidden pb-20">
           <div className="px-5 pt-3 pb-2 border-b border-gray-100 flex-shrink-0 space-y-2">
             <div className="flex justify-between items-baseline">
@@ -977,7 +973,6 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
           )}
         </div>
       ) : (
-        
         <div className="flex-1 flex flex-col overflow-y-auto px-5 py-3 space-y-4 pb-20">
           <div className="border-b border-gray-100 pb-3 space-y-2.5">
             <div>
