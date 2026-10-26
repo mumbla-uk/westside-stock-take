@@ -88,6 +88,10 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
     }
   });
 
+  const [masterSheetUrl, setMasterSheetUrl] = useState(() => {
+    return localStorage.getItem('wst_master_sheet_url') || '';
+  });
+
   const [counts, setCounts] = useState(() => {
     const init = {};
     const fromProp = parseCatalog(initialCatalog);
@@ -140,6 +144,11 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
       const json = await res.json();
       const fetched = parseCatalog(json);
 
+      if (json && json.masterSheetUrl) {
+        setMasterSheetUrl(json.masterSheetUrl);
+        localStorage.setItem('wst_master_sheet_url', json.masterSheetUrl);
+      }
+
       if (fetched.length > 0) {
         setProducts(fetched);
         const cInit = {};
@@ -163,7 +172,7 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
   };
 
   useEffect(() => {
-    if (products.length === 0) {
+    if (products.length === 0 || !masterSheetUrl) {
       fetchSheetData();
     }
   }, []);
@@ -188,12 +197,17 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
     setStatusMsg(null);
     try {
       const payload = products.map(p => ({ id: p.id, count: counts[p.id] ?? 0 }));
-      await fetch(HARDWIRED_SCRIPT_URL, {
+      const res = await fetch(HARDWIRED_SCRIPT_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify(payload)
       });
-      setStatusMsg({ type: 'success', text: 'Stock counts saved to Google Sheet!' });
+      const json = await res.json();
+      if (json && json.status === 'success') {
+        setStatusMsg({ type: 'success', text: 'Stock counts saved to Google Sheet!' });
+      } else {
+        setStatusMsg({ type: 'error', text: json?.message || 'Error saving counts.' });
+      }
     } catch (err) {
       setStatusMsg({ type: 'error', text: 'Failed to write counts to Google Sheet.' });
     } finally {
@@ -346,7 +360,7 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
 
       {/* Main View Router */}
       {view === 'settings' ? (
-        <div className="flex-1 flex flex-col px-5 pt-4 pb-20 overflow-y-auto">
+        <div className="flex-1 flex flex-col px-5 pt-4 pb-20 overflow-y-auto space-y-4">
           <div className="flex items-center justify-between pb-3 border-b border-gray-100">
             <div>
               <p className="text-gray-500 italic text-[11px] font-serif">Preferences</p>
@@ -357,7 +371,40 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
             </button>
           </div>
 
-          <div className="space-y-4 mt-4 text-[11px]">
+          <div className="space-y-4 text-[11px]">
+            {/* Direct Master Sheet Link */}
+            <div className="p-3 bg-gray-50 border border-gray-200 rounded-xl space-y-2">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-[9px] uppercase font-bold text-gray-400 block">Master Catalog Sheet</span>
+                  <p className="text-xs font-bold text-gray-900">Manage SKUs, Pars & Suppliers</p>
+                </div>
+              </div>
+              <p className="text-[10px] text-gray-500 leading-tight">
+                Edit items, pars, suppliers, and areas directly in the master stock spreadsheet.
+              </p>
+              {masterSheetUrl ? (
+                <a
+                  href={masterSheetUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="w-full py-2.5 bg-black hover:bg-neutral-800 text-white rounded-xl text-xs font-bold transition flex items-center justify-center space-x-2 shadow-sm"
+                >
+                  <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Open Master Stocktake Sheet</span>
+                  <ExternalLink className="w-3 h-3 text-gray-400" />
+                </a>
+              ) : (
+                <button
+                  type="button"
+                  onClick={fetchSheetData}
+                  className="w-full py-2 bg-gray-200 text-gray-700 rounded-xl text-xs font-bold hover:bg-gray-300 transition"
+                >
+                  Sync Spreadsheet URL
+                </button>
+              )}
+            </div>
+
             <div className="space-y-2">
               <label className="block text-xs font-bold text-gray-900">Google Apps Script Web App</label>
               <div className="relative mt-2">
@@ -365,6 +412,7 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
                 <Lock className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
               </div>
             </div>
+
             <button onClick={() => setView('main')} className="w-full py-2.5 bg-[#C2F19D] text-xs font-semibold rounded-lg text-gray-900 hover:bg-[#b2e88a] transition">
               Back to Stocktake
             </button>
@@ -502,9 +550,24 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
                 Week beginning {weekBeginningStr}
               </h1>
             </div>
-            <button onClick={fetchSheetData} className="p-1 text-gray-500 hover:text-black rounded-lg bg-gray-50 border border-gray-100" title="Sync with Google Sheet">
-              <RefreshCw className={`w-3.5 h-3.5 ${saving ? 'animate-spin' : ''}`} />
-            </button>
+            <div className="flex items-center space-x-1.5">
+              {masterSheetUrl && (
+                <a 
+                  href={masterSheetUrl} 
+                  target="_blank" 
+                  rel="noreferrer" 
+                  className="p-1 text-emerald-700 hover:text-black rounded-lg bg-emerald-50 border border-emerald-200 flex items-center space-x-1 text-[10px] font-bold px-2 py-0.5"
+                  title="Open Master Sheet in Google Sheets"
+                >
+                  <FileSpreadsheet className="w-3 h-3 text-emerald-600" />
+                  <span>Sheet</span>
+                  <ExternalLink className="w-2.5 h-2.5 opacity-60" />
+                </a>
+              )}
+              <button onClick={fetchSheetData} className="p-1 text-gray-500 hover:text-black rounded-lg bg-gray-50 border border-gray-100" title="Sync with Google Sheet">
+                <RefreshCw className={`w-3.5 h-3.5 ${saving ? 'animate-spin' : ''}`} />
+              </button>
+            </div>
           </div>
 
           {statusMsg && (
