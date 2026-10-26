@@ -8,13 +8,13 @@ import {
   Calendar, 
   FileSpreadsheet, 
   Lock, 
-  ExternalLink,
-  ChevronRight,
-  Sparkles,
-  Bell,
-  MessageCircle,
-  MoreHorizontal,
-  Check
+  ExternalLink, 
+  ChevronRight, 
+  Sparkles, 
+  Bell, 
+  MessageCircle, 
+  MoreHorizontal, 
+  Check 
 } from 'lucide-react';
 import { useTwoFingerSwipe } from './useTwoFingerSwipe';
 
@@ -154,13 +154,13 @@ export default function HandoverApp({
   const [showNotifications, setShowNotifications] = useState(false);
   const [pushEnabled, setPushEnabled] = useState(false);
 
-  // Auto-open deep linked entry when arrived from notification
+  // Match deep-link target when history loads or deep-link updates
   useEffect(() => {
     if (initialDeepLink && initialDeepLink.entryId && historyList.length > 0) {
-      const target = historyList.find(item => String(item.id).trim() === String(initialDeepLink.entryId).trim());
-      if (target) {
+      const match = historyList.find(item => String(item.id).trim() === String(initialDeepLink.entryId).trim());
+      if (match) {
         setCurrentTab('history');
-        setSelectedHistoryItem(target);
+        setSelectedHistoryItem(match);
         if (onClearDeepLink) onClearDeepLink();
       }
     }

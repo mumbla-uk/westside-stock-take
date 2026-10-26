@@ -65,6 +65,39 @@ export default function App() {
     }
   });
 
+  // 1. Immediately read launch query parameters on iOS cold boot
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const mod = params.get('module');
+      const entryId = params.get('entryId');
+
+      if (mod) {
+        setActiveModule(mod);
+        setDeepLinkData({ module: mod, entryId: entryId || '' });
+        // Clean URL in browser history without reloading
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+    } catch (err) {
+      console.warn("Could not parse launch query params:", err);
+    }
+  }, []);
+
+  // 2. Also register OneSignal foreground/warm click listener
+  useEffect(() => {
+    if (window.OneSignalDeferred) {
+      window.OneSignalDeferred.push(function(OneSignal) {
+        OneSignal.Notifications.addEventListener('click', function(event) {
+          const additionalData = event.notification ? event.notification.additionalData : null;
+          if (additionalData && additionalData.module) {
+            setActiveModule(additionalData.module);
+            setDeepLinkData(additionalData);
+          }
+        });
+      });
+    }
+  }, []);
+
   useEffect(() => {
     const fetchStaff = async () => {
       try {
@@ -99,21 +132,6 @@ export default function App() {
       });
     }
   }, [currentUser]);
-
-  // Deep-link notification click listener
-  useEffect(() => {
-    if (window.OneSignalDeferred) {
-      window.OneSignalDeferred.push(function(OneSignal) {
-        OneSignal.Notifications.addEventListener('click', function(event) {
-          const additionalData = event.notification ? event.notification.additionalData : null;
-          if (additionalData && additionalData.module) {
-            setActiveModule(additionalData.module);
-            setDeepLinkData(additionalData);
-          }
-        });
-      });
-    }
-  }, []);
 
   const triggerPushNotification = async ({ title, message, targetManager = null }) => {
     try {
