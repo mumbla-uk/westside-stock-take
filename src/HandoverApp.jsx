@@ -13,13 +13,13 @@ import {
   Sparkles,
   Bell,
   MessageCircle,
-  MoreHorizontal
+  MoreHorizontal,
+  Check
 } from 'lucide-react';
 import { useTwoFingerSwipe } from './useTwoFingerSwipe';
 
 const HARDWIRED_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzcrqf4q-QWiGq0sxMmXqS7QcsxCVfhkJgPfjxOm6KyPShNUD-zkD9HUZy49rDdrfAYJg/exec";
 
-// Required Reactions
 const AVAILABLE_REACTIONS = [
   { emoji: '❤️', label: 'Love' },
   { emoji: '👍', label: 'Like' },
@@ -135,11 +135,19 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [statusMsg, setStatusMsg] = useState(null);
 
-  // Comments State inside Full Brief Modal
+  // Comments State
   const [commentInput, setCommentInput] = useState('');
   const [submittingComment, setSubmittingComment] = useState(false);
 
-  // Notifications State
+  // Persistent Read Notifications Tracking
+  const [readNotifIds, setReadNotifIds] = useState(() => {
+    try {
+      const cached = localStorage.getItem('wst_read_notifs');
+      return cached ? JSON.parse(cached) : [];
+    } catch {
+      return [];
+    }
+  });
   const [showNotifications, setShowNotifications] = useState(false);
 
   // 15-Minute Close Time Increments
@@ -219,26 +227,26 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
     }
   }, []);
 
-  // Notifications calculation: comments or reactions on entries authored by currentUser
-  const myNotifications = useMemo(() => {
+  // Extract all activity on posts authored by currentUser
+  const allNotifications = useMemo(() => {
     const currentUserName = currentUser?.name || manager;
     const notifs = [];
 
     historyList.forEach(entry => {
       if (entry.manager === currentUserName) {
-        // Reactions by others
+        // Reactions
         (entry.reactions || []).forEach(rx => {
           if (rx.user !== currentUserName) {
             notifs.push({
               id: `rx-${entry.id}-${rx.user}-${rx.emoji}`,
               entry,
               type: 'reaction',
-              text: `${rx.user} reacted ${rx.emoji} to your ${entry.entryType || 'entry'}`,
+              text: `${rx.user} reacted ${rx.emoji} to your ${entry.entryType || 'handover'}`,
               dateStr: entry.dateStr
             });
           }
         });
-        // Comments by others
+        // Comments
         (entry.comments || []).forEach(c => {
           if (c.user !== currentUserName) {
             notifs.push({
@@ -256,7 +264,28 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
     return notifs;
   }, [historyList, currentUser, manager]);
 
-  // Reaction Toggle Handler
+  // Unread notifications calculation
+  const unreadNotifications = useMemo(() => {
+    return allNotifications.filter(n => !readNotifIds.includes(n.id));
+  }, [allNotifications, readNotifIds]);
+
+  const markAllNotificationsAsRead = () => {
+    const allIds = allNotifications.map(n => n.id);
+    const updated = Array.from(new Set([...readNotifIds, ...allIds]));
+    setReadNotifIds(updated);
+    localStorage.setItem('wst_read_notifs', JSON.stringify(updated));
+  };
+
+  const markSingleNotificationAsRead = (notifId, entry) => {
+    if (!readNotifIds.includes(notifId)) {
+      const updated = [...readNotifIds, notifId];
+      setReadNotifIds(updated);
+      localStorage.setItem('wst_read_notifs', JSON.stringify(updated));
+    }
+    setSelectedHistoryItem(entry);
+    setShowNotifications(false);
+  };
+
   const handleToggleReaction = async (itemId, emoji, e) => {
     if (e) e.stopPropagation();
     const activeUserName = currentUser?.name || manager || 'Staff';
@@ -303,7 +332,6 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
     }
   };
 
-  // Add Comment Handler inside Brief Modal
   const handleAddComment = async (e) => {
     e.preventDefault();
     if (!commentInput.trim() || !selectedHistoryItem) return;
@@ -465,7 +493,6 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
     });
   }, [historyList, historySearch, historyDateFilter]);
 
-  // Reaction Bar Component with "..." (Inspect Reactors)
   const ReactionBar = ({ item }) => {
     const reactions = item.reactions || [];
     const activeUserName = currentUser?.name || manager || 'Staff';
@@ -499,7 +526,6 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
           );
         })}
 
-        {/* "..." Button: Opens Reactors Modal */}
         {reactions.length > 0 && (
           <button
             type="button"
@@ -522,7 +548,7 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
       {...swipeHandlers}
       className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 overflow-x-hidden relative"
     >
-      {/* Top Header with Safe Area Padding */}
+      {/* Top Header with Dynamic Island / Notch Inset Clearance */}
       <header className="flex items-center justify-between px-5 pt-[max(1.5rem,env(safe-area-inset-top))] pb-2 border-b border-gray-100 flex-shrink-0 bg-white z-20">
         <div className="flex items-center space-x-2">
           {onBackToHub && (
@@ -534,7 +560,7 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
           <span className="font-semibold text-base tracking-tight">West Side Tavern</span>
         </div>
 
-        {/* Right Nav: Notifications Dropdown Bell & Settings */}
+        {/* Right Nav: Unread Notifications Dropdown & Settings */}
         <div className="flex items-center space-x-3 text-xs font-medium relative">
           <button
             onClick={() => setShowNotifications(prev => !prev)}
@@ -542,9 +568,9 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
             title="Notifications"
           >
             <Bell className="w-4 h-4" />
-            {myNotifications.length > 0 && (
-              <span className="absolute -top-0.5 -right-0.5 w-4 h-4 rounded-full bg-red-600 text-white font-mono text-[9px] font-bold flex items-center justify-center">
-                {myNotifications.length > 9 ? '9+' : myNotifications.length}
+            {unreadNotifications.length > 0 && (
+              <span className="absolute -top-0.5 -right-0.5 w-4 h-4 rounded-full bg-red-600 text-white font-mono text-[9px] font-bold flex items-center justify-center animate-pulse">
+                {unreadNotifications.length > 9 ? '9+' : unreadNotifications.length}
               </span>
             )}
           </button>
@@ -561,32 +587,50 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
         </div>
       </header>
 
-      {/* Notifications Dropdown Tray */}
+      {/* Notifications Dropdown Tray (Only Shows & Badges New Activity) */}
       {showNotifications && (
         <div className="absolute top-[max(3.8rem,calc(env(safe-area-inset-top)+2.5rem))] right-4 z-40 w-72 bg-white rounded-2xl shadow-2xl border border-gray-200 overflow-hidden divide-y divide-gray-100 animate-in fade-in slide-in-from-top-2 duration-150">
           <div className="p-3 bg-gray-50 flex justify-between items-center">
             <span className="text-[10px] font-black uppercase tracking-wider text-gray-500">Activity On Your Posts</span>
-            <button onClick={() => setShowNotifications(false)} className="text-gray-400 hover:text-black p-0.5">
-              <X className="w-3.5 h-3.5" />
-            </button>
+            <div className="flex items-center space-x-2">
+              {unreadNotifications.length > 0 && (
+                <button 
+                  onClick={markAllNotificationsAsRead}
+                  className="text-[10px] text-emerald-700 hover:underline font-bold flex items-center space-x-0.5"
+                >
+                  <Check className="w-3 h-3" />
+                  <span>Mark all read</span>
+                </button>
+              )}
+              <button onClick={() => setShowNotifications(false)} className="text-gray-400 hover:text-black p-0.5">
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
           <div className="max-h-64 overflow-y-auto divide-y divide-gray-100">
-            {myNotifications.length === 0 ? (
-              <p className="p-4 text-center text-xs text-gray-400 italic">No new notifications</p>
+            {allNotifications.length === 0 ? (
+              <p className="p-4 text-center text-xs text-gray-400 italic">No activity yet</p>
             ) : (
-              myNotifications.map((n) => (
-                <div 
-                  key={n.id}
-                  onClick={() => {
-                    setSelectedHistoryItem(n.entry);
-                    setShowNotifications(false);
-                  }}
-                  className="p-3 hover:bg-gray-50 cursor-pointer text-xs space-y-0.5 transition"
-                >
-                  <p className="font-semibold text-gray-900 leading-snug">{n.text}</p>
-                  <span className="text-[10px] text-gray-400 font-mono block">{n.dateStr}</span>
-                </div>
-              ))
+              allNotifications.map((n) => {
+                const isUnread = !readNotifIds.includes(n.id);
+                return (
+                  <div 
+                    key={n.id}
+                    onClick={() => markSingleNotificationAsRead(n.id, n.entry)}
+                    className={`p-3 hover:bg-gray-50 cursor-pointer text-xs space-y-0.5 transition ${isUnread ? 'bg-emerald-50/40' : 'bg-white'}`}
+                  >
+                    <div className="flex items-start justify-between">
+                      <p className={`leading-snug ${isUnread ? 'font-bold text-gray-900' : 'font-medium text-gray-700'}`}>
+                        {n.text}
+                      </p>
+                      {isUnread && (
+                        <span className="w-2 h-2 rounded-full bg-emerald-500 flex-shrink-0 mt-1 ml-1" />
+                      )}
+                    </div>
+                    <span className="text-[9px] text-gray-400 font-mono block">{n.dateStr}</span>
+                  </div>
+                );
+              })
             )}
           </div>
         </div>
@@ -758,7 +802,7 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
             )}
           </div>
 
-          {/* Centered Modal: Full Brief & Commenting */}
+          {/* Centered Modal: Briefing & Live Commenting */}
           {selectedHistoryItem && (
             <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
               <div className="bg-white w-full max-w-sm rounded-3xl overflow-hidden shadow-2xl border border-gray-200 flex flex-col max-h-[85vh]">
@@ -847,7 +891,6 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
                       )}
                     </div>
 
-                    {/* Add Comment Form */}
                     <form onSubmit={handleAddComment} className="flex items-center space-x-1.5 pt-1">
                       <input
                         type="text"
@@ -878,7 +921,7 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
             </div>
           )}
 
-          {/* Modal: Who Reacted Details Drawer */}
+          {/* Modal: Who Reacted Details */}
           {reactorsModalItem && (
             <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
               <div className="bg-white w-full max-w-xs rounded-3xl overflow-hidden shadow-2xl border border-gray-200 flex flex-col max-h-[60vh]">
@@ -1106,7 +1149,7 @@ export default function HandoverApp({ currentUser, initialCatalog = [], initialH
         </div>
       )}
 
-      {/* Floating Bottom Navigation with Safe Area Inset */}
+      {/* Floating Bottom Navigation with Safe Area Padding */}
       <nav className="fixed bottom-2 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-[390px] z-30 rounded-2xl bg-[#111111]/95 backdrop-blur-md text-white py-2 px-3 flex justify-around items-center text-xs font-semibold shadow-2xl border border-white/10 select-none pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))]">
         <button onClick={() => setCurrentTab('history')} className={`flex-1 py-1 text-center rounded-xl transition ${currentTab === 'history' ? 'text-white bg-white/15 font-bold shadow-inner' : 'text-gray-400 hover:text-white'}`}>Diary</button>
         <button onClick={() => setCurrentTab('today')} className={`flex-1 py-1 text-center rounded-xl transition ${currentTab === 'today' ? 'text-white bg-white/15 font-bold shadow-inner' : 'text-gray-400 hover:text-white'}`}>New Entry</button>
