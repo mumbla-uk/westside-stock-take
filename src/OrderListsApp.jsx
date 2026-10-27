@@ -14,7 +14,10 @@ import {
   ExternalLink,
   Send,
   CheckCircle2,
-  ListTodo
+  ListTodo,
+  FolderOpen,
+  Calendar,
+  Layers
 } from 'lucide-react';
 import { useTwoFingerSwipe } from './useTwoFingerSwipe';
 
@@ -74,6 +77,18 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
   const [orderMode, setOrderMode] = useState(false);
   const [checkedItemIds, setCheckedItemIds] = useState(new Set());
   const [placedSuppliers, setPlacedSuppliers] = useState(new Set());
+  const [lastOrderedMap, setLastOrderedMap] = useState({});
+
+  // Archive Browser Modal & Preview State
+  const [archiveModalOpen, setArchiveModalOpen] = useState(false);
+  const [archiveTab, setArchiveTab] = useState('stocktakes'); // 'stocktakes' | 'orders'
+  const [archiveStocktakes, setArchiveStocktakes] = useState([]);
+  const [archiveOrders, setArchiveOrders] = useState([]);
+  const [loadingArchive, setLoadingArchive] = useState(false);
+  
+  // Floating Record Detail Modal
+  const [selectedRecordDetail, setSelectedRecordDetail] = useState(null);
+  const [loadingRecordDetail, setLoadingRecordDetail] = useState(false);
 
   const parseCatalog = (data) => {
     if (!data) return [];
@@ -124,12 +139,11 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
   const [saving, setSaving] = useState(false);
   const [savingToDrive, setSavingToDrive] = useState(false);
   const [statusMsg, setStatusMsg] = useState(null);
-  const [driveFileUrl, setDriveFileUrl] = useState('');
 
   const { dayName, weekBeginningStr, fullDateStr } = useMemo(() => getFormattedDates(), []);
 
   const swipeHandlers = useTwoFingerSwipe({
-    disabled: view === 'settings',
+    disabled: view === 'settings' || archiveModalOpen || Boolean(selectedRecordDetail),
     onSwipeLeft: () => {
       if (activeTab === 'Stocktake') setActiveTab('Orders');
     },
@@ -153,6 +167,10 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
       if (json && json.masterSheetUrl) {
         setMasterSheetUrl(json.masterSheetUrl);
         localStorage.setItem('wst_master_sheet_url', json.masterSheetUrl);
+      }
+
+      if (json && json.lastOrderedMap) {
+        setLastOrderedMap(json.lastOrderedMap);
       }
 
       if (fetched.length > 0) {
@@ -182,6 +200,43 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
       fetchSheetData();
     }
   }, []);
+
+  // Fetch Folder Archive lists (Stocktakes & Orders)
+  const fetchFolderArchives = async () => {
+    setLoadingArchive(true);
+    try {
+      const res = await fetch(`${HARDWIRED_SCRIPT_URL}?action=get_folder_records`);
+      const json = await res.json();
+      if (json && json.status === 'success') {
+        setArchiveStocktakes(json.stocktakes || []);
+        setArchiveOrders(json.orders || []);
+        if (json.lastOrderedMap) {
+          setLastOrderedMap(json.lastOrderedMap);
+        }
+      }
+    } catch (err) {
+      console.error("Could not fetch archives:", err);
+    } finally {
+      setLoadingArchive(false);
+    }
+  };
+
+  // Open & preview a specific spreadsheet file in floating modal
+  const handleOpenRecordDetail = async (file) => {
+    setLoadingRecordDetail(true);
+    setSelectedRecordDetail({ title: file.name, fileUrl: file.url, loading: true });
+    try {
+      const res = await fetch(`${HARDWIRED_SCRIPT_URL}?action=get_record_detail&fileId=${file.id}`);
+      const json = await res.json();
+      if (json && json.status === 'success') {
+        setSelectedRecordDetail(json);
+      }
+    } catch (err) {
+      console.error("Error reading file detail:", err);
+    } finally {
+      setLoadingRecordDetail(false);
+    }
+  };
 
   const updateCount = (id, delta) => {
     setModifiedIds(prev => new Set(prev).add(id));
@@ -229,8 +284,7 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
       const json = await res.json();
 
       if (json && json.status === 'success') {
-        setStatusMsg({ type: 'success', text: 'Stock counts saved & compiled to Drive folder!' });
-        if (json.fileUrl) setDriveFileUrl(json.fileUrl);
+        setStatusMsg({ type: 'success', text: 'Stocktake saved & archived to folder!' });
       } else {
         setStatusMsg({ type: 'error', text: json?.message || 'Error saving counts.' });
       }
@@ -312,12 +366,11 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
     setTimeout(() => setCopyFeedback(null), 2000);
   };
 
-  // Unified save & place handler for orders
   const handleSaveSupplierOrder = async (supplierName, items, isPlaced = false) => {
     setSavingToDrive(true);
     setStatusMsg({ 
       type: 'info', 
-      text: isPlaced ? `Marking ${supplierName} order as placed...` : `Saving ${supplierName} order to folder...` 
+      text: isPlaced ? `Marking ${supplierName} order placed...` : `Saving ${supplierName} order list...` 
     });
 
     try {
@@ -349,31 +402,32 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
         setStatusMsg({ 
           type: 'success', 
           text: isPlaced 
-            ? `${supplierName} marked as placed & team alerted!` 
+            ? `${supplierName} marked placed & team notified!` 
             : `${supplierName} order saved to folder!` 
         });
         if (isPlaced) {
           setPlacedSuppliers(prev => new Set(prev).add(supplierName));
+          setLastOrderedMap(prev => ({
+            ...prev,
+            [supplierName]: { dateStr: new Date().toISOString().slice(0, 10), isPlaced: true }
+          }));
         }
-        if (json.fileUrl) setDriveFileUrl(json.fileUrl);
       } else {
-        setStatusMsg({ type: 'error', text: 'Error saving order to Drive.' });
+        setStatusMsg({ type: 'error', text: 'Error saving order.' });
       }
     } catch (err) {
-      console.error(err);
       setStatusMsg({ type: 'error', text: 'Network error saving order.' });
     } finally {
       setSavingToDrive(false);
     }
   };
 
-  // Save all orders in a single consolidated action
   const handleSaveAllOrders = async (isPlaced = false) => {
     const suppliers = Object.keys(ordersBySupplier);
     if (suppliers.length === 0) return;
 
     setSavingToDrive(true);
-    setStatusMsg({ type: 'info', text: isPlaced ? "Marking all orders as placed..." : "Saving all orders to folder..." });
+    setStatusMsg({ type: 'info', text: isPlaced ? "Placing all orders..." : "Saving all orders..." });
 
     try {
       const allItems = [];
@@ -410,14 +464,18 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
       if (json && json.status === 'success') {
         setStatusMsg({ 
           type: 'success', 
-          text: isPlaced ? "All orders placed & team notified!" : "All supplier orders saved to folder!" 
+          text: isPlaced ? "All orders placed & team notified!" : "All orders saved to folder!" 
         });
         if (isPlaced) {
           setPlacedSuppliers(new Set(suppliers));
+          const updatedMap = { ...lastOrderedMap };
+          suppliers.forEach(s => {
+            updatedMap[s] = { dateStr: new Date().toISOString().slice(0, 10), isPlaced: true };
+          });
+          setLastOrderedMap(updatedMap);
         }
-        if (json.fileUrl) setDriveFileUrl(json.fileUrl);
       } else {
-        setStatusMsg({ type: 'error', text: 'Error saving all orders.' });
+        setStatusMsg({ type: 'error', text: 'Error saving orders.' });
       }
     } catch (err) {
       setStatusMsg({ type: 'error', text: 'Network error saving orders.' });
@@ -518,31 +576,44 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
         </div>
       ) : activeTab === 'Orders' ? (
 
-        /* TAB 2: PAR-LEVEL ORDERS BY SUPPLIER */
+        /* TAB 2: ORDERS BY SUPPLIER */
         <div className="flex-1 flex flex-col overflow-hidden pb-20">
           <div className="px-5 pt-3 pb-2 border-b border-gray-100 flex-shrink-0">
-            <div className="flex justify-between items-start mb-2">
-              <div>
-                <div className="flex items-center space-x-1.5">
-                  <p className="text-gray-500 italic text-[11px] font-serif">Par-Level Reorder Calculations</p>
-                  <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 font-bold">{modifiedIds.size} items counted</span>
-                </div>
-                <h1 className="text-xl font-black tracking-tight text-gray-900">Orders by Supplier</h1>
+            {/* Clean Header Bar: Space for Badges and Order Mode Switch */}
+            <div className="flex justify-between items-center mb-2">
+              <div className="flex items-center space-x-2">
+                <h1 className="text-xl font-black tracking-tight text-gray-900 leading-tight">Orders</h1>
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 font-bold">
+                  {modifiedIds.size} counted
+                </span>
               </div>
 
-              {/* Order Mode Toggle */}
-              <button
-                type="button"
-                onClick={() => setOrderMode(!orderMode)}
-                className={`flex items-center space-x-1 px-2.5 py-1 rounded-lg text-[10px] font-bold border transition ${
-                  orderMode 
-                    ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm' 
-                    : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
-                }`}
-              >
-                <ListTodo className="w-3 h-3" />
-                <span>{orderMode ? 'Order Mode ON' : 'Order Mode'}</span>
-              </button>
+              <div className="flex items-center space-x-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setArchiveModalOpen(true);
+                    fetchFolderArchives();
+                  }}
+                  className="p-1.5 rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-100 transition"
+                  title="View Saved Archives & Order Lists"
+                >
+                  <FolderOpen className="w-3.5 h-3.5 text-gray-700" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setOrderMode(!orderMode)}
+                  className={`flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold border transition ${
+                    orderMode 
+                      ? 'bg-black text-white border-black shadow-sm' 
+                      : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
+                  }`}
+                >
+                  <ListTodo className="w-3 h-3 text-emerald-400" />
+                  <span>{orderMode ? 'Order Mode' : 'Normal'}</span>
+                </button>
+              </div>
             </div>
 
             {/* Top Bulk Action Bar */}
@@ -552,30 +623,32 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
               </span>
 
               <div className="flex items-center space-x-1.5">
+                {/* Icon-Only Copy All */}
                 <button
                   onClick={handleCopyAll}
                   disabled={Object.keys(ordersBySupplier).length === 0}
-                  className="flex items-center space-x-1 px-2 py-0.5 bg-[#F3F3F3] hover:bg-gray-200 disabled:opacity-40 rounded-md text-[10px] font-bold text-gray-800 transition"
+                  className="p-1.5 bg-[#F3F3F3] hover:bg-gray-200 disabled:opacity-30 rounded-lg text-gray-800 transition"
+                  title="Copy All Orders"
                 >
-                  {copyFeedback === 'ALL' ? <Check className="w-3 h-3 text-green-600" /> : <Copy className="w-2.5 h-2.5" />}
-                  <span>{copyFeedback === 'ALL' ? 'Copied' : 'Copy All'}</span>
+                  {copyFeedback === 'ALL' ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />}
                 </button>
+                
                 <button
                   disabled={savingToDrive || Object.keys(ordersBySupplier).length === 0}
                   onClick={() => handleSaveAllOrders(false)}
-                  className="flex items-center space-x-1 px-2 py-0.5 bg-[#F3F3F3] hover:bg-gray-200 disabled:opacity-40 rounded-md text-[10px] font-bold text-gray-800 transition"
+                  className="px-2.5 py-1 bg-[#F3F3F3] hover:bg-gray-200 disabled:opacity-30 rounded-lg text-[10px] font-bold text-gray-800 transition"
                 >
-                  <FileSpreadsheet className="w-2.5 h-2.5 text-gray-600" />
-                  <span>Save All</span>
+                  Save All
                 </button>
+
                 {orderMode && (
                   <button
                     disabled={savingToDrive || Object.keys(ordersBySupplier).length === 0}
                     onClick={() => handleSaveAllOrders(true)}
-                    className="flex items-center space-x-1 px-2 py-0.5 bg-black text-white hover:bg-neutral-800 disabled:opacity-40 rounded-md text-[10px] font-bold transition shadow-sm"
+                    className="flex items-center space-x-1 px-2.5 py-1 bg-black text-white hover:bg-neutral-800 disabled:opacity-30 rounded-lg text-[10px] font-bold transition shadow-sm"
                   >
-                    <CheckCircle2 className="w-2.5 h-2.5 text-emerald-400" />
-                    <span>Place All</span>
+                    <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                    <span>All Orders Placed</span>
                   </button>
                 )}
               </div>
@@ -605,51 +678,37 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
                 const items = ordersBySupplier[supplier];
                 const totalUnits = items.reduce((sum, item) => sum + item.orderQty, 0);
                 const isSupplierPlaced = placedSuppliers.has(supplier);
-                const allItemsChecked = items.every(it => checkedItemIds.has(it.id));
+                const lastOrderInfo = lastOrderedMap[supplier];
 
                 return (
                   <div key={supplier} className={`border rounded-2xl overflow-hidden bg-white shadow-sm transition-all ${isSupplierPlaced ? 'border-emerald-300 bg-emerald-50/10' : 'border-gray-200'}`}>
+                    {/* Supplier Card Header */}
                     <div className="bg-[#F8F8F8] px-3.5 py-2 flex items-center justify-between border-b border-gray-200">
                       <div className="flex items-center space-x-1.5">
                         <span className="text-xs font-black text-gray-900 uppercase tracking-wide">{supplier}</span>
                         <span className="text-[10px] text-gray-500 font-mono font-bold">({totalUnits} units)</span>
-                        {isSupplierPlaced && (
-                          <span className="text-[8px] font-mono font-bold uppercase bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded">Placed ✓</span>
-                        )}
                       </div>
-                      <div className="flex items-center space-x-1.5">
+                      
+                      <div className="flex items-center space-x-1">
+                        {/* Icon-Only Copy per Supplier */}
                         <button 
                           onClick={() => handleCopySupplier(supplier, items)} 
-                          className="flex items-center space-x-1 px-2 py-0.5 bg-white border border-gray-200 rounded-md text-[10px] font-bold text-gray-800 hover:bg-gray-50 transition"
+                          className="p-1 bg-white border border-gray-200 rounded-md text-gray-800 hover:bg-gray-50 transition"
+                          title={`Copy ${supplier} order`}
                         >
-                          {copyFeedback === supplier ? <Check className="w-3 h-3 text-green-600" /> : <Copy className="w-2.5 h-2.5" />}
-                          <span>{copyFeedback === supplier ? 'Copied' : 'Copy'}</span>
+                          {copyFeedback === supplier ? <Check className="w-3 h-3 text-green-600" /> : <Copy className="w-3 h-3" />}
                         </button>
                         <button
                           disabled={savingToDrive}
                           onClick={() => handleSaveSupplierOrder(supplier, items, false)}
-                          className="flex items-center space-x-1 px-2 py-0.5 bg-white border border-gray-200 rounded-md text-[10px] font-bold text-gray-800 hover:bg-gray-50 transition"
+                          className="px-2 py-0.5 bg-white border border-gray-200 rounded-md text-[10px] font-bold text-gray-800 hover:bg-gray-50 transition"
                         >
-                          <Send className="w-2.5 h-2.5 text-gray-600" />
-                          <span>Save</span>
+                          Save
                         </button>
-                        {orderMode && (
-                          <button
-                            disabled={savingToDrive || isSupplierPlaced}
-                            onClick={() => handleSaveSupplierOrder(supplier, items, true)}
-                            className={`flex items-center space-x-1 px-2 py-0.5 rounded-md text-[10px] font-bold transition shadow-sm ${
-                              isSupplierPlaced
-                                ? 'bg-emerald-100 text-emerald-800 cursor-not-allowed'
-                                : 'bg-black text-white hover:bg-neutral-800'
-                            }`}
-                          >
-                            <CheckCircle2 className="w-2.5 h-2.5 text-emerald-400" />
-                            <span>{isSupplierPlaced ? 'Placed' : 'Confirm Placed'}</span>
-                          </button>
-                        )}
                       </div>
                     </div>
 
+                    {/* Order Item List */}
                     <div className="divide-y divide-gray-100">
                       {items.map(item => {
                         const isChecked = checkedItemIds.has(item.id);
@@ -659,7 +718,7 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
                             onClick={() => { if (orderMode) toggleCheckItem(item.id); }}
                             className={`grid grid-cols-12 items-center px-3.5 py-2 text-xs transition-colors ${
                               orderMode ? 'cursor-pointer hover:bg-gray-50' : ''
-                            } ${isChecked && orderMode ? 'bg-emerald-50/40 opacity-75' : ''}`}
+                            } ${isChecked && orderMode ? 'bg-emerald-50/30 opacity-75' : ''}`}
                           >
                             <div className="col-span-7 pr-2 flex items-center space-x-2">
                               {orderMode && (
@@ -708,22 +767,31 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
                         );
                       })}
                     </div>
+
+                    {/* Bottom Placement Footer: Last Ordered Date & Order Mode Place Button */}
+                    <div className="px-3.5 py-2 bg-gray-50/80 border-t border-gray-100 flex items-center justify-between text-[10px]">
+                      <span className="text-gray-400 font-mono italic">
+                        {lastOrderInfo?.dateStr ? `Last ordered: ${lastOrderInfo.dateStr}` : 'Last ordered: No prior record'}
+                      </span>
+
+                      {orderMode && (
+                        <button
+                          disabled={savingToDrive || isSupplierPlaced}
+                          onClick={() => handleSaveSupplierOrder(supplier, items, true)}
+                          className={`flex items-center space-x-1 px-2.5 py-1 rounded-md text-[10px] font-bold transition shadow-sm ${
+                            isSupplierPlaced
+                              ? 'bg-emerald-100 text-emerald-800 cursor-not-allowed'
+                              : 'bg-black text-white hover:bg-neutral-800'
+                          }`}
+                        >
+                          <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                          <span>{isSupplierPlaced ? 'Placed' : 'Mark Order Placed'}</span>
+                        </button>
+                      )}
+                    </div>
                   </div>
                 );
               })
-            )}
-
-            {driveFileUrl && (
-              <a
-                href={driveFileUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="w-full py-2 bg-emerald-50 text-emerald-900 border border-emerald-200 rounded-xl flex items-center justify-center space-x-1.5 font-bold hover:bg-emerald-100 transition text-[11px]"
-              >
-                <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-700" />
-                <span>Open Saved Record in Drive</span>
-                <ExternalLink className="w-3 h-3 text-emerald-600 ml-1" />
-              </a>
             )}
           </div>
         </div>
@@ -753,6 +821,16 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
                   <ExternalLink className="w-2.5 h-2.5 opacity-60" />
                 </a>
               )}
+              <button 
+                onClick={() => {
+                  setArchiveModalOpen(true);
+                  fetchFolderArchives();
+                }}
+                className="p-1 text-gray-700 hover:text-black rounded-lg bg-gray-50 border border-gray-200"
+                title="View Archives"
+              >
+                <FolderOpen className="w-3.5 h-3.5" />
+              </button>
               <button onClick={fetchSheetData} className="p-1 text-gray-500 hover:text-black rounded-lg bg-gray-50 border border-gray-100" title="Sync with Google Sheet">
                 <RefreshCw className={`w-3.5 h-3.5 ${saving ? 'animate-spin' : ''}`} />
               </button>
@@ -774,8 +852,9 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
             </div>
             <div className="flex space-x-1.5">
               <button onClick={() => { setCounts({}); setModifiedIds(new Set()); }} className="px-2.5 py-1 bg-[#F3F3F3] hover:bg-gray-200 rounded-lg text-xs font-medium text-gray-800 transition">Clear</button>
-              <button onClick={handleSaveToSheet} disabled={saving} className="flex items-center space-x-1 px-3 py-1 bg-[#C2F19D] hover:bg-[#b2e88a] rounded-lg text-xs font-semibold text-gray-900 transition">
-                <span>{saving ? 'Saving...' : 'Save Counts'}</span>
+              {/* Refined "Save Stocktake" button */}
+              <button onClick={handleSaveToSheet} disabled={saving} className="flex items-center space-x-1 px-2.5 py-1 bg-[#C2F19D] hover:bg-[#b2e88a] rounded-lg text-xs font-bold text-gray-900 transition">
+                <span>{saving ? 'Saving...' : 'Save Stocktake'}</span>
               </button>
             </div>
           </div>
@@ -891,6 +970,165 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
                 );
               })
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Floating Modal: Archive Browser (Stocktakes vs Order Lists) */}
+      {archiveModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-sm rounded-3xl overflow-hidden shadow-2xl border border-gray-200 flex flex-col max-h-[80vh] animate-in fade-in zoom-in-95 duration-150">
+            <div className="px-5 pt-4 pb-3 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+              <div>
+                <span className="text-[9px] font-mono uppercase font-bold text-gray-400">Drive Folder Archive</span>
+                <h2 className="text-sm font-black text-gray-900 leading-tight mt-0.5">Compiled Records</h2>
+              </div>
+              <button 
+                onClick={() => setArchiveModalOpen(false)}
+                className="p-1 text-gray-400 hover:text-black bg-white rounded-full border border-gray-200 shadow-sm"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            {/* Toggle Between Saved Stocktakes vs Order Lists */}
+            <div className="px-5 pt-3 pb-2 border-b border-gray-100 flex space-x-2">
+              <button
+                onClick={() => setArchiveTab('stocktakes')}
+                className={`flex-1 py-1.5 rounded-xl text-xs font-bold transition flex items-center justify-center space-x-1.5 ${
+                  archiveTab === 'stocktakes' ? 'bg-black text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+              >
+                <ClipboardList className="w-3 h-3" />
+                <span>Saved Stocktakes</span>
+              </button>
+              <button
+                onClick={() => setArchiveTab('orders')}
+                className={`flex-1 py-1.5 rounded-xl text-xs font-bold transition flex items-center justify-center space-x-1.5 ${
+                  archiveTab === 'orders' ? 'bg-black text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+              >
+                <Layers className="w-3 h-3" />
+                <span>Order Lists</span>
+              </button>
+            </div>
+
+            {/* Records List */}
+            <div className="flex-1 overflow-y-auto px-5 py-3 divide-y divide-gray-100 text-xs">
+              {loadingArchive ? (
+                <p className="text-center py-8 text-gray-400 italic">Reading records from folder...</p>
+              ) : archiveTab === 'stocktakes' ? (
+                archiveStocktakes.length === 0 ? (
+                  <p className="text-center py-8 text-gray-400 italic">No compiled stocktakes found.</p>
+                ) : (
+                  archiveStocktakes.map(file => (
+                    <div 
+                      key={file.id} 
+                      onClick={() => handleOpenRecordDetail(file)}
+                      className="py-2.5 flex items-center justify-between hover:bg-gray-50 cursor-pointer rounded-lg px-1 transition"
+                    >
+                      <div className="pr-2">
+                        <span className="font-bold text-gray-900 block leading-tight text-[11px]">{file.name}</span>
+                        <span className="text-[9px] text-gray-400 font-mono">{file.date}</span>
+                      </div>
+                      <ExternalLink className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
+                    </div>
+                  ))
+                )
+              ) : (
+                archiveOrders.length === 0 ? (
+                  <p className="text-center py-8 text-gray-400 italic">No compiled orders found.</p>
+                ) : (
+                  archiveOrders.map(file => (
+                    <div 
+                      key={file.id} 
+                      onClick={() => handleOpenRecordDetail(file)}
+                      className="py-2.5 flex items-center justify-between hover:bg-gray-50 cursor-pointer rounded-lg px-1 transition"
+                    >
+                      <div className="pr-2">
+                        <span className="font-bold text-gray-900 block leading-tight text-[11px]">{file.name}</span>
+                        <span className="text-[9px] text-gray-400 font-mono">{file.date}</span>
+                      </div>
+                      <ExternalLink className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
+                    </div>
+                  ))
+                )
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Floating Pop-Up Modal: View Record Details */}
+      {selectedRecordDetail && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-sm rounded-3xl overflow-hidden shadow-2xl border border-gray-200 flex flex-col max-h-[85vh] animate-in fade-in zoom-in-95 duration-150">
+            <div className="px-5 pt-4 pb-3 border-b border-gray-100 flex justify-between items-start bg-gray-50">
+              <div>
+                <span className="text-[9px] font-mono uppercase font-bold text-gray-400">Record Inspection</span>
+                <h2 className="text-sm font-black text-gray-900 leading-tight mt-0.5">{selectedRecordDetail.title}</h2>
+              </div>
+              <button 
+                onClick={() => setSelectedRecordDetail(null)}
+                className="p-1 text-gray-400 hover:text-black bg-white rounded-full border border-gray-200 shadow-sm"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-5 py-3 space-y-3 text-xs">
+              {loadingRecordDetail ? (
+                <p className="text-center py-12 text-gray-400 italic">Loading file contents...</p>
+              ) : (
+                <>
+                  {/* Metadata Chips */}
+                  {selectedRecordDetail.meta && Object.keys(selectedRecordDetail.meta).length > 0 && (
+                    <div className="grid grid-cols-2 gap-1.5 p-2.5 bg-gray-50 rounded-xl border border-gray-100 text-[10px]">
+                      {Object.entries(selectedRecordDetail.meta).map(([k, v]) => (
+                        <div key={k}>
+                          <span className="text-gray-400 font-bold block uppercase text-[8px]">{k}</span>
+                          <span className="text-gray-800 font-semibold">{v}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Items Breakdown Table */}
+                  <div className="border border-gray-200 rounded-xl overflow-hidden divide-y divide-gray-100 bg-white">
+                    <div className="grid grid-cols-12 bg-gray-50 px-3 py-1.5 text-[9px] font-bold text-gray-400 uppercase">
+                      <span className="col-span-8">Product / Item</span>
+                      <span className="col-span-4 text-right">Qty / Par</span>
+                    </div>
+
+                    {(selectedRecordDetail.items || []).map((it, idx) => (
+                      <div key={idx} className="grid grid-cols-12 items-center px-3 py-2 text-[11px]">
+                        <div className="col-span-8 pr-1">
+                          <span className="font-bold text-gray-900 block leading-tight">{it.name}</span>
+                          <span className="text-[9px] text-gray-400 font-mono">{it.sku}</span>
+                        </div>
+                        <div className="col-span-4 text-right font-mono">
+                          <span className="font-bold text-black">{it.qty} {it.unit}</span>
+                          {it.par !== "" && <span className="text-[9px] text-gray-400 block font-normal">Par: {it.par}</span>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {selectedRecordDetail.fileUrl && (
+                    <a
+                      href={selectedRecordDetail.fileUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="w-full py-2 bg-black hover:bg-neutral-800 text-white rounded-xl text-xs font-bold transition flex items-center justify-center space-x-1.5 shadow-sm mt-2"
+                    >
+                      <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Open in Google Sheets</span>
+                      <ExternalLink className="w-3 h-3 text-gray-400" />
+                    </a>
+                  )}
+                </>
+              )}
+            </div>
           </div>
         </div>
       )}
