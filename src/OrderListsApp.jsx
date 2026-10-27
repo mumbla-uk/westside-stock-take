@@ -17,7 +17,8 @@ import {
   ListTodo,
   FolderOpen,
   Calendar,
-  Layers
+  Layers,
+  SlidersHorizontal
 } from 'lucide-react';
 import { useTwoFingerSwipe } from './useTwoFingerSwipe';
 
@@ -65,6 +66,19 @@ function getFormattedDates() {
   return { dayName, weekBeginningStr, fullDateStr };
 }
 
+// Calculate reorder quantity adhering to the 0.25 threshold rule and integer ceiling
+function calculateOrderQty(parLevel, currentStock) {
+  const par = Number(parLevel) || 0;
+  const count = Number(currentStock) || 0;
+  
+  // Rule: if counted at or below 0.25 (represented by 0.2 or 0.1), always reorder at least 1
+  if (count <= 0.25) {
+    return Math.max(1, Math.ceil(par - count));
+  }
+  
+  return Math.max(0, Math.ceil(par - count));
+}
+
 export default function OrderListsApp({ currentUser, initialCatalog = [], onBackToHub, onLogout }) {
   const [activeTab, setActiveTab] = useState('Stocktake'); // 'Stocktake' | 'Orders'
   const [searchQuery, setSearchQuery] = useState('');
@@ -72,6 +86,9 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
   const [selectedSuppliers, setSelectedSuppliers] = useState([]);
   const [selectedAreas, setSelectedAreas] = useState([]);
   const [view, setView] = useState('main'); // 'main' | 'settings'
+
+  // Detailed Stocktake Mode toggle (.1 decimal precision)
+  const [detailedMode, setDetailedMode] = useState(false);
 
   // Order Mode state: allows interactive item checking and order confirmation
   const [orderMode, setOrderMode] = useState(false);
@@ -130,7 +147,11 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
     const base = fromProp.length > 0 ? fromProp : (() => {
       try { return parseCatalog(JSON.parse(localStorage.getItem('wst_catalog') || '[]')); } catch { return []; }
     })();
-    base.forEach(p => { if (p && p.id) init[p.id] = Math.max(0, (p.par ?? 0) - (p.count ?? 0)); });
+    base.forEach(p => { 
+      if (p && p.id) {
+        init[p.id] = calculateOrderQty(p.par ?? 0, p.count ?? 0);
+      }
+    });
     return init;
   });
 
@@ -180,7 +201,7 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
         fetched.forEach(p => {
           if (p && p.id) {
             cInit[p.id] = p.count ?? 0;
-            oInit[p.id] = Math.max(0, (p.par ?? 0) - (p.count ?? 0));
+            oInit[p.id] = calculateOrderQty(p.par ?? 0, p.count ?? 0);
           }
         });
         setCounts(cInit);
@@ -201,7 +222,6 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
     }
   }, []);
 
-  // Fetch Folder Archive lists (Stocktakes & Orders)
   const fetchFolderArchives = async () => {
     setLoadingArchive(true);
     try {
@@ -221,7 +241,6 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
     }
   };
 
-  // Open & preview a specific spreadsheet file in floating modal
   const handleOpenRecordDetail = async (file) => {
     setLoadingRecordDetail(true);
     setSelectedRecordDetail({ title: file.name, fileUrl: file.url, loading: true });
@@ -238,14 +257,23 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
     }
   };
 
+  // Safe floating-point step with automatic order recalculation
   const updateCount = (id, delta) => {
     setModifiedIds(prev => new Set(prev).add(id));
     setCounts(prev => {
-      const newCount = Math.max(0, (prev[id] ?? 0) + delta);
+      const rawCurrent = prev[id] ?? 0;
+      // Round to 1 decimal place safely
+      const nextVal = Math.max(0, Math.round((rawCurrent + delta) * 10) / 10);
+      
       const prod = products.find(p => p.id === id);
       const par = prod ? (prod.par ?? 0) : 0;
-      setOrderOverrides(orderPrev => ({ ...orderPrev, [id]: Math.max(0, par - newCount) }));
-      return { ...prev, [id]: newCount };
+
+      setOrderOverrides(orderPrev => ({
+        ...orderPrev,
+        [id]: calculateOrderQty(par, nextVal)
+      }));
+
+      return { ...prev, [id]: nextVal };
     });
   };
 
@@ -262,7 +290,6 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
     });
   };
 
-  // Stocktake save: updates master sheet AND compiles snapshot record into Drive folder
   const handleSaveToSheet = async () => {
     setSaving(true);
     setStatusMsg(null);
@@ -331,7 +358,7 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
     const grouped = {};
     products.forEach(p => {
       if (modifiedIds.has(p.id)) {
-        const orderQty = orderOverrides[p.id] ?? Math.max(0, (p.par ?? 0) - (counts[p.id] ?? 0));
+        const orderQty = orderOverrides[p.id] ?? calculateOrderQty(p.par ?? 0, counts[p.id] ?? 0);
         if (orderQty > 0) {
           const sup = p.supplier || 'General';
           if (!grouped[sup]) grouped[sup] = [];
@@ -579,7 +606,6 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
         /* TAB 2: ORDERS BY SUPPLIER */
         <div className="flex-1 flex flex-col overflow-hidden pb-20">
           <div className="px-5 pt-3 pb-2 border-b border-gray-100 flex-shrink-0">
-            {/* Clean Header Bar: Space for Badges and Order Mode Switch */}
             <div className="flex justify-between items-center mb-2">
               <div className="flex items-center space-x-2">
                 <h1 className="text-xl font-black tracking-tight text-gray-900 leading-tight">Orders</h1>
@@ -616,14 +642,12 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
               </div>
             </div>
 
-            {/* Top Bulk Action Bar */}
             <div className="flex items-center justify-between pt-0.5">
               <span className="text-[10px] text-gray-400 font-mono">
                 {Object.keys(ordersBySupplier).length} Suppliers active
               </span>
 
               <div className="flex items-center space-x-1.5">
-                {/* Icon-Only Copy All */}
                 <button
                   onClick={handleCopyAll}
                   disabled={Object.keys(ordersBySupplier).length === 0}
@@ -682,7 +706,6 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
 
                 return (
                   <div key={supplier} className={`border rounded-2xl overflow-hidden bg-white shadow-sm transition-all ${isSupplierPlaced ? 'border-emerald-300 bg-emerald-50/10' : 'border-gray-200'}`}>
-                    {/* Supplier Card Header */}
                     <div className="bg-[#F8F8F8] px-3.5 py-2 flex items-center justify-between border-b border-gray-200">
                       <div className="flex items-center space-x-1.5">
                         <span className="text-xs font-black text-gray-900 uppercase tracking-wide">{supplier}</span>
@@ -690,7 +713,6 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
                       </div>
                       
                       <div className="flex items-center space-x-1">
-                        {/* Icon-Only Copy per Supplier */}
                         <button 
                           onClick={() => handleCopySupplier(supplier, items)} 
                           className="p-1 bg-white border border-gray-200 rounded-md text-gray-800 hover:bg-gray-50 transition"
@@ -708,7 +730,6 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
                       </div>
                     </div>
 
-                    {/* Order Item List */}
                     <div className="divide-y divide-gray-100">
                       {items.map(item => {
                         const isChecked = checkedItemIds.has(item.id);
@@ -768,7 +789,6 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
                       })}
                     </div>
 
-                    {/* Bottom Placement Footer: Last Ordered Date & Order Mode Place Button */}
                     <div className="px-3.5 py-2 bg-gray-50/80 border-t border-gray-100 flex items-center justify-between text-[10px]">
                       <span className="text-gray-400 font-mono italic">
                         {lastOrderInfo?.dateStr ? `Last ordered: ${lastOrderInfo.dateStr}` : 'Last ordered: No prior record'}
@@ -850,9 +870,24 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
               <span className="bg-[#F3F3F3] font-bold px-2.5 py-1 rounded-lg text-[10px] text-gray-800 tracking-wide uppercase">{dayName}</span>
               {modifiedIds.size > 0 && <span className="text-[10px] text-gray-500 font-medium italic">{modifiedIds.size} counted</span>}
             </div>
-            <div className="flex space-x-1.5">
-              <button onClick={() => { setCounts({}); setModifiedIds(new Set()); }} className="px-2.5 py-1 bg-[#F3F3F3] hover:bg-gray-200 rounded-lg text-xs font-medium text-gray-800 transition">Clear</button>
-              {/* Refined "Save Stocktake" button */}
+            
+            <div className="flex items-center space-x-1.5">
+              {/* Detailed 0.1 decimal toggle switch */}
+              <button
+                type="button"
+                onClick={() => setDetailedMode(!detailedMode)}
+                className={`flex items-center space-x-1 px-2 py-1 rounded-lg text-[10px] font-bold border transition ${
+                  detailedMode 
+                    ? 'bg-black text-white border-black shadow-sm' 
+                    : 'bg-[#EDEDED] text-gray-700 border-transparent hover:bg-gray-200'
+                }`}
+                title="Toggle 0.1 decimal counting precision"
+              >
+                <SlidersHorizontal className="w-3 h-3 text-emerald-400" />
+                <span>{detailedMode ? '0.1 Mode' : 'Standard'}</span>
+              </button>
+
+              <button onClick={() => { setCounts({}); setModifiedIds(new Set()); }} className="px-2 py-1 bg-[#F3F3F3] hover:bg-gray-200 rounded-lg text-xs font-medium text-gray-800 transition">Clear</button>
               <button onClick={handleSaveToSheet} disabled={saving} className="flex items-center space-x-1 px-2.5 py-1 bg-[#C2F19D] hover:bg-[#b2e88a] rounded-lg text-xs font-bold text-gray-900 transition">
                 <span>{saving ? 'Saving...' : 'Save Stocktake'}</span>
               </button>
@@ -923,10 +958,12 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
           </div>
 
           <div className="grid grid-cols-12 px-5 py-1 border-b border-gray-100 text-[11px] font-bold text-gray-900 mt-1 flex-shrink-0">
-            <span className="col-span-5">Stock Item</span>
-            <span className="col-span-2 text-center">Order</span>
-            <span className="col-span-2 text-center">Par</span>
-            <span className="col-span-3 text-center">Count</span>
+            <span className={detailedMode ? "col-span-4" : "col-span-5"}>Stock Item</span>
+            <span className={detailedMode ? "col-span-2 text-center" : "col-span-2 text-center"}>Order</span>
+            <span className={detailedMode ? "col-span-2 text-center" : "col-span-2 text-center"}>Par</span>
+            <span className={detailedMode ? "col-span-4 text-center" : "col-span-3 text-center"}>
+              {detailedMode ? "Count (+1 / +0.1)" : "Count"}
+            </span>
           </div>
 
           <div className="flex-1 overflow-y-auto px-5 divide-y divide-gray-100">
@@ -935,12 +972,12 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
             ) : (
               filteredProducts.map(product => {
                 const currentCount = counts[product.id] ?? 0;
-                const orderAmt = orderOverrides[product.id] ?? Math.max(0, (product.par ?? 0) - currentCount);
+                const orderAmt = orderOverrides[product.id] ?? calculateOrderQty(product.par ?? 0, currentCount);
                 const isModified = modifiedIds.has(product.id);
 
                 return (
                   <div key={product.id} className={`grid grid-cols-12 items-center py-2 text-xs transition-colors ${isModified ? 'bg-[#FAFCF8] border-l-2 border-black pl-2 -ml-2 pr-1' : ''}`}>
-                    <div className="col-span-5 pr-1">
+                    <div className={`${detailedMode ? "col-span-4" : "col-span-5"} pr-1`}>
                       <span className={`leading-tight text-[11px] block ${isModified ? 'font-bold text-black' : 'font-medium text-gray-800'}`}>
                         {product.name}
                       </span>
@@ -949,22 +986,73 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
                         <span className="text-[9px] text-gray-400 italic">({product.unit})</span>
                       </div>
                     </div>
+
                     <div className={`col-span-2 text-center text-xs ${isModified && orderAmt > 0 ? 'font-black text-black' : 'font-normal text-gray-400'}`}>
                       {orderAmt}
                     </div>
+
                     <div className="col-span-2 text-center text-gray-700 font-medium text-xs">
                       {product.par}
                     </div>
-                    <div className="col-span-3 flex items-center justify-end space-x-1">
-                      <button onClick={() => updateCount(product.id, -1)} className="p-0.5 text-gray-800 hover:bg-gray-100 rounded transition">
-                        <Minus className="w-3 h-3" />
-                      </button>
-                      <span className={`w-6 py-0.5 text-center rounded text-xs transition-colors font-mono ${isModified ? 'bg-[#D9EECD] text-black font-bold' : 'bg-[#EDEDED] text-gray-600 font-medium'}`}>
-                        {currentCount}
-                      </span>
-                      <button onClick={() => updateCount(product.id, 1)} className="p-0.5 text-gray-800 hover:bg-gray-100 rounded transition">
-                        <Plus className="w-3 h-3" />
-                      </button>
+
+                    {/* Dual Controls in Detailed Mode vs Single in Standard */}
+                    <div className={`${detailedMode ? "col-span-4" : "col-span-3"} flex items-center justify-end space-x-1`}>
+                      {detailedMode ? (
+                        <div className="flex items-center space-x-1">
+                          {/* Whole Number Steppers */}
+                          <div className="flex flex-col space-y-0.5">
+                            <button 
+                              onClick={() => updateCount(product.id, 1)} 
+                              className="px-1 py-0.5 bg-gray-100 hover:bg-gray-200 text-[9px] font-bold rounded"
+                              title="+1 Whole Unit"
+                            >
+                              +1
+                            </button>
+                            <button 
+                              onClick={() => updateCount(product.id, -1)} 
+                              className="px-1 py-0.5 bg-gray-100 hover:bg-gray-200 text-[9px] font-bold rounded"
+                              title="-1 Whole Unit"
+                            >
+                              -1
+                            </button>
+                          </div>
+
+                          {/* Value Display */}
+                          <span className={`w-9 py-1 text-center rounded text-xs transition-colors font-mono font-bold ${isModified ? 'bg-[#D9EECD] text-black' : 'bg-[#EDEDED] text-gray-700'}`}>
+                            {Number(currentCount).toFixed(1)}
+                          </span>
+
+                          {/* Decimal Tenth Steppers */}
+                          <div className="flex flex-col space-y-0.5">
+                            <button 
+                              onClick={() => updateCount(product.id, 0.1)} 
+                              className="px-1 py-0.5 bg-gray-100 hover:bg-gray-200 text-[8px] font-bold rounded"
+                              title="+0.1 Tenth"
+                            >
+                              +.1
+                            </button>
+                            <button 
+                              onClick={() => updateCount(product.id, -0.1)} 
+                              className="px-1 py-0.5 bg-gray-100 hover:bg-gray-200 text-[8px] font-bold rounded"
+                              title="-0.1 Tenth"
+                            >
+                              -.1
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <button onClick={() => updateCount(product.id, -1)} className="p-0.5 text-gray-800 hover:bg-gray-100 rounded transition">
+                            <Minus className="w-3 h-3" />
+                          </button>
+                          <span className={`w-6 py-0.5 text-center rounded text-xs transition-colors font-mono ${isModified ? 'bg-[#D9EECD] text-black font-bold' : 'bg-[#EDEDED] text-gray-600 font-medium'}`}>
+                            {currentCount}
+                          </span>
+                          <button onClick={() => updateCount(product.id, 1)} className="p-0.5 text-gray-800 hover:bg-gray-100 rounded transition">
+                            <Plus className="w-3 h-3" />
+                          </button>
+                        </>
+                      )}
                     </div>
                   </div>
                 );
@@ -974,7 +1062,7 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
         </div>
       )}
 
-      {/* Floating Modal: Archive Browser (Stocktakes vs Order Lists) */}
+      {/* Floating Modal: Archive Browser */}
       {archiveModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white w-full max-w-sm rounded-3xl overflow-hidden shadow-2xl border border-gray-200 flex flex-col max-h-[80vh] animate-in fade-in zoom-in-95 duration-150">
@@ -991,7 +1079,6 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
               </button>
             </div>
 
-            {/* Toggle Between Saved Stocktakes vs Order Lists */}
             <div className="px-5 pt-3 pb-2 border-b border-gray-100 flex space-x-2">
               <button
                 onClick={() => setArchiveTab('stocktakes')}
@@ -1013,7 +1100,6 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
               </button>
             </div>
 
-            {/* Records List */}
             <div className="flex-1 overflow-y-auto px-5 py-3 divide-y divide-gray-100 text-xs">
               {loadingArchive ? (
                 <p className="text-center py-8 text-gray-400 italic">Reading records from folder...</p>
@@ -1059,7 +1145,7 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
         </div>
       )}
 
-      {/* Floating Pop-Up Modal: View Record Details */}
+      {/* Floating Modal: Record Detail Preview */}
       {selectedRecordDetail && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white w-full max-w-sm rounded-3xl overflow-hidden shadow-2xl border border-gray-200 flex flex-col max-h-[85vh] animate-in fade-in zoom-in-95 duration-150">
@@ -1081,7 +1167,6 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
                 <p className="text-center py-12 text-gray-400 italic">Loading file contents...</p>
               ) : (
                 <>
-                  {/* Metadata Chips */}
                   {selectedRecordDetail.meta && Object.keys(selectedRecordDetail.meta).length > 0 && (
                     <div className="grid grid-cols-2 gap-1.5 p-2.5 bg-gray-50 rounded-xl border border-gray-100 text-[10px]">
                       {Object.entries(selectedRecordDetail.meta).map(([k, v]) => (
@@ -1093,7 +1178,6 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
                     </div>
                   )}
 
-                  {/* Items Breakdown Table */}
                   <div className="border border-gray-200 rounded-xl overflow-hidden divide-y divide-gray-100 bg-white">
                     <div className="grid grid-cols-12 bg-gray-50 px-3 py-1.5 text-[9px] font-bold text-gray-400 uppercase">
                       <span className="col-span-8">Product / Item</span>
