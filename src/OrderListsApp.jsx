@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   ArrowLeft, 
   Search, 
@@ -16,11 +16,13 @@ import {
   Layers,
   SlidersHorizontal,
   WifiOff,
-  Upload as CloudUpload
+  Upload as CloudUpload,
+  Maximize2
 } from 'lucide-react';
 import { useTwoFingerSwipe } from './useTwoFingerSwipe';
 import { supabase, localDb, DEFAULT_VENUE_ID } from './lib/db';
 import { sendPushNotification } from './lib/notifications';
+import StocktakeMode from './StocktakeMode';
 
 function AppLogo({ className = "w-6 h-6", fallbackTextClass = "font-serif text-xl font-bold tracking-tighter" }) {
   const [imgError, setImgError] = useState(false);
@@ -84,6 +86,7 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
   const [view, setView] = useState('main');
 
   const [detailedMode, setDetailedMode] = useState(false);
+  const [fullScreenMode, setFullScreenMode] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [hasUnsyncedCounts, setHasUnsyncedCounts] = useState(false);
 
@@ -158,7 +161,7 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
   }, [counts, modifiedIds]);
 
   const swipeHandlers = useTwoFingerSwipe({
-    disabled: view === 'settings' || archiveModalOpen || Boolean(selectedRecordDetail),
+    disabled: view === 'settings' || archiveModalOpen || Boolean(selectedRecordDetail) || fullScreenMode,
     onSwipeLeft: () => {
       if (activeTab === 'Stocktake') setActiveTab('Orders');
     },
@@ -932,6 +935,17 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
             </div>
             
             <div className="flex items-center space-x-1.5">
+              {/* Fullscreen Speed Count Launcher */}
+              <button
+                type="button"
+                onClick={() => setFullScreenMode(true)}
+                className="flex items-center space-x-1 px-2.5 py-1 bg-black text-white hover:bg-neutral-800 rounded-lg text-[10px] font-bold transition shadow-sm"
+                title="Open Fullscreen Keypad Count Mode"
+              >
+                <Maximize2 className="w-3 h-3 text-emerald-400" />
+                <span>Speed Count</span>
+              </button>
+
               <button
                 type="button"
                 onClick={() => setDetailedMode(!detailedMode)}
@@ -1267,6 +1281,7 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
         </div>
       )}
 
+      {/* Floating Bottom Nav */}
       <nav className="fixed bottom-2 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-[390px] z-30 rounded-2xl bg-[#111111]/95 backdrop-blur-md text-white py-2 px-3 flex justify-around items-center text-xs font-semibold shadow-2xl border border-white/10 select-none pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))]">
         <button 
           onClick={() => { setView('main'); setActiveTab('Stocktake'); }} 
@@ -1281,6 +1296,25 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
           Orders
         </button>
       </nav>
+
+      {/* Fullscreen Keypad Speed Count Overlay */}
+      {fullScreenMode && (
+        <StocktakeMode
+          products={filteredProducts.length > 0 ? filteredProducts : products}
+          counts={counts}
+          initialArea={selectedAreas[0] || null}
+          onUpdateCount={(id, val) => {
+            setModifiedIds(prev => new Set(prev).add(id));
+            setCounts(prev => ({ ...prev, [id]: val }));
+            localDb.pending_stock_counts.put({
+              id,
+              count: val,
+              updatedAt: new Date().toISOString()
+            });
+          }}
+          onClose={() => setFullScreenMode(false)}
+        />
+      )}
     </div>
   );
 }
