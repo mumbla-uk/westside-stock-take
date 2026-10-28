@@ -26,18 +26,16 @@ Deno.serve(async (req: Request) => {
     const userMessage = (body.message || "").trim();
     const chatHistory = Array.isArray(body.history) ? body.history : [];
 
-    // 1. Parallel Context Gathering
     const now = new Date();
     const dayName = now.toLocaleDateString("en-GB", { weekday: "long" });
     const formattedDate = now.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
 
+    // PARALLEL CONTEXT GATHERING
     const [weatherRes, handoverRes, goodsRes] = await Promise.all([
-      // Live Glasgow Partick Weather
       fetch(
-        "https://api.open-meteo.com/v1/forecast?latitude=55.87&longitude=-4.31&current=temperature_2m,precipitation,weather_code&daily=precipitation_probability_max,temperature_2m_max&timezone=Europe%2FLondon"
+        "https://api.open-meteo.com/v1/forecast?latitude=55.87&longitude=-4.31&current=temperature_2m,precipitation&daily=precipitation_probability_max&timezone=Europe%2FLondon"
       ).then(r => r.ok ? r.json() : null).catch(() => null),
 
-      // Latest closing handover
       supabase
         .from("handovers")
         .select("manager_name, takings, general_notes, eighty_six_list, tomorrow_tasks, created_at")
@@ -47,7 +45,6 @@ Deno.serve(async (req: Request) => {
         .then(r => r.data)
         .catch(() => null),
 
-      // Recent deliveries/goods received
       supabase
         .from("goods_received")
         .select("supplier_name, invoice_total, status, created_at")
@@ -58,32 +55,47 @@ Deno.serve(async (req: Request) => {
     ]);
 
     const temp = Math.round(weatherRes?.current?.temperature_2m ?? 11);
-    const rainChance = weatherRes?.daily?.precipitation_probability_max?.[0] ?? 30;
+    const rainChance = weatherRes?.daily?.precipitation_probability_max?.[0] ?? 40;
 
-    // 2. Build High-Density Venue Prompt
-    const venueContext = `VENUE: West Side Tavern, Dumbarton Rd, Partick, Glasgow.
-LOCALITY: Near Kelvinhall Subway & SWG3. High footfall from University of Glasgow students, local regulars, and SEC/Hydro event crowds.
-TODAY: ${dayName}, ${formattedDate}.
-WEATHER: ${temp}°C, Rain probability: ${rainChance}%.
-LAST CLOSE: Closed by ${handoverRes?.manager_name || 'Floor Staff'}. Takings: £${handoverRes?.takings || '0'}. Notes: "${handoverRes?.general_notes || 'Clean close'}".
-CURRENT 86 LIST: ${JSON.stringify(handoverRes?.eighty_six_list || [])}.
-CARRYOVER TASKS: ${JSON.stringify(handoverRes?.tomorrow_tasks || [])}.
-RECENT DELIVERIES: ${JSON.stringify(goodsRes.map(g => `${g.supplier_name} (£${g.invoice_total || 0})`))}.
+    // TAILORED PROMPT BLOCKS FOR WEST SIDE TAVERN
+    const systemPrompt = `
+### ROLE & PERSONA
+- Seasoned Glasgow Assistant General Manager / Operations Consultant for West Side Tavern, Partick.
+- Voice: Pragmatic, realistic Scottish bar peer. Direct, zero corporate fluff, no filler pleasantries.
+- Length: Ultra-concise. Brief cards must be under 12 words per tile. Chat answers must be 1 to 3 punchy sentences or short operational bullets.
 
-TONE & PERSONA:
-- Experienced Glasgow AGM peer (sharp, realistic, direct, zero corporate fluff).
-- Pragmatic hospitality mindset: Focus on covers, pass pacing, ice/garnish pars, wet floor hazards, and prep.`;
+### LOCAL GEOGRAPHY & EVENT PULSE
+- VENUE: West Side Tavern, Dumbarton Rd, Partick (minutes from Kelvinhall Subway station).
+- SURROUNDING HUBS:
+  * SWG3 (Galvanizers / Warehouse): Heavy pre-doors dinner/drinks rushes and late-night walk-ins.
+  * OVO Hydro & SEC: Dinner rushes strictly between 17:00 and 18:30 before doors; post-event waves after 22:30 towards Kelvinhall subway.
+  * SPFL Matchdays: Ibrox (via Govan subway) and Hampden/Parkhead fixtures drive afternoon pints, stout run-rates, and rapid turnover.
+- WEATHER RULES:
+  * Rain > 40% or "Dreich": Terrace closed. Door mats down immediately. Coat drop fills fast. High indoor booth demand, comfort food, and red wine/stout pacing.
+
+### FLOOR & SERVICE PACING
+- CAPACITY: 100 total capacity. 30 table-service dining covers in main room, 20 covers in secondary area, remainder bar walk-ins.
+- TABLE TURNS: 2-tops: 75-90 mins. 4+ tops: 100-120 mins.
+- CLOSING: Shift finishes at 01:00. Mandatory 11-hour legal rest period between shifts.
+
+### LIVE VENUE STATE:
+- TODAY: ${dayName}, ${formattedDate}.
+- WEATHER: ${temp}°C, Rain chance: ${rainChance}%.
+- LAST SHIFT: Closed by ${handoverRes?.manager_name || 'Staff'}. Takings: £${handoverRes?.takings || '0'}. Notes: "${handoverRes?.general_notes || 'Clean close'}".
+- ACTIVE 86s: ${JSON.stringify(handoverRes?.eighty_six_list || [])}.
+- CARRYOVER TASKS: ${JSON.stringify(handoverRes?.tomorrow_tasks || [])}.
+- RECENT GOODS: ${JSON.stringify(goodsRes.map(g => `${g.supplier_name} (£${g.invoice_total || 0})`))}.
+`;
 
     const ai = new GoogleGenAI({ apiKey: geminiKey });
 
-    // --- EXECUTION BRANCH A: PRE-SHIFT 4-TILE BRIEF ---
+    // BRANCH A: STRUCTURED PRE-SHIFT BRIEF
     if (mode === "brief") {
       const response = await ai.models.generateContent({
         model: "gemini-3.8-flash",
-        contents: `${venueContext}
+        contents: `${systemPrompt}
 
-Analyze the operational parameters and generate a high-speed shift briefing.
-Output MUST follow the exact schema provided. Keep each description under 10-12 words.`,
+Generate the 4 pre-shift tiles. Maximum 10-12 words per detail.`,
         config: {
           responseMimeType: "application/json",
           responseSchema: {
@@ -92,39 +104,35 @@ Output MUST follow the exact schema provided. Keep each description under 10-12 
               trade: {
                 type: Type.OBJECT,
                 properties: {
-                  status: { type: Type.STRING, description: "e.g. Moderate, Peak Surge, Steady Lunch" },
-                  detail: { type: Type.STRING, description: "Short trade forecast factoring day and weather" }
+                  detail: { type: Type.STRING, description: "Trade forecast factoring day, weather, and footfall" }
                 },
-                required: ["status", "detail"]
-              },
-              floor: {
-                type: Type.OBJECT,
-                properties: {
-                  alert: { type: Type.STRING, description: "Key door or floor priority (e.g. Mats Down, Terrace Closed, Reserve Pass)" },
-                  detail: { type: Type.STRING, description: "Practical setup action for the floor team" }
-                },
-                required: ["alert", "detail"]
+                required: ["detail"]
               },
               stock: {
                 type: Type.OBJECT,
                 properties: {
-                  shortagesCount: { type: Type.INTEGER, description: "Number of active 86s or critical shortages" },
-                  headline: { type: Type.STRING, description: "Most urgent shortage or 'All Lines Active'" }
+                  detail: { type: Type.STRING, description: "Key 86 item or 'All lines & cocktail pars full'" }
                 },
-                required: ["shortagesCount", "headline"]
+                required: ["detail"]
               },
-              carryover: {
+              floor: {
                 type: Type.OBJECT,
                 properties: {
-                  owner: { type: Type.STRING, description: "Who logged it or assigned team" },
-                  task: { type: Type.STRING, description: "High priority carryover prep or safe/till task" }
+                  detail: { type: Type.STRING, description: "Physical floor action (mats, terrace, table pacing)" }
                 },
-                required: ["owner", "task"]
+                required: ["detail"]
+              },
+              handover: {
+                type: Type.OBJECT,
+                properties: {
+                  detail: { type: Type.STRING, description: "Carryover prep or close task requiring immediate action" }
+                },
+                required: ["detail"]
               }
             },
-            required: ["trade", "floor", "stock", "carryover"]
+            required: ["trade", "stock", "floor", "handover"]
           },
-          temperature: 0.15,
+          temperature: 0.2,
         }
       });
 
@@ -135,15 +143,11 @@ Output MUST follow the exact schema provided. Keep each description under 10-12 
       );
     }
 
-    // --- EXECUTION BRANCH B: CONTEXTUAL OPS CHAT ---
-    const chatPrompt = `${venueContext}
+    // BRANCH B: CONTEXTUAL CHAT
+    const chatPrompt = `${systemPrompt}
 
 USER QUERY: "${userMessage}"
-
-INSTRUCTIONS:
-- Answer in 1 to 3 punchy sentences or short operational bullet points.
-- If drafting a message to a supplier or team, write ready-to-copy text directly.
-- Never introduce yourself or say 'Sure thing' or 'As an AI'. Answer immediately.`;
+Direct, professional floor answer:`;
 
     const chatResponse = await ai.models.generateContent({
       model: "gemini-3.8-flash",
@@ -154,16 +158,13 @@ INSTRUCTIONS:
         })),
         { role: "user", parts: [{ text: chatPrompt }] }
       ],
-      config: {
-        temperature: 0.3,
-      }
+      config: { temperature: 0.3 }
     });
 
     return new Response(
-      JSON.stringify({ reply: chatResponse.text || "No response generated." }),
+      JSON.stringify({ reply: chatResponse.text || "No reply generated." }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
-
   } catch (err: any) {
     return new Response(JSON.stringify({ error: err.message }), {
       status: 500,
