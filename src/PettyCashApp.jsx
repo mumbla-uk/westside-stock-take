@@ -7,20 +7,17 @@ import {
   Camera, 
   X, 
   ExternalLink, 
-  FileSpreadsheet, 
-  FileDown, 
   RefreshCw, 
   Settings, 
-  CheckCircle2,
-  Calendar,
-  ChevronLeft,
-  ChevronRight
+  CheckCircle2, 
+  ChevronLeft, 
+  ChevronRight 
 } from 'lucide-react';
 import { useTwoFingerSwipe } from './useTwoFingerSwipe';
+import { supabase, DEFAULT_VENUE_ID } from './lib/db';
+import { sendPushNotification } from './lib/notifications';
 
-const HARDWIRED_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzcrqf4q-QWiGq0sxMmXqS7QcsxCVfhkJgPfjxOm6KyPShNUD-zkD9HUZy49rDdrfAYJg/exec";
 const DEFAULT_FLOAT = 1200.00;
-
 const DAYS_OF_WEEK = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const DAY_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -83,17 +80,41 @@ function getWeekInfo(dateObj = new Date()) {
     });
   }
 
-  const sun = new Date(mon);
-  sun.setDate(mon.getDate() + 6);
-
   const anchor = daysDates[0].isoDate;
   const label = `${daysDates[0].ukDate.replace(/\//g, '-')} to ${daysDates[6].ukDate.replace(/\//g, '-')}`;
 
   return { anchor, label, daysDates, mondayDate: mon };
 }
 
+async function compressImageToBlob(file, maxWidth = 1200, quality = 0.7) {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target.result;
+      img.onload = () => {
+        const elem = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+
+        if (width > maxWidth) {
+          height = Math.round((height * maxWidth) / width);
+          width = maxWidth;
+        }
+
+        elem.width = width;
+        elem.height = height;
+        const ctx = elem.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        elem.toBlob((blob) => resolve(blob), 'image/jpeg', quality);
+      };
+    };
+  });
+}
+
 export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
-  const [activeTab, setActiveTab] = useState('ledger'); // 'ledger' | 'daily'
+  const [activeTab, setActiveTab] = useState('ledger');
   const [currentWeekOffset, setCurrentWeekOffset] = useState(0);
 
   const activeWeek = useMemo(() => {
@@ -122,14 +143,13 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
   });
 
   const [startingFloat, setStartingFloat] = useState(DEFAULT_FLOAT);
-  const [fileUrl, setFileUrl] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [statusMsg, setStatusMsg] = useState(null);
 
   const [expenseVendor, setExpenseVendor] = useState('');
   const [expenseAmount, setExpenseAmount] = useState('');
   const [expenseCategory, setExpenseCategory] = useState('Supplies');
-  const [receiptImage, setReceiptImage] = useState(null);
+  const [receiptFile, setReceiptFile] = useState(null);
   const [receiptPreview, setReceiptPreview] = useState(null);
   const fileInputRef = useRef(null);
 
@@ -137,7 +157,6 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
   const [mondayTopUpAmount, setMondayTopUpAmount] = useState('');
   const [customStartingFloat, setCustomStartingFloat] = useState(DEFAULT_FLOAT);
 
-  // TWO-FINGER SWIPE HOOK
   const swipeHandlers = useTwoFingerSwipe({
     disabled: showMondayModal,
     onSwipeLeft: () => {
@@ -154,20 +173,33 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
 
   const loadWeekData = async () => {
     try {
-      const res = await fetch(`${HARDWIRED_SCRIPT_URL}?action=get_week_ledger&weekAnchor=${activeWeek.anchor}`);
-      const json = await res.json();
-      if (json && json.status === "success") {
-        setStartingFloat(Number(json.startingFloat) || DEFAULT_FLOAT);
-        if (json.fileUrl) setFileUrl(json.fileUrl);
-        if (json.weekData && json.weekData.days) {
-          setWeekData(json.weekData);
-        } else {
-          const emptyDays = {};
-          DAYS_OF_WEEK.forEach(d => {
-            emptyDays[d] = { expenses: [], cashCount: '', denoms: {} };
-          });
-          setWeekData({ days: emptyDays, dates: activeWeek.daysDates.map(d => d.ukDate) });
-        }
+      const [ledgerRes, floatRes] = await Promise.all([
+        supabase
+          .from('petty_weekly_ledgers')
+          .select('*')
+          .eq('venue_id', DEFAULT_VENUE_ID)
+          .eq('week_anchor', activeWeek.anchor)
+          .maybeSingle(),
+        supabase
+          .from('petty_cash_floats')
+          .select('starting_float')
+          .eq('venue_id', DEFAULT_VENUE_ID)
+          .eq('week_anchor', activeWeek.anchor)
+          .maybeSingle()
+      ]);
+
+      if (floatRes.data) {
+        setStartingFloat(Number(floatRes.data.starting_float) || DEFAULT_FLOAT);
+      }
+
+      if (ledgerRes.data && ledgerRes.data.week_data) {
+        setWeekData(ledgerRes.data.week_data);
+      } else {
+        const emptyDays = {};
+        DAYS_OF_WEEK.forEach(d => {
+          emptyDays[d] = { expenses: [], cashCount: '', denoms: {} };
+        });
+        setWeekData({ days: emptyDays, dates: activeWeek.daysDates.map(d => d.ukDate) });
       }
     } catch (err) {
       console.warn("Could not load week data:", err);
@@ -225,36 +257,27 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
     return { daySpends, cumulativeExpenses, cashCounts, subTotals, variances, runningExp, lastCash, netWeekVariance };
   }, [weekData, startingFloat]);
 
-  const syncWeekToDrive = async (updatedWeekData) => {
+  const syncWeekToSupabase = async (updatedWeekData) => {
     setSubmitting(true);
-    setStatusMsg({ type: 'info', text: 'Updating weekly ledger in Google Drive...' });
+    setStatusMsg({ type: 'info', text: 'Updating weekly ledger in database...' });
 
     try {
-      const payload = {
-        action: 'save_week_ledger',
-        weekAnchor: activeWeek.anchor,
-        weekLabel: activeWeek.label,
-        startingFloat: startingFloat,
-        weekData: {
+      const { error } = await supabase.from('petty_weekly_ledgers').upsert({
+        venue_id: DEFAULT_VENUE_ID,
+        week_anchor: activeWeek.anchor,
+        week_label: activeWeek.label,
+        week_data: {
           ...updatedWeekData,
           dates: activeWeek.daysDates.map(d => d.ukDate)
-        }
-      };
+        },
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'week_anchor' });
 
-      const res = await fetch(HARDWIRED_SCRIPT_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify(payload)
-      });
-      const json = await res.json();
-
-      if (json && json.status === "success") {
-        setFileUrl(json.fileUrl);
-        setStatusMsg({ type: 'success', text: `Weekly ledger updated in Google Drive!` });
-      }
+      if (error) throw error;
+      setStatusMsg({ type: 'success', text: `Weekly ledger synchronized!` });
     } catch (err) {
       console.error(err);
-      setStatusMsg({ type: 'error', text: 'Failed to update weekly ledger in Drive.' });
+      setStatusMsg({ type: 'error', text: 'Failed to update ledger.' });
     } finally {
       setSubmitting(false);
     }
@@ -290,16 +313,8 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
     const file = e.target.files[0];
     if (!file) return;
 
-    const reader = new FileReader();
-    reader.onload = () => {
-      setReceiptImage({
-        base64: reader.result,
-        name: file.name,
-        type: file.type
-      });
-      setReceiptPreview(reader.result);
-    };
-    reader.readAsDataURL(file);
+    setReceiptFile(file);
+    setReceiptPreview(URL.createObjectURL(file));
   };
 
   const handleAddExpense = async (e) => {
@@ -308,25 +323,24 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
     if (!expenseVendor.trim() || isNaN(amt) || amt <= 0) return;
 
     setSubmitting(true);
-    setStatusMsg({ type: 'info', text: 'Uploading photo and saving to weekly ledger...' });
+    setStatusMsg({ type: 'info', text: 'Compressing and uploading photo...' });
 
     try {
       let uploadedUrl = "";
-      if (receiptImage && receiptImage.base64) {
-        const cleanVendor = expenseVendor.trim().replace(/[^a-zA-Z0-9]/g, '_');
-        const upRes = await fetch(HARDWIRED_SCRIPT_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          body: JSON.stringify({
-            action: 'upload_petty_receipt',
-            base64Data: receiptImage.base64,
-            mimeType: receiptImage.type,
-            fileName: `Receipt_${selectedDayInfo.isoDate}_${cleanVendor}.jpg`
-          })
-        });
-        const upJson = await upRes.json();
-        if (upJson && upJson.status === "success") {
-          uploadedUrl = upJson.fileUrl;
+
+      if (receiptFile) {
+        const compressedBlob = await compressImageToBlob(receiptFile);
+        const fileName = `${activeWeek.anchor}_${Date.now()}.jpg`;
+
+        const { data: uploadData, error: uploadErr } = await supabase.storage
+          .from('receipts')
+          .upload(fileName, compressedBlob, { contentType: 'image/jpeg' });
+
+        if (!uploadErr && uploadData) {
+          const { data: publicUrlData } = supabase.storage
+            .from('receipts')
+            .getPublicUrl(fileName);
+          uploadedUrl = publicUrlData?.publicUrl || "";
         }
       }
 
@@ -351,15 +365,15 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
       };
 
       setWeekData(updatedWeek);
-      await syncWeekToDrive(updatedWeek);
+      await syncWeekToSupabase(updatedWeek);
 
       setExpenseVendor('');
       setExpenseAmount('');
-      setReceiptImage(null);
+      setReceiptFile(null);
       setReceiptPreview(null);
     } catch (err) {
       console.error(err);
-      setStatusMsg({ type: 'error', text: 'Error adding payout to week.' });
+      setStatusMsg({ type: 'error', text: 'Error adding payout.' });
     } finally {
       setSubmitting(false);
     }
@@ -378,32 +392,39 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
       }
     };
     setWeekData(updatedWeek);
-    await syncWeekToDrive(updatedWeek);
+    await syncWeekToSupabase(updatedWeek);
   };
 
   const handleSaveDayCashCount = async () => {
-    await syncWeekToDrive(weekData);
+    await syncWeekToSupabase(weekData);
   };
 
   const handleConfirmMondaySetup = async () => {
     setSubmitting(true);
     try {
-      await fetch(HARDWIRED_SCRIPT_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({
-          action: 'save_monday_float',
-          weekAnchor: activeWeek.anchor,
-          startingFloat: customStartingFloat,
-          topUpAdded: parseFloat(mondayTopUpAmount) || 0,
-          endingCashPrevSunday: rollingStats.lastCash,
-          manager: currentUser?.name || 'Manager'
-        })
+      const { error } = await supabase.from('petty_cash_floats').insert({
+        venue_id: DEFAULT_VENUE_ID,
+        week_anchor: activeWeek.anchor,
+        starting_float: customStartingFloat,
+        top_up_added: parseFloat(mondayTopUpAmount) || 0,
+        ending_cash_prev_sunday: rollingStats.lastCash,
+        manager_name: currentUser?.name || 'Manager'
       });
+
+      if (error) throw error;
+
       setStartingFloat(customStartingFloat);
       setShowMondayModal(false);
       setStatusMsg({ type: 'success', text: `Week starting float set to £${customStartingFloat.toFixed(2)}.` });
-      await syncWeekToDrive(weekData);
+
+      sendPushNotification(
+        "Petty Cash Float Established",
+        `${currentUser?.name || 'Manager'} set float of £${customStartingFloat.toFixed(2)}`,
+        null,
+        { module: 'petty' }
+      );
+
+      await syncWeekToSupabase(weekData);
     } catch (err) {
       console.error(err);
       setStatusMsg({ type: 'error', text: 'Failed to record Monday setup.' });
@@ -412,19 +433,11 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
     }
   };
 
-  const handleOpenPdf = () => {
-    if (fileUrl) {
-      const pdfExportUrl = fileUrl.replace(/\/edit.*$/, '/export?format=pdf&portrait=false&gridlines=true');
-      window.open(pdfExportUrl, '_blank');
-    }
-  };
-
   return (
     <div 
       {...swipeHandlers}
       className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 overflow-x-hidden relative"
     >
-      {/* Top Header with Safe Area Inset */}
       <header className="flex items-center justify-between px-5 pt-[max(1.5rem,env(safe-area-inset-top))] pb-2 border-b border-gray-100 flex-shrink-0 bg-white z-10">
         <div className="flex items-center space-x-2">
           {onBackToHub && (
@@ -452,13 +465,12 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
         </div>
       </header>
 
-      {/* Week Navigation Bar */}
       <div className="px-5 py-2 bg-gray-50 border-b border-gray-200 flex items-center justify-between flex-shrink-0">
         <button 
-        onClick={() => setCurrentWeekOffset(prev => prev - 1)} 
-        className="p-1 hover:bg-gray-200 rounded-lg text-gray-600 transition"
+          onClick={() => setCurrentWeekOffset(prev => prev - 1)} 
+          className="p-1 hover:bg-gray-200 rounded-lg text-gray-600 transition"
         >
-        <ChevronLeft className="w-3.5 h-3.5" />
+          <ChevronLeft className="w-3.5 h-3.5" />
         </button>
         <div className="text-center">
           <span className="text-[9px] font-bold uppercase tracking-wider text-gray-400 block">Weekly Ledger</span>
@@ -472,10 +484,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
         </button>
       </div>
 
-      {/* Main Viewport Router */}
       {activeTab === 'ledger' ? (
-
-        /* VIEW 1: WEEKLY MATRIX (EXCEL REPLICA) */
         <div className="flex-1 flex flex-col overflow-hidden pb-20">
           <div className="px-5 pt-3 pb-2 border-b border-gray-100 flex-shrink-0 space-y-2">
             <div className="flex justify-between items-baseline">
@@ -486,26 +495,6 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
               <button onClick={loadWeekData} className="text-xs font-semibold text-gray-500 hover:text-black underline flex items-center space-x-1">
                 <RefreshCw className="w-3 h-3" />
                 <span>Refresh</span>
-              </button>
-            </div>
-
-            <div className="grid grid-cols-2 gap-2 pt-0.5">
-              <button
-                type="button"
-                disabled={submitting}
-                onClick={() => syncWeekToDrive(weekData)}
-                className="py-2 bg-black hover:bg-neutral-800 disabled:opacity-40 text-white text-xs font-bold rounded-xl flex items-center justify-center space-x-1.5 transition shadow-sm"
-              >
-                <FileSpreadsheet className="w-3 h-3 text-emerald-400" />
-                <span>{submitting ? 'Saving...' : 'Save to Drive'}</span>
-              </button>
-              <button
-                type="button"
-                onClick={handleOpenPdf}
-                className="py-2 bg-neutral-100 hover:bg-neutral-200 text-neutral-900 border border-neutral-300 text-xs font-bold rounded-xl flex items-center justify-center space-x-1.5 transition shadow-sm"
-              >
-                <FileDown className="w-3 h-3 text-neutral-700" />
-                <span>Open as PDF</span>
               </button>
             </div>
           </div>
@@ -529,7 +518,6 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
             </div>
           </div>
 
-          {/* Matrix Grid */}
           <div className="flex-1 overflow-auto p-5">
             <div className="border border-gray-200 rounded-2xl overflow-hidden shadow-sm bg-white min-w-[560px]">
               <table className="w-full text-[10px] font-mono border-collapse">
@@ -624,10 +612,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
             </div>
           </div>
         </div>
-
       ) : (
-
-        /* VIEW 2: COLUMN DETAIL FOR SELECTED DAY */
         <div className="flex-1 flex flex-col overflow-y-auto px-5 py-3 space-y-3.5 pb-20">
           <div className="grid grid-cols-7 gap-1 bg-gray-100 p-1 rounded-2xl flex-shrink-0">
             {activeWeek.daysDates.map((dayObj, idx) => {
@@ -684,7 +669,6 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
             </div>
           </div>
 
-          {/* Denominations */}
           <div className="bg-gray-50 border border-gray-200 rounded-2xl p-3 space-y-2">
             <div className="flex justify-between items-center">
               <span className="block font-bold text-gray-900 uppercase tracking-wider text-[10px]">
@@ -739,11 +723,10 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
               className="w-full py-1.5 bg-neutral-900 hover:bg-black text-white text-[11px] font-bold rounded-xl transition flex items-center justify-center space-x-1.5 mt-1 shadow-sm"
             >
               <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-              <span>Update {selectedDayInfo.dayName} Safe Count in Ledger</span>
+              <span>Update {selectedDayInfo.dayName} Safe Count</span>
             </button>
           </div>
 
-          {/* Add Payout Form */}
           <form onSubmit={handleAddExpense} className="bg-gray-50 border border-gray-200 rounded-2xl p-3 space-y-2.5 text-xs">
             <span className="block font-bold text-gray-900 uppercase tracking-wider text-[10px]">
               Add Payout to {selectedDayInfo.dayName} Column
@@ -820,7 +803,7 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
               {receiptPreview && (
                 <button 
                   type="button" 
-                  onClick={() => { setReceiptImage(null); setReceiptPreview(null); }}
+                  onClick={() => { setReceiptFile(null); setReceiptPreview(null); }}
                   className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg"
                 >
                   <X className="w-3.5 h-3.5" />
@@ -838,7 +821,6 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
             </button>
           </form>
 
-          {/* List of Payouts in this Column */}
           <div className="space-y-1.5">
             <span className="text-[10px] font-bold uppercase text-gray-400 px-1">
               {selectedDayInfo.dayName} Payouts ({(currentDayData.expenses || []).length} items • £{rollingStats.daySpends[selectedDayIndex].toFixed(2)})
@@ -885,7 +867,6 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
         </div>
       )}
 
-      {/* Monday Float Setup Modal */}
       {showMondayModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white w-full max-w-sm rounded-3xl overflow-hidden shadow-2xl border border-gray-200 p-4 space-y-3">
@@ -948,7 +929,6 @@ export default function PettyCashApp({ currentUser, onBackToHub, onLogout }) {
         </div>
       )}
 
-      {/* Floating Bottom Nav with Safe Area Inset */}
       <nav className="fixed bottom-2 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-[390px] z-30 rounded-2xl bg-[#111111]/95 backdrop-blur-md text-white py-2 px-3 flex justify-around items-center text-xs font-semibold shadow-2xl border border-white/10 select-none pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))]">
         <button 
           onClick={() => setActiveTab('ledger')} 

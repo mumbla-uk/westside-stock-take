@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   ArrowLeft, 
   Search, 
@@ -6,9 +6,6 @@ import {
   X, 
   Send, 
   Calendar, 
-  FileSpreadsheet, 
-  Lock, 
-  ExternalLink, 
   ChevronRight, 
   Sparkles, 
   Bell, 
@@ -17,8 +14,8 @@ import {
   Check 
 } from 'lucide-react';
 import { useTwoFingerSwipe } from './useTwoFingerSwipe';
-
-const HARDWIRED_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzcrqf4q-QWiGq0sxMmXqS7QcsxCVfhkJgPfjxOm6KyPShNUD-zkD9HUZy49rDdrfAYJg/exec";
+import { supabase, DEFAULT_VENUE_ID } from './lib/db';
+import { sendPushNotification } from './lib/notifications';
 
 const AVAILABLE_REACTIONS = [
   { emoji: '❤️', label: 'Love' },
@@ -69,53 +66,24 @@ function formatDisplayDate(dateInput) {
 
 export default function HandoverApp({ 
   currentUser, 
-  initialCatalog = [], 
-  initialHistory = [], 
   initialDeepLink = null,
   onClearDeepLink,
   onBackToHub, 
-  onLogout, 
-  onSendNotification 
+  onLogout 
 }) {
   const [currentTab, setCurrentTab] = useState('history');
 
-  const parseCatalog = (data) => {
-    if (!data) return [];
-    if (Array.isArray(data)) return data;
-    if (Array.isArray(data.catalog)) return data.catalog;
-    if (Array.isArray(data.data)) return data.data;
-    return [];
-  };
-
   const [catalog, setCatalog] = useState(() => {
-    const fromProp = parseCatalog(initialCatalog);
-    if (fromProp.length > 0) return fromProp;
     try {
-      const cached = localStorage.getItem('wst_catalog');
-      return cached ? parseCatalog(JSON.parse(cached)) : [];
-    } catch {
-      return [];
-    }
-  });
-
-  const [historyList, setHistoryList] = useState(() => {
-    if (Array.isArray(initialHistory) && initialHistory.length > 0) return initialHistory;
-    try {
-      const cached = localStorage.getItem('wst_history');
+      const cached = localStorage.getItem('wst_catalog_cache');
       return cached ? JSON.parse(cached) : [];
     } catch {
       return [];
     }
   });
 
-  const [sheetDuties, setSheetDuties] = useState(() => {
-    try {
-      const cached = localStorage.getItem('wst_duties');
-      return cached ? JSON.parse(cached) : [];
-    } catch {
-      return [];
-    }
-  });
+  const [historyList, setHistoryList] = useState([]);
+  const [sheetDuties, setSheetDuties] = useState([]);
 
   const [manager, setManager] = useState(currentUser?.name || 'Ross');
   const [role, setRole] = useState(currentUser?.role || 'Assistant General Manager');
@@ -152,9 +120,7 @@ export default function HandoverApp({
     }
   });
   const [showNotifications, setShowNotifications] = useState(false);
-  const [pushEnabled, setPushEnabled] = useState(false);
 
-  // Match deep-link target when history loads or deep-link updates
   useEffect(() => {
     if (initialDeepLink && initialDeepLink.entryId && historyList.length > 0) {
       const match = historyList.find(item => String(item.id).trim() === String(initialDeepLink.entryId).trim());
@@ -165,35 +131,6 @@ export default function HandoverApp({
       }
     }
   }, [initialDeepLink, historyList, onClearDeepLink]);
-
-  useEffect(() => {
-    if (window.OneSignalDeferred) {
-      window.OneSignalDeferred.push(async function(OneSignal) {
-        const isOptedIn = await OneSignal.User.PushSubscription.optedIn;
-        setPushEnabled(Boolean(isOptedIn));
-        if (isOptedIn && manager) {
-          await OneSignal.login(manager.trim());
-          await OneSignal.User.addTag("role", role);
-        }
-      });
-    }
-  }, [manager, role]);
-
-  const handleTogglePush = async () => {
-    if (!window.OneSignalDeferred) return;
-
-    window.OneSignalDeferred.push(async function(OneSignal) {
-      if (!pushEnabled) {
-        await OneSignal.User.PushSubscription.optIn();
-        await OneSignal.login(manager.trim());
-        await OneSignal.User.addTag("role", role);
-        setPushEnabled(true);
-      } else {
-        await OneSignal.User.PushSubscription.optOut();
-        setPushEnabled(false);
-      }
-    });
-  };
 
   const timeOptions15Min = useMemo(() => {
     const times = [];
@@ -226,36 +163,51 @@ export default function HandoverApp({
     if (currentUser?.role) setRole(currentUser.role);
   }, [currentUser]);
 
-  useEffect(() => {
-    const parsed = parseCatalog(initialCatalog);
-    if (parsed.length > 0 && catalog.length === 0) setCatalog(parsed);
-  }, [initialCatalog]);
-
-  useEffect(() => {
-    if (Array.isArray(initialHistory) && initialHistory.length > 0 && historyList.length === 0) {
-      setHistoryList(initialHistory);
-    }
-  }, [initialHistory]);
-
   const fetchAllHandoverData = async () => {
     setLoadingHistory(true);
     try {
-      const res = await fetch(`${HARDWIRED_SCRIPT_URL}?action=all`);
-      const json = await res.json();
-      
-      if (json && json.status === 'success') {
-        if (json.catalog && json.catalog.length > 0) {
-          setCatalog(json.catalog);
-          localStorage.setItem('wst_catalog', JSON.stringify(json.catalog));
-        }
-        if (json.history) {
-          setHistoryList(json.history);
-          localStorage.setItem('wst_history', JSON.stringify(json.history));
-        }
-        if (json.duties && Array.isArray(json.duties)) {
-          setSheetDuties(json.duties);
-          localStorage.setItem('wst_duties', JSON.stringify(json.duties));
-        }
+      const [handoverRes, dutyRes, catalogRes] = await Promise.all([
+        supabase
+          .from('handovers')
+          .select('*')
+          .eq('venue_id', DEFAULT_VENUE_ID)
+          .order('created_at', { ascending: false })
+          .limit(35),
+        supabase
+          .from('venue_duties')
+          .select('duty_text')
+          .eq('venue_id', DEFAULT_VENUE_ID),
+        supabase
+          .from('catalog_items')
+          .select('id, name, unit, supplier')
+          .eq('venue_id', DEFAULT_VENUE_ID)
+      ]);
+
+      if (handoverRes.data) {
+        const mapped = handoverRes.data.map(h => ({
+          id: h.id,
+          dateStr: h.date_str,
+          timestamp: h.created_at,
+          manager: h.manager_name,
+          role: h.role,
+          takings: h.takings,
+          closeTime: h.close_time,
+          generalNotes: h.general_notes,
+          eightySixList: h.eighty_six_list || [],
+          tomorrowTasks: h.tomorrow_tasks || [],
+          reactions: h.reactions || [],
+          comments: h.comments || [],
+          entryType: h.entry_type
+        }));
+        setHistoryList(mapped);
+      }
+
+      if (dutyRes.data) {
+        setSheetDuties(dutyRes.data.map(d => d.duty_text));
+      }
+
+      if (catalogRes.data && catalogRes.data.length > 0) {
+        setCatalog(catalogRes.data);
       }
     } catch (err) {
       console.error("Failed to sync handover data:", err);
@@ -265,9 +217,7 @@ export default function HandoverApp({
   };
 
   useEffect(() => {
-    if (catalog.length === 0 || sheetDuties.length === 0) {
-      fetchAllHandoverData();
-    }
+    fetchAllHandoverData();
   }, []);
 
   const allNotifications = useMemo(() => {
@@ -329,46 +279,38 @@ export default function HandoverApp({
     if (e) e.stopPropagation();
     const activeUserName = currentUser?.name || manager || 'Staff';
 
-    const updateReactionsList = (currentReactions = []) => {
-      const existing = currentReactions.find(r => r.user === activeUserName && r.emoji === emoji);
-      if (existing) {
-        return currentReactions.filter(r => !(r.user === activeUserName && r.emoji === emoji));
+    const targetItem = historyList.find(it => it.id === itemId);
+    if (!targetItem) return;
+
+    const currentReactions = targetItem.reactions || [];
+    let updatedReactions = [];
+    const existing = currentReactions.find(r => r.user === activeUserName && r.emoji === emoji);
+
+    if (existing) {
+      updatedReactions = currentReactions.filter(r => !(r.user === activeUserName && r.emoji === emoji));
+    } else {
+      updatedReactions = [...currentReactions, { 
+        emoji, 
+        user: activeUserName, 
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) 
+      }];
+
+      if (targetItem.manager && targetItem.manager !== activeUserName) {
+        sendPushNotification(
+          "New Reaction on Your Handover",
+          `${activeUserName} reacted ${emoji} to your shift briefing`,
+          targetItem.manager,
+          { module: 'handover', entryId: itemId }
+        );
       }
-      return [...currentReactions, { emoji, user: activeUserName, timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }];
-    };
-
-    setHistoryList(prev => {
-      const updated = prev.map(item => {
-        if (item.id === itemId) {
-          return { ...item, reactions: updateReactionsList(item.reactions || []) };
-        }
-        return item;
-      });
-      localStorage.setItem('wst_history', JSON.stringify(updated));
-      return updated;
-    });
-
-    if (selectedHistoryItem && selectedHistoryItem.id === itemId) {
-      setSelectedHistoryItem(prev => ({
-        ...prev,
-        reactions: updateReactionsList(prev.reactions || [])
-      }));
     }
 
-    try {
-      await fetch(HARDWIRED_SCRIPT_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({
-          action: 'toggle_reaction',
-          id: itemId,
-          userName: activeUserName,
-          emoji: emoji
-        })
-      });
-    } catch (err) {
-      console.error("Failed to persist reaction:", err);
+    setHistoryList(prev => prev.map(item => item.id === itemId ? { ...item, reactions: updatedReactions } : item));
+    if (selectedHistoryItem?.id === itemId) {
+      setSelectedHistoryItem(prev => ({ ...prev, reactions: updatedReactions }));
     }
+
+    await supabase.from('handovers').update({ reactions: updatedReactions }).eq('id', itemId);
   };
 
   const handleAddComment = async (e) => {
@@ -389,37 +331,21 @@ export default function HandoverApp({
 
     const updatedComments = [...(selectedHistoryItem.comments || []), newCommentObj];
 
-    setSelectedHistoryItem(prev => ({
-      ...prev,
-      comments: updatedComments
-    }));
-
-    setHistoryList(prev => {
-      const updated = prev.map(item => {
-        if (item.id === selectedHistoryItem.id) {
-          return { ...item, comments: updatedComments };
-        }
-        return item;
-      });
-      localStorage.setItem('wst_history', JSON.stringify(updated));
-      return updated;
-    });
-
-    const commentTextToSend = commentInput.trim();
+    setSelectedHistoryItem(prev => ({ ...prev, comments: updatedComments }));
+    setHistoryList(prev => prev.map(item => item.id === selectedHistoryItem.id ? { ...item, comments: updatedComments } : item));
     setCommentInput('');
 
     try {
-      await fetch(HARDWIRED_SCRIPT_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({
-          action: 'add_comment',
-          id: selectedHistoryItem.id,
-          userName: activeUserName,
-          role: activeUserRole,
-          text: commentTextToSend
-        })
-      });
+      await supabase.from('handovers').update({ comments: updatedComments }).eq('id', selectedHistoryItem.id);
+
+      if (selectedHistoryItem.manager && selectedHistoryItem.manager !== activeUserName) {
+        sendPushNotification(
+          `New Comment from ${activeUserName}`,
+          newCommentObj.text.slice(0, 60),
+          selectedHistoryItem.manager,
+          { module: 'handover', entryId: selectedHistoryItem.id }
+        );
+      }
     } catch (err) {
       console.error("Failed to post comment:", err);
     } finally {
@@ -473,33 +399,40 @@ export default function HandoverApp({
     setStatusMsg(null);
 
     const isDayNote = (!takings.trim() || takings === '0' || takings === '0.00') && !closeTime.trim();
+    const entryId = `h-${Date.now()}`;
 
     const payload = {
-      action: "handover_report",
-      id: `h-${Date.now()}`,
-      dateStr: shiftDate,
-      manager,
+      id: entryId,
+      venue_id: DEFAULT_VENUE_ID,
+      date_str: shiftDate,
+      manager_name: manager,
       role,
       takings: takings.trim(),
-      closeTime: closeTime.trim(),
-      generalNotes,
-      kitchenNotes: "",
-      eightySixList,
-      tomorrowTasks: tomorrowList
+      close_time: closeTime.trim(),
+      general_notes: generalNotes,
+      kitchen_notes: "",
+      eighty_six_list: eightySixList,
+      tomorrow_tasks: tomorrowList,
+      reactions: [],
+      comments: [],
+      entry_type: isDayNote ? "Day Note" : "Closing Handover"
     };
 
     try {
-      const res = await fetch(HARDWIRED_SCRIPT_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify(payload)
-      });
-      await res.json();
-      
+      const { error } = await supabase.from('handovers').insert(payload);
+      if (error) throw error;
+
       setStatusMsg({ 
         type: 'success', 
-        text: isDayNote ? 'Day note saved to diary!' : 'Handover saved & filed to Drive folder!' 
+        text: isDayNote ? 'Day note saved to diary!' : 'Handover saved & logged!' 
       });
+
+      sendPushNotification(
+        isDayNote ? "New Day Note Logged" : "Shift Handover Submitted",
+        `${manager} submitted ${isDayNote ? "a day note" : "the closing handover"} for ${shiftDate}`,
+        null,
+        { module: 'handover', entryId }
+      );
       
       setTakings('');
       setCloseTime('');
@@ -510,7 +443,8 @@ export default function HandoverApp({
       await fetchAllHandoverData();
       setCurrentTab('history');
     } catch (err) {
-      setStatusMsg({ type: 'error', text: 'Network error submitting handover report.' });
+      console.error(err);
+      setStatusMsg({ type: 'error', text: 'Error saving handover report.' });
     } finally {
       setIsSubmitting(false);
     }
@@ -611,16 +545,6 @@ export default function HandoverApp({
               </span>
             )}
           </button>
-
-          <button 
-            onClick={() => {
-              setShowNotifications(false);
-              setCurrentTab(currentTab === 'settings' ? 'history' : 'settings');
-            }}
-            className={`transition ${currentTab === 'settings' ? 'font-bold underline' : 'text-gray-900 hover:text-black'}`}
-          >
-            Settings
-          </button>
         </div>
       </header>
 
@@ -672,60 +596,7 @@ export default function HandoverApp({
         </div>
       )}
 
-      {currentTab === 'settings' ? (
-        <div className="flex-1 flex flex-col px-5 pt-4 pb-20 overflow-y-auto space-y-4">
-          <div className="flex items-center justify-between pb-3 border-b border-gray-100">
-            <div>
-              <p className="text-gray-500 italic text-[11px] font-serif">Preferences</p>
-              <h1 className="text-xl font-extrabold tracking-tight mt-0.5">Settings</h1>
-            </div>
-            <button onClick={() => setCurrentTab('history')} className="p-1.5 bg-[#EDEDED] rounded-lg text-gray-700 hover:bg-gray-200">
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-
-          <div className="space-y-4 text-[11px]">
-            <div className="p-3 bg-gray-50 border border-gray-200 rounded-xl space-y-1">
-              <span className="text-[9px] uppercase font-bold text-gray-400">Authenticated Session</span>
-              <p className="text-xs font-extrabold text-gray-900">{manager}</p>
-              <span className="inline-block px-1.5 py-0.5 rounded text-[9px] font-mono bg-black text-white font-bold">{role}</span>
-            </div>
-
-            <div className="p-3 bg-gray-50 border border-gray-200 rounded-xl space-y-2">
-              <div className="flex items-center justify-between">
-                <div>
-                  <span className="text-[9px] uppercase font-bold text-gray-400 block">iOS Push Notifications</span>
-                  <p className="text-xs font-bold text-gray-900">Handover & Activity Alerts</p>
-                </div>
-                <button
-                  type="button"
-                  onClick={handleTogglePush}
-                  className={`px-3 py-1 rounded-full text-[10px] font-bold transition ${
-                    pushEnabled ? 'bg-emerald-600 text-white' : 'bg-gray-200 text-gray-700'
-                  }`}
-                >
-                  {pushEnabled ? 'Enabled ✓' : 'Enable'}
-                </button>
-              </div>
-              <p className="text-[9px] text-gray-400 leading-tight">
-                Sends instant alerts when a manager submits a shift handover, reacts, or replies to your brief. (Must be saved to Home Screen on iOS).
-              </p>
-            </div>
-
-            <div className="space-y-2">
-              <label className="block text-xs font-bold text-gray-900">Google Drive Backend</label>
-              <div className="relative mt-2">
-                <input type="text" readOnly value={HARDWIRED_SCRIPT_URL} className="w-full bg-[#EDEDED] py-2.5 pl-9 pr-3 rounded-lg text-[10px] font-mono text-gray-500 cursor-not-allowed focus:outline-none" />
-                <Lock className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-              </div>
-            </div>
-
-            <button onClick={() => setCurrentTab('history')} className="w-full py-2.5 bg-[#C2F19D] text-xs font-semibold rounded-lg text-gray-900 hover:bg-[#b2e88a] transition">
-              Back to Diary
-            </button>
-          </div>
-        </div>
-      ) : currentTab === 'history' ? (
+      {currentTab === 'history' ? (
         <div className="flex-1 flex flex-col overflow-hidden pb-20">
           <div className="px-5 pt-3 pb-2 border-b border-gray-100 flex-shrink-0 space-y-2">
             <div className="flex justify-between items-baseline">
@@ -959,14 +830,6 @@ export default function HandoverApp({
                       </button>
                     </form>
                   </div>
-
-                  {selectedHistoryItem.fileUrl && (
-                    <a href={selectedHistoryItem.fileUrl} target="_blank" rel="noreferrer" className="w-full py-2 bg-black text-white rounded-xl flex items-center justify-center space-x-1.5 font-bold hover:bg-gray-800 transition shadow-sm mt-1 text-[10px]">
-                      <FileSpreadsheet className="w-3 h-3 text-emerald-400" />
-                      <span>Open Drive Spreadsheet</span>
-                      <ExternalLink className="w-2.5 h-2.5 text-gray-400 ml-1" />
-                    </a>
-                  )}
                 </div>
               </div>
             </div>
@@ -1188,7 +1051,7 @@ export default function HandoverApp({
               className="w-full py-2.5 bg-[#141414] text-white rounded-xl text-xs font-bold hover:bg-black transition disabled:opacity-50 flex items-center justify-center space-x-1.5 shadow-sm"
             >
               <Send className="w-3.5 h-3.5" />
-              <span>{isSubmitting ? 'Saving to Drive...' : 'Submit Handover Report'}</span>
+              <span>{isSubmitting ? 'Saving to Database...' : 'Submit Handover Report'}</span>
             </button>
           </div>
         </div>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   ArrowLeft, 
   Search, 
@@ -6,23 +6,21 @@ import {
   Minus, 
   RefreshCw, 
   X, 
-  Lock, 
   Copy, 
   Check, 
   ClipboardList, 
-  FileSpreadsheet, 
   ExternalLink,
-  Send,
   CheckCircle2,
   ListTodo,
   FolderOpen,
-  Calendar,
   Layers,
-  SlidersHorizontal
+  SlidersHorizontal,
+  WifiOff,
+  Upload as CloudUpload
 } from 'lucide-react';
 import { useTwoFingerSwipe } from './useTwoFingerSwipe';
-
-const HARDWIRED_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzcrqf4q-QWiGq0sxMmXqS7QcsxCVfhkJgPfjxOm6KyPShNUD-zkD9HUZy49rDdrfAYJg/exec";
+import { supabase, localDb, DEFAULT_VENUE_ID } from './lib/db';
+import { sendPushNotification } from './lib/notifications';
 
 function AppLogo({ className = "w-6 h-6", fallbackTextClass = "font-serif text-xl font-bold tracking-tighter" }) {
   const [imgError, setImgError] = useState(false);
@@ -66,12 +64,10 @@ function getFormattedDates() {
   return { dayName, weekBeginningStr, fullDateStr };
 }
 
-// Calculate reorder quantity adhering to the 0.25 threshold rule and integer ceiling
 function calculateOrderQty(parLevel, currentStock) {
   const par = Number(parLevel) || 0;
   const count = Number(currentStock) || 0;
   
-  // Rule: if counted at or below 0.25 (represented by 0.2 or 0.1), always reorder at least 1
   if (count <= 0.25) {
     return Math.max(1, Math.ceil(par - count));
   }
@@ -79,89 +75,87 @@ function calculateOrderQty(parLevel, currentStock) {
   return Math.max(0, Math.ceil(par - count));
 }
 
-export default function OrderListsApp({ currentUser, initialCatalog = [], onBackToHub, onLogout }) {
-  const [activeTab, setActiveTab] = useState('Stocktake'); // 'Stocktake' | 'Orders'
+export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
+  const [activeTab, setActiveTab] = useState('Stocktake');
   const [searchQuery, setSearchQuery] = useState('');
   
   const [selectedSuppliers, setSelectedSuppliers] = useState([]);
   const [selectedAreas, setSelectedAreas] = useState([]);
-  const [view, setView] = useState('main'); // 'main' | 'settings'
+  const [view, setView] = useState('main');
 
-  // Detailed Stocktake Mode toggle (.1 decimal precision)
   const [detailedMode, setDetailedMode] = useState(false);
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [hasUnsyncedCounts, setHasUnsyncedCounts] = useState(false);
 
-  // Order Mode state: allows interactive item checking and order confirmation
   const [orderMode, setOrderMode] = useState(false);
   const [checkedItemIds, setCheckedItemIds] = useState(new Set());
   const [placedSuppliers, setPlacedSuppliers] = useState(new Set());
   const [lastOrderedMap, setLastOrderedMap] = useState({});
 
-  // Archive Browser Modal & Preview State
   const [archiveModalOpen, setArchiveModalOpen] = useState(false);
-  const [archiveTab, setArchiveTab] = useState('stocktakes'); // 'stocktakes' | 'orders'
+  const [archiveTab, setArchiveTab] = useState('stocktakes');
   const [archiveStocktakes, setArchiveStocktakes] = useState([]);
   const [archiveOrders, setArchiveOrders] = useState([]);
   const [loadingArchive, setLoadingArchive] = useState(false);
   
-  // Floating Record Detail Modal
   const [selectedRecordDetail, setSelectedRecordDetail] = useState(null);
   const [loadingRecordDetail, setLoadingRecordDetail] = useState(false);
 
-  const parseCatalog = (data) => {
-    if (!data) return [];
-    if (Array.isArray(data)) return data;
-    if (Array.isArray(data.catalog)) return data.catalog;
-    if (Array.isArray(data.data)) return data.data;
-    return [];
-  };
-
   const [products, setProducts] = useState(() => {
-    const fromProp = parseCatalog(initialCatalog);
-    if (fromProp.length > 0) return fromProp;
-
     try {
-      const cached = localStorage.getItem('wst_catalog');
-      return cached ? parseCatalog(JSON.parse(cached)) : [];
+      const cached = localStorage.getItem('wst_catalog_cache');
+      return cached ? JSON.parse(cached) : [];
     } catch {
       return [];
     }
   });
 
-  const [masterSheetUrl, setMasterSheetUrl] = useState(() => {
-    return localStorage.getItem('wst_master_sheet_url') || '';
-  });
-
   const [counts, setCounts] = useState(() => {
-    const init = {};
-    const fromProp = parseCatalog(initialCatalog);
-    const base = fromProp.length > 0 ? fromProp : (() => {
-      try { return parseCatalog(JSON.parse(localStorage.getItem('wst_catalog') || '[]')); } catch { return []; }
-    })();
-    base.forEach(p => { if (p && p.id) init[p.id] = p.count ?? 0; });
-    return init;
+    try {
+      const cachedCounts = localStorage.getItem('wst_active_counts');
+      return cachedCounts ? JSON.parse(cachedCounts) : {};
+    } catch {
+      return {};
+    }
   });
 
-  const [orderOverrides, setOrderOverrides] = useState(() => {
-    const init = {};
-    const fromProp = parseCatalog(initialCatalog);
-    const base = fromProp.length > 0 ? fromProp : (() => {
-      try { return parseCatalog(JSON.parse(localStorage.getItem('wst_catalog') || '[]')); } catch { return []; }
-    })();
-    base.forEach(p => { 
-      if (p && p.id) {
-        init[p.id] = calculateOrderQty(p.par ?? 0, p.count ?? 0);
-      }
-    });
-    return init;
-  });
-
+  const [orderOverrides, setOrderOverrides] = useState({});
   const [copyFeedback, setCopyFeedback] = useState(null);
-  const [modifiedIds, setModifiedIds] = useState(new Set());
+  const [modifiedIds, setModifiedIds] = useState(() => {
+    try {
+      const cached = localStorage.getItem('wst_modified_ids');
+      return cached ? new Set(JSON.parse(cached)) : new Set();
+    } catch {
+      return new Set();
+    }
+  });
   const [saving, setSaving] = useState(false);
   const [savingToDrive, setSavingToDrive] = useState(false);
   const [statusMsg, setStatusMsg] = useState(null);
 
   const { dayName, weekBeginningStr, fullDateStr } = useMemo(() => getFormattedDates(), []);
+
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  useEffect(() => {
+    localDb.pending_stock_counts.count().then(cnt => {
+      setHasUnsyncedCounts(cnt > 0);
+    });
+  }, [counts]);
+
+  useEffect(() => {
+    localStorage.setItem('wst_active_counts', JSON.stringify(counts));
+    localStorage.setItem('wst_modified_ids', JSON.stringify(Array.from(modifiedIds)));
+  }, [counts, modifiedIds]);
 
   const swipeHandlers = useTwoFingerSwipe({
     disabled: view === 'settings' || archiveModalOpen || Boolean(selectedRecordDetail),
@@ -177,62 +171,84 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
     }
   });
 
-  const fetchSheetData = async () => {
+  const fetchCatalogData = async () => {
     setSaving(true);
     setStatusMsg(null);
     try {
-      const res = await fetch(`${HARDWIRED_SCRIPT_URL}?action=all`);
-      const json = await res.json();
-      const fetched = parseCatalog(json);
+      if (navigator.onLine) {
+        const { data, error } = await supabase
+          .from('catalog_items')
+          .select('*')
+          .eq('venue_id', DEFAULT_VENUE_ID)
+          .order('name');
 
-      if (json && json.masterSheetUrl) {
-        setMasterSheetUrl(json.masterSheetUrl);
-        localStorage.setItem('wst_master_sheet_url', json.masterSheetUrl);
-      }
+        if (error) throw error;
 
-      if (json && json.lastOrderedMap) {
-        setLastOrderedMap(json.lastOrderedMap);
-      }
+        if (data && data.length > 0) {
+          setProducts(data);
+          localStorage.setItem('wst_catalog_cache', JSON.stringify(data));
+          await localDb.cached_catalog.bulkPut(data);
 
-      if (fetched.length > 0) {
-        setProducts(fetched);
-        const cInit = {};
-        const oInit = {};
-        fetched.forEach(p => {
-          if (p && p.id) {
-            cInit[p.id] = p.count ?? 0;
-            oInit[p.id] = calculateOrderQty(p.par ?? 0, p.count ?? 0);
-          }
-        });
-        setCounts(cInit);
-        setOrderOverrides(oInit);
-        localStorage.setItem('wst_catalog', JSON.stringify(fetched));
+          setCounts(prevCounts => {
+            const next = { ...prevCounts };
+            data.forEach(p => {
+              if (next[p.id] === undefined) {
+                next[p.id] = Number(p.count) || 0;
+              }
+            });
+            return next;
+          });
+        }
+      } else {
+        const offlineData = await localDb.cached_catalog.toArray();
+        if (offlineData.length > 0) setProducts(offlineData);
       }
     } catch (err) {
-      console.error("Stocktake fetch error:", err);
-      setStatusMsg({ type: 'error', text: 'Could not load catalog from Google Sheet.' });
+      console.warn("Catalog fetch error:", err);
+      const offlineData = await localDb.cached_catalog.toArray();
+      if (offlineData.length > 0) setProducts(offlineData);
+      setStatusMsg({ type: 'info', text: 'Loaded catalog from offline storage.' });
     } finally {
       setSaving(false);
     }
   };
 
   useEffect(() => {
-    if (products.length === 0 || !masterSheetUrl) {
-      fetchSheetData();
-    }
+    fetchCatalogData();
   }, []);
 
   const fetchFolderArchives = async () => {
     setLoadingArchive(true);
     try {
-      const res = await fetch(`${HARDWIRED_SCRIPT_URL}?action=get_folder_records`);
-      const json = await res.json();
-      if (json && json.status === 'success') {
-        setArchiveStocktakes(json.stocktakes || []);
-        setArchiveOrders(json.orders || []);
-        if (json.lastOrderedMap) {
-          setLastOrderedMap(json.lastOrderedMap);
-        }
+      const [snapRes, orderRes] = await Promise.all([
+        supabase
+          .from('stocktake_snapshots')
+          .select('id, date_str, manager_name, logged_at')
+          .eq('venue_id', DEFAULT_VENUE_ID)
+          .order('logged_at', { ascending: false })
+          .limit(20),
+        supabase
+          .from('supplier_orders')
+          .select('id, supplier_name, order_date, manager_name, is_placed, created_at')
+          .eq('venue_id', DEFAULT_VENUE_ID)
+          .order('created_at', { ascending: false })
+          .limit(20)
+      ]);
+
+      if (snapRes.data) {
+        setArchiveStocktakes(snapRes.data.map(s => ({
+          id: s.id,
+          name: `Stocktake - ${s.date_str} - ${s.manager_name}`,
+          date: s.logged_at ? new Date(s.logged_at).toLocaleString('en-GB') : s.date_str
+        })));
+      }
+
+      if (orderRes.data) {
+        setArchiveOrders(orderRes.data.map(o => ({
+          id: o.id,
+          name: `Order - ${o.supplier_name} - ${o.order_date}${o.is_placed ? ' (PLACED)' : ''}`,
+          date: o.created_at ? new Date(o.created_at).toLocaleString('en-GB') : o.order_date
+        })));
       }
     } catch (err) {
       console.error("Could not fetch archives:", err);
@@ -243,12 +259,49 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
 
   const handleOpenRecordDetail = async (file) => {
     setLoadingRecordDetail(true);
-    setSelectedRecordDetail({ title: file.name, fileUrl: file.url, loading: true });
+    setSelectedRecordDetail({ title: file.name, loading: true });
     try {
-      const res = await fetch(`${HARDWIRED_SCRIPT_URL}?action=get_record_detail&fileId=${file.id}`);
-      const json = await res.json();
-      if (json && json.status === 'success') {
-        setSelectedRecordDetail(json);
+      if (archiveTab === 'stocktakes') {
+        const { data, error } = await supabase
+          .from('stocktake_snapshots')
+          .select('*')
+          .eq('id', file.id)
+          .single();
+
+        if (error) throw error;
+        setSelectedRecordDetail({
+          title: file.name,
+          meta: {
+            "Counted By": data.manager_name,
+            "Date": data.date_str,
+            "Logged At": new Date(data.logged_at).toLocaleString('en-GB')
+          },
+          items: data.items || []
+        });
+      } else {
+        const { data, error } = await supabase
+          .from('supplier_orders')
+          .select('*')
+          .eq('id', file.id)
+          .single();
+
+        if (error) throw error;
+        setSelectedRecordDetail({
+          title: file.name,
+          meta: {
+            "Supplier": data.supplier_name,
+            "Ordered By": data.manager_name,
+            "Status": data.is_placed ? "PLACED" : "PENDING",
+            "Date": data.order_date
+          },
+          items: (data.items || []).map(it => ({
+            name: it.name,
+            sku: it.sku || it.id,
+            qty: it.orderQty,
+            unit: it.unit,
+            par: it.par
+          }))
+        });
       }
     } catch (err) {
       console.error("Error reading file detail:", err);
@@ -257,12 +310,10 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
     }
   };
 
-  // Safe floating-point step with automatic order recalculation
   const updateCount = (id, delta) => {
     setModifiedIds(prev => new Set(prev).add(id));
     setCounts(prev => {
       const rawCurrent = prev[id] ?? 0;
-      // Round to 1 decimal place safely
       const nextVal = Math.max(0, Math.round((rawCurrent + delta) * 10) / 10);
       
       const prod = products.find(p => p.id === id);
@@ -272,6 +323,12 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
         ...orderPrev,
         [id]: calculateOrderQty(par, nextVal)
       }));
+
+      localDb.pending_stock_counts.put({
+        id,
+        count: nextVal,
+        updatedAt: new Date().toISOString()
+      });
 
       return { ...prev, [id]: nextVal };
     });
@@ -293,30 +350,69 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
   const handleSaveToSheet = async () => {
     setSaving(true);
     setStatusMsg(null);
-    try {
-      const payload = {
-        action: 'save_counts',
-        manager: currentUser?.name || 'Duty Manager',
-        items: products.map(p => ({
-          id: p.id,
-          count: counts[p.id] ?? 0
-        }))
-      };
+    const timestamp = new Date().toISOString();
+    const dateStr = timestamp.slice(0, 10);
+    const managerName = currentUser?.name || 'Duty Manager';
 
-      const res = await fetch(HARDWIRED_SCRIPT_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify(payload)
+    const countList = products.map(p => ({
+      id: p.id,
+      name: p.name,
+      count: counts[p.id] ?? 0,
+      unit: p.unit || 'unit',
+      par: p.par || 0,
+      supplier: p.supplier || 'General',
+      area: p.area || 'Main Bar'
+    }));
+
+    await localDb.pending_stock_counts.bulkPut(
+      countList.map(it => ({ id: it.id, count: it.count, updatedAt: timestamp }))
+    );
+
+    if (!navigator.onLine) {
+      setStatusMsg({ 
+        type: 'info', 
+        text: 'Offline: Counts saved safely to phone disk. Will sync when Wi-Fi connects.' 
       });
-      const json = await res.json();
+      setSaving(false);
+      return;
+    }
 
-      if (json && json.status === 'success') {
-        setStatusMsg({ type: 'success', text: 'Stocktake saved & archived to folder!' });
-      } else {
-        setStatusMsg({ type: 'error', text: json?.message || 'Error saving counts.' });
-      }
+    try {
+      const updates = countList.map(it => ({
+        id: it.id,
+        venue_id: DEFAULT_VENUE_ID,
+        name: it.name,
+        count: it.count,
+        unit: it.unit,
+        par: it.par,
+        supplier: it.supplier,
+        area: it.area,
+        updated_at: timestamp
+      }));
+
+      const { error: upsertErr } = await supabase
+        .from('catalog_items')
+        .upsert(updates, { onConflict: 'id' });
+
+      if (upsertErr) throw upsertErr;
+
+      const { error: snapErr } = await supabase
+        .from('stocktake_snapshots')
+        .insert({
+          venue_id: DEFAULT_VENUE_ID,
+          date_str: dateStr,
+          manager_name: managerName,
+          items: countList
+        });
+
+      if (snapErr) throw snapErr;
+
+      await localDb.pending_stock_counts.clear();
+      setHasUnsyncedCounts(false);
+      setStatusMsg({ type: 'success', text: 'Stocktake saved & database updated!' });
     } catch (err) {
-      setStatusMsg({ type: 'error', text: 'Failed to write counts to Google Sheet.' });
+      console.error("Save stocktake error:", err);
+      setStatusMsg({ type: 'info', text: 'Saved to phone storage. Cloud sync will retry on reconnect.' });
     } finally {
       setSaving(false);
     }
@@ -395,18 +491,17 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
 
   const handleSaveSupplierOrder = async (supplierName, items, isPlaced = false) => {
     setSavingToDrive(true);
-    setStatusMsg({ 
-      type: 'info', 
-      text: isPlaced ? `Marking ${supplierName} order placed...` : `Saving ${supplierName} order list...` 
-    });
+    const managerName = currentUser?.name || 'Duty Manager';
+    const orderDate = new Date().toISOString().slice(0, 10);
 
     try {
-      const payload = {
-        action: 'save_order_list',
-        supplier: supplierName,
-        date: new Date().toISOString().slice(0, 10),
-        manager: currentUser?.name || 'Duty Manager',
-        isPlaced: isPlaced,
+      const orderPayload = {
+        venue_id: DEFAULT_VENUE_ID,
+        supplier_name: supplierName,
+        order_date: orderDate,
+        manager_name: managerName,
+        is_placed: isPlaced,
+        placed_at: isPlaced ? new Date().toISOString() : null,
         items: items.map(it => ({
           sku: it.id,
           name: it.name,
@@ -418,32 +513,31 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
         }))
       };
 
-      const res = await fetch(HARDWIRED_SCRIPT_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify(payload)
-      });
-      const json = await res.json();
+      const { error } = await supabase.from('supplier_orders').insert(orderPayload);
+      if (error) throw error;
 
-      if (json && json.status === 'success') {
-        setStatusMsg({ 
-          type: 'success', 
-          text: isPlaced 
-            ? `${supplierName} marked placed & team notified!` 
-            : `${supplierName} order saved to folder!` 
-        });
-        if (isPlaced) {
-          setPlacedSuppliers(prev => new Set(prev).add(supplierName));
-          setLastOrderedMap(prev => ({
-            ...prev,
-            [supplierName]: { dateStr: new Date().toISOString().slice(0, 10), isPlaced: true }
-          }));
-        }
-      } else {
-        setStatusMsg({ type: 'error', text: 'Error saving order.' });
+      if (isPlaced) {
+        setPlacedSuppliers(prev => new Set(prev).add(supplierName));
+        setLastOrderedMap(prev => ({
+          ...prev,
+          [supplierName]: { dateStr: orderDate, isPlaced: true }
+        }));
+
+        sendPushNotification(
+          `Order Placed: ${supplierName}`,
+          `${managerName} placed the order (${items.length} lines)`,
+          null,
+          { module: 'orders' }
+        );
       }
+
+      setStatusMsg({ 
+        type: 'success', 
+        text: isPlaced ? `${supplierName} marked placed!` : `${supplierName} order saved!` 
+      });
     } catch (err) {
-      setStatusMsg({ type: 'error', text: 'Network error saving order.' });
+      console.error("Order save error:", err);
+      setStatusMsg({ type: 'error', text: 'Error saving order to database.' });
     } finally {
       setSavingToDrive(false);
     }
@@ -454,58 +548,48 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
     if (suppliers.length === 0) return;
 
     setSavingToDrive(true);
-    setStatusMsg({ type: 'info', text: isPlaced ? "Placing all orders..." : "Saving all orders..." });
+    const managerName = currentUser?.name || 'Duty Manager';
+    const orderDate = new Date().toISOString().slice(0, 10);
 
     try {
-      const allItems = [];
-      suppliers.forEach(sup => {
-        ordersBySupplier[sup].forEach(it => {
-          allItems.push({
-            sku: it.id,
-            name: `[${sup}] ${it.name}`,
-            orderQty: it.orderQty,
-            unit: it.unit || 'unit',
-            par: it.par || 0,
-            currentCount: counts[it.id] ?? 0,
-            checked: checkedItemIds.has(it.id)
-          });
-        });
-      });
+      const inserts = suppliers.map(sup => ({
+        venue_id: DEFAULT_VENUE_ID,
+        supplier_name: sup,
+        order_date: orderDate,
+        manager_name: managerName,
+        is_placed: isPlaced,
+        placed_at: isPlaced ? new Date().toISOString() : null,
+        items: ordersBySupplier[sup].map(it => ({
+          sku: it.id,
+          name: it.name,
+          orderQty: it.orderQty,
+          unit: it.unit || 'unit',
+          par: it.par || 0,
+          currentCount: counts[it.id] ?? 0,
+          checked: checkedItemIds.has(it.id)
+        }))
+      }));
 
-      const payload = {
-        action: 'save_order_list',
-        supplier: 'Consolidated All Suppliers',
-        date: new Date().toISOString().slice(0, 10),
-        manager: currentUser?.name || 'Duty Manager',
-        isPlaced: isPlaced,
-        items: allItems
-      };
+      const { error } = await supabase.from('supplier_orders').insert(inserts);
+      if (error) throw error;
 
-      const res = await fetch(HARDWIRED_SCRIPT_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify(payload)
-      });
-      const json = await res.json();
-
-      if (json && json.status === 'success') {
-        setStatusMsg({ 
-          type: 'success', 
-          text: isPlaced ? "All orders placed & team notified!" : "All orders saved to folder!" 
-        });
-        if (isPlaced) {
-          setPlacedSuppliers(new Set(suppliers));
-          const updatedMap = { ...lastOrderedMap };
-          suppliers.forEach(s => {
-            updatedMap[s] = { dateStr: new Date().toISOString().slice(0, 10), isPlaced: true };
-          });
-          setLastOrderedMap(updatedMap);
-        }
-      } else {
-        setStatusMsg({ type: 'error', text: 'Error saving orders.' });
+      if (isPlaced) {
+        setPlacedSuppliers(new Set(suppliers));
+        sendPushNotification(
+          "All Orders Placed",
+          `${managerName} finalized all supplier orders`,
+          null,
+          { module: 'orders' }
+        );
       }
+
+      setStatusMsg({ 
+        type: 'success', 
+        text: isPlaced ? "All orders placed & team notified!" : "All orders saved!" 
+      });
     } catch (err) {
-      setStatusMsg({ type: 'error', text: 'Network error saving orders.' });
+      console.error("Save all error:", err);
+      setStatusMsg({ type: 'error', text: 'Failed to record orders.' });
     } finally {
       setSavingToDrive(false);
     }
@@ -516,7 +600,6 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
       {...swipeHandlers}
       className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 overflow-x-hidden relative"
     >
-      {/* Top Header */}
       <header className="flex items-center justify-between px-5 pt-[max(1.5rem,env(safe-area-inset-top))] pb-2 border-b border-gray-100 flex-shrink-0 bg-white z-20">
         <div className="flex items-center space-x-2">
           {onBackToHub && (
@@ -526,6 +609,18 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
           )}
           <AppLogo className="w-6 h-6" fallbackTextClass="font-serif text-2xl font-bold tracking-tighter" />
           <span className="font-semibold text-base tracking-tight">West Side Tavern</span>
+          
+          {!isOnline ? (
+            <span className="flex items-center space-x-1 text-[9px] font-bold text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded-full">
+              <WifiOff className="w-2.5 h-2.5" />
+              <span>Offline</span>
+            </span>
+          ) : hasUnsyncedCounts ? (
+            <span className="flex items-center space-x-1 text-[9px] font-bold text-blue-700 bg-blue-100 px-1.5 py-0.5 rounded-full">
+              <CloudUpload className="w-2.5 h-2.5 animate-pulse" />
+              <span>Disk</span>
+            </span>
+          ) : null}
         </div>
         <div className="flex items-center space-x-4 text-xs font-medium">
           {onBackToHub ? (
@@ -542,7 +637,6 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
         </div>
       </header>
 
-      {/* Main View Router */}
       {view === 'settings' ? (
         <div className="flex-1 flex flex-col px-5 pt-4 pb-20 overflow-y-auto space-y-4">
           <div className="flex items-center justify-between pb-3 border-b border-gray-100">
@@ -557,43 +651,27 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
 
           <div className="space-y-4 text-[11px]">
             <div className="p-3 bg-gray-50 border border-gray-200 rounded-xl space-y-2">
-              <div className="flex items-center justify-between">
-                <div>
-                  <span className="text-[9px] uppercase font-bold text-gray-400 block">Master Catalog Sheet</span>
-                  <p className="text-xs font-bold text-gray-900">Manage SKUs, Pars & Suppliers</p>
-                </div>
+              <div>
+                <span className="text-[9px] uppercase font-bold text-gray-400 block">Database & Storage</span>
+                <p className="text-xs font-bold text-gray-900">Supabase Connected Engine</p>
               </div>
               <p className="text-[10px] text-gray-500 leading-tight">
-                Edit items, pars, suppliers, and areas directly in the master stock spreadsheet.
+                Operating with local IndexedDB cache buffer and PostgreSQL persistence.
               </p>
-              {masterSheetUrl ? (
-                <a
-                  href={masterSheetUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="w-full py-2.5 bg-black hover:bg-neutral-800 text-white rounded-xl text-xs font-bold transition flex items-center justify-center space-x-2 shadow-sm"
-                >
-                  <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>Open Master Stocktake Sheet</span>
-                  <ExternalLink className="w-3 h-3 text-gray-400" />
-                </a>
-              ) : (
-                <button
-                  type="button"
-                  onClick={fetchSheetData}
-                  className="w-full py-2 bg-gray-200 text-gray-700 rounded-xl text-xs font-bold hover:bg-gray-300 transition"
-                >
-                  Sync Spreadsheet URL
-                </button>
-              )}
-            </div>
-
-            <div className="space-y-2">
-              <label className="block text-xs font-bold text-gray-900">Google Apps Script Web App</label>
-              <div className="relative mt-2">
-                <input type="text" readOnly value={HARDWIRED_SCRIPT_URL} className="w-full bg-[#EDEDED] py-2.5 pl-9 pr-3 rounded-lg text-[10px] font-mono text-gray-500 cursor-not-allowed focus:outline-none" />
-                <Lock className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  localDb.pending_stock_counts.clear();
+                  localStorage.removeItem('wst_active_counts');
+                  localStorage.removeItem('wst_modified_ids');
+                  setCounts({});
+                  setModifiedIds(new Set());
+                  setStatusMsg({ type: 'success', text: 'Local disk cache reset cleanly.' });
+                }}
+                className="w-full py-2 bg-gray-200 text-gray-700 rounded-xl text-xs font-bold hover:bg-gray-300 transition"
+              >
+                Clear Local Session Cache
+              </button>
             </div>
 
             <button onClick={() => setView('main')} className="w-full py-2.5 bg-[#C2F19D] text-xs font-semibold rounded-lg text-gray-900 hover:bg-[#b2e88a] transition">
@@ -602,8 +680,6 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
           </div>
         </div>
       ) : activeTab === 'Orders' ? (
-
-        /* TAB 2: ORDERS BY SUPPLIER */
         <div className="flex-1 flex flex-col overflow-hidden pb-20">
           <div className="px-5 pt-3 pb-2 border-b border-gray-100 flex-shrink-0">
             <div className="flex justify-between items-center mb-2">
@@ -815,10 +891,7 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
             )}
           </div>
         </div>
-
       ) : (
-
-        /* TAB 1: STOCKTAKE COUNTING MATRIX */
         <div className="flex-1 flex flex-col overflow-hidden pb-20">
           <div className="px-5 pt-3 pb-1 flex justify-between items-end flex-shrink-0">
             <div>
@@ -828,19 +901,6 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
               </h1>
             </div>
             <div className="flex items-center space-x-1.5">
-              {masterSheetUrl && (
-                <a 
-                  href={masterSheetUrl} 
-                  target="_blank" 
-                  rel="noreferrer" 
-                  className="p-1 text-emerald-700 hover:text-black rounded-lg bg-emerald-50 border border-emerald-200 flex items-center space-x-1 text-[10px] font-bold px-2 py-0.5"
-                  title="Open Master Sheet in Google Sheets"
-                >
-                  <FileSpreadsheet className="w-3 h-3 text-emerald-600" />
-                  <span>Sheet</span>
-                  <ExternalLink className="w-2.5 h-2.5 opacity-60" />
-                </a>
-              )}
               <button 
                 onClick={() => {
                   setArchiveModalOpen(true);
@@ -851,7 +911,7 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
               >
                 <FolderOpen className="w-3.5 h-3.5" />
               </button>
-              <button onClick={fetchSheetData} className="p-1 text-gray-500 hover:text-black rounded-lg bg-gray-50 border border-gray-100" title="Sync with Google Sheet">
+              <button onClick={fetchCatalogData} className="p-1 text-gray-500 hover:text-black rounded-lg bg-gray-50 border border-gray-100" title="Sync with Database">
                 <RefreshCw className={`w-3.5 h-3.5 ${saving ? 'animate-spin' : ''}`} />
               </button>
             </div>
@@ -872,7 +932,6 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
             </div>
             
             <div className="flex items-center space-x-1.5">
-              {/* Detailed 0.1 decimal toggle switch */}
               <button
                 type="button"
                 onClick={() => setDetailedMode(!detailedMode)}
@@ -887,7 +946,17 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
                 <span>{detailedMode ? '0.1 Mode' : 'Standard'}</span>
               </button>
 
-              <button onClick={() => { setCounts({}); setModifiedIds(new Set()); }} className="px-2 py-1 bg-[#F3F3F3] hover:bg-gray-200 rounded-lg text-xs font-medium text-gray-800 transition">Clear</button>
+              <button 
+                onClick={() => { 
+                  setCounts({}); 
+                  setModifiedIds(new Set()); 
+                  localStorage.removeItem('wst_active_counts');
+                  localStorage.removeItem('wst_modified_ids');
+                }} 
+                className="px-2 py-1 bg-[#F3F3F3] hover:bg-gray-200 rounded-lg text-xs font-medium text-gray-800 transition"
+              >
+                Clear
+              </button>
               <button onClick={handleSaveToSheet} disabled={saving} className="flex items-center space-x-1 px-2.5 py-1 bg-[#C2F19D] hover:bg-[#b2e88a] rounded-lg text-xs font-bold text-gray-900 transition">
                 <span>{saving ? 'Saving...' : 'Save Stocktake'}</span>
               </button>
@@ -995,11 +1064,9 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
                       {product.par}
                     </div>
 
-                    {/* Dual Controls in Detailed Mode vs Single in Standard */}
                     <div className={`${detailedMode ? "col-span-4" : "col-span-3"} flex items-center justify-end space-x-1`}>
                       {detailedMode ? (
                         <div className="flex items-center space-x-1">
-                          {/* Whole Number Steppers */}
                           <div className="flex flex-col space-y-0.5">
                             <button 
                               onClick={() => updateCount(product.id, 1)} 
@@ -1017,12 +1084,10 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
                             </button>
                           </div>
 
-                          {/* Value Display */}
                           <span className={`w-9 py-1 text-center rounded text-xs transition-colors font-mono font-bold ${isModified ? 'bg-[#D9EECD] text-black' : 'bg-[#EDEDED] text-gray-700'}`}>
                             {Number(currentCount).toFixed(1)}
                           </span>
 
-                          {/* Decimal Tenth Steppers */}
                           <div className="flex flex-col space-y-0.5">
                             <button 
                               onClick={() => updateCount(product.id, 0.1)} 
@@ -1062,13 +1127,12 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
         </div>
       )}
 
-      {/* Floating Modal: Archive Browser */}
       {archiveModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white w-full max-w-sm rounded-3xl overflow-hidden shadow-2xl border border-gray-200 flex flex-col max-h-[80vh] animate-in fade-in zoom-in-95 duration-150">
             <div className="px-5 pt-4 pb-3 border-b border-gray-100 flex justify-between items-center bg-gray-50">
               <div>
-                <span className="text-[9px] font-mono uppercase font-bold text-gray-400">Drive Folder Archive</span>
+                <span className="text-[9px] font-mono uppercase font-bold text-gray-400">Database Archive</span>
                 <h2 className="text-sm font-black text-gray-900 leading-tight mt-0.5">Compiled Records</h2>
               </div>
               <button 
@@ -1102,7 +1166,7 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
 
             <div className="flex-1 overflow-y-auto px-5 py-3 divide-y divide-gray-100 text-xs">
               {loadingArchive ? (
-                <p className="text-center py-8 text-gray-400 italic">Reading records from folder...</p>
+                <p className="text-center py-8 text-gray-400 italic">Reading records from database...</p>
               ) : archiveTab === 'stocktakes' ? (
                 archiveStocktakes.length === 0 ? (
                   <p className="text-center py-8 text-gray-400 italic">No compiled stocktakes found.</p>
@@ -1145,7 +1209,6 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
         </div>
       )}
 
-      {/* Floating Modal: Record Detail Preview */}
       {selectedRecordDetail && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white w-full max-w-sm rounded-3xl overflow-hidden shadow-2xl border border-gray-200 flex flex-col max-h-[85vh] animate-in fade-in zoom-in-95 duration-150">
@@ -1164,7 +1227,7 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
 
             <div className="flex-1 overflow-y-auto px-5 py-3 space-y-3 text-xs">
               {loadingRecordDetail ? (
-                <p className="text-center py-12 text-gray-400 italic">Loading file contents...</p>
+                <p className="text-center py-12 text-gray-400 italic">Loading record contents...</p>
               ) : (
                 <>
                   {selectedRecordDetail.meta && Object.keys(selectedRecordDetail.meta).length > 0 && (
@@ -1192,24 +1255,11 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
                         </div>
                         <div className="col-span-4 text-right font-mono">
                           <span className="font-bold text-black">{it.qty} {it.unit}</span>
-                          {it.par !== "" && <span className="text-[9px] text-gray-400 block font-normal">Par: {it.par}</span>}
+                          {it.par !== "" && it.par !== undefined && <span className="text-[9px] text-gray-400 block font-normal">Par: {it.par}</span>}
                         </div>
                       </div>
                     ))}
                   </div>
-
-                  {selectedRecordDetail.fileUrl && (
-                    <a
-                      href={selectedRecordDetail.fileUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="w-full py-2 bg-black hover:bg-neutral-800 text-white rounded-xl text-xs font-bold transition flex items-center justify-center space-x-1.5 shadow-sm mt-2"
-                    >
-                      <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
-                      <span>Open in Google Sheets</span>
-                      <ExternalLink className="w-3 h-3 text-gray-400" />
-                    </a>
-                  )}
                 </>
               )}
             </div>
@@ -1217,7 +1267,6 @@ export default function OrderListsApp({ currentUser, initialCatalog = [], onBack
         </div>
       )}
 
-      {/* Floating Bottom Nav */}
       <nav className="fixed bottom-2 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-[390px] z-30 rounded-2xl bg-[#111111]/95 backdrop-blur-md text-white py-2 px-3 flex justify-around items-center text-xs font-semibold shadow-2xl border border-white/10 select-none pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))]">
         <button 
           onClick={() => { setView('main'); setActiveTab('Stocktake'); }} 

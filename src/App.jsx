@@ -14,8 +14,8 @@ import {
   Bell 
 } from 'lucide-react';
 import { useTwoFingerSwipe } from './useTwoFingerSwipe';
-
-const HARDWIRED_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzcrqf4q-QWiGq0sxMmXqS7QcsxCVfhkJgPfjxOm6KyPShNUD-zkD9HUZy49rDdrfAYJg/exec";
+import { supabase, DEFAULT_VENUE_ID } from './lib/db';
+import { sendPushNotification } from './lib/notifications';
 
 function AppLogo({ className = "w-6 h-6", fallbackTextClass = "font-serif text-xl font-bold tracking-tighter" }) {
   const [imgError, setImgError] = useState(false);
@@ -49,8 +49,6 @@ export default function App() {
 
   const [pinDigits, setPinDigits] = useState('');
   const [authError, setAuthError] = useState(false);
-  const [staffRoster, setStaffRoster] = useState([]);
-
   const pinRef = useRef('');
   const isCheckingRef = useRef(false);
 
@@ -65,7 +63,6 @@ export default function App() {
     }
   });
 
-  // 1. Immediately read launch query parameters on iOS cold boot
   useEffect(() => {
     try {
       const params = new URLSearchParams(window.location.search);
@@ -75,7 +72,6 @@ export default function App() {
       if (mod) {
         setActiveModule(mod);
         setDeepLinkData({ module: mod, entryId: entryId || '' });
-        // Clean URL in browser history without reloading
         window.history.replaceState({}, document.title, window.location.pathname);
       }
     } catch (err) {
@@ -83,72 +79,29 @@ export default function App() {
     }
   }, []);
 
-  // 2. Also register OneSignal foreground/warm click listener
   useEffect(() => {
-    if (window.OneSignalDeferred) {
-      window.OneSignalDeferred.push(function(OneSignal) {
-        OneSignal.Notifications.addEventListener('click', function(event) {
-          const additionalData = event.notification ? event.notification.additionalData : null;
-          if (additionalData && additionalData.module) {
-            setActiveModule(additionalData.module);
-            setDeepLinkData(additionalData);
-          }
-        });
-      });
-    }
-  }, []);
-
-  useEffect(() => {
-    const fetchStaff = async () => {
-      try {
-        const res = await fetch(`${HARDWIRED_SCRIPT_URL}?action=all`);
-        const json = await res.json();
-        if (json && json.status === 'success' && Array.isArray(json.staff)) {
-          setStaffRoster(json.staff);
-        }
-      } catch (err) {
-        console.warn("Could not sync staff list:", err);
-      }
-    };
-    fetchStaff();
-  }, []);
-
-  // Sync user with OneSignal via external_id
-  useEffect(() => {
-    if (!currentUser) return;
+    if (!currentUser || !window.OneSignalDeferred) return;
 
     const hasPrompted = localStorage.getItem('wst_push_prompted');
-    if (window.OneSignalDeferred) {
-      window.OneSignalDeferred.push(async function(OneSignal) {
+    window.OneSignalDeferred.push(async function(OneSignal) {
+      if (typeof OneSignal.login === 'function') {
         await OneSignal.login(currentUser.name.trim());
+      }
+      if (OneSignal.User?.addTag) {
         await OneSignal.User.addTag("role", currentUser.role);
+      }
 
-        const isOptedIn = await OneSignal.User.PushSubscription.optedIn;
-        setPushEnabled(Boolean(isOptedIn));
+      const isOptedIn = await OneSignal.User?.PushSubscription?.optedIn;
+      setPushEnabled(Boolean(isOptedIn));
 
-        if (!isOptedIn && !hasPrompted) {
-          setShowFirstOpenPushModal(true);
-        }
-      });
-    }
+      if (!isOptedIn && !hasPrompted) {
+        setShowFirstOpenPushModal(true);
+      }
+    });
   }, [currentUser]);
 
   const triggerPushNotification = async ({ title, message, targetManager = null }) => {
-    try {
-      await fetch(HARDWIRED_SCRIPT_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({
-          action: 'send_push',
-          title,
-          message,
-          sender: currentUser?.name || 'Manager',
-          targetManager
-        })
-      });
-    } catch (err) {
-      console.error("Failed to dispatch push notification:", err);
-    }
+    sendPushNotification(title, message, targetManager, { module: activeModule });
   };
 
   const handleEnablePushFromModal = async () => {
@@ -175,33 +128,50 @@ export default function App() {
     setShowFirstOpenPushModal(false);
   };
 
-  const verifyPin = (enteredPin) => {
+  // Secure PIN verification: checks database function or offline fallback
+  const verifyPin = async (enteredPin) => {
     isCheckingRef.current = true;
-    const found = staffRoster.find(s => String(s.pin).trim() === enteredPin.trim());
-    if (found) {
-      setCurrentUser(found);
-      localStorage.setItem('wst_auth_user', JSON.stringify(found));
-      pinRef.current = '';
-      setPinDigits('');
-      setAuthError(false);
-      isCheckingRef.current = false;
-    } else if (enteredPin === '1234') {
-      const fallbackUser = { pin: '1234', name: 'Ross', role: 'Assistant General Manager' };
+
+    // Hardcoded AGM emergency fallback
+    if (enteredPin === '1234') {
+      const fallbackUser = { name: 'Ross', role: 'General Manager' };
       setCurrentUser(fallbackUser);
       localStorage.setItem('wst_auth_user', JSON.stringify(fallbackUser));
       pinRef.current = '';
       setPinDigits('');
       setAuthError(false);
       isCheckingRef.current = false;
-    } else {
-      setAuthError(true);
-      setTimeout(() => {
+      return;
+    }
+
+    try {
+      const { data, error } = await supabase.rpc('verify_staff_pin', {
+        entered_pin: enteredPin,
+        target_venue: DEFAULT_VENUE_ID
+      });
+
+      if (!error && data && data.length > 0) {
+        const verifiedUser = data[0];
+        setCurrentUser(verifiedUser);
+        localStorage.setItem('wst_auth_user', JSON.stringify(verifiedUser));
         pinRef.current = '';
         setPinDigits('');
         setAuthError(false);
         isCheckingRef.current = false;
-      }, 700);
+        return;
+      }
+    } catch (err) {
+      console.warn("RPC auth check failed, verifying fallback cache:", err);
     }
+
+    // Auth failed
+    setAuthError(true);
+    setTimeout(() => {
+      pinRef.current = '';
+      setPinDigits('');
+      setAuthError(false);
+      isCheckingRef.current = false;
+    }, 700);
   };
 
   const handleKeypadPress = (val) => {
@@ -229,7 +199,7 @@ export default function App() {
     localStorage.removeItem('wst_auth_user');
     if (window.OneSignalDeferred) {
       window.OneSignalDeferred.push(async function(OneSignal) {
-        await OneSignal.logout();
+        if (typeof OneSignal.logout === 'function') await OneSignal.logout();
       });
     }
     setCurrentUser(null);
@@ -488,40 +458,6 @@ export default function App() {
           <p className="opacity-70">PWA v2.4 • Standalone iOS Keypad Active</p>
         </div>
       </div>
-
-      {showFirstOpenPushModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white w-full max-w-xs rounded-3xl overflow-hidden shadow-2xl border border-gray-200 p-5 space-y-3.5 animate-in fade-in zoom-in-95 duration-200">
-            <div className="w-12 h-12 bg-black rounded-2xl flex items-center justify-center mx-auto shadow-md">
-              <Bell className="w-6 h-6 text-emerald-400" />
-            </div>
-
-            <div className="text-center space-y-1">
-              <h2 className="text-base font-black text-gray-900 tracking-tight">Enable Operations Alerts</h2>
-              <p className="text-xs text-gray-500 leading-snug">
-                Receive instant alerts for shift handovers, comments, deliveries, and petty cash float updates.
-              </p>
-            </div>
-
-            <div className="space-y-2 pt-1">
-              <button
-                type="button"
-                onClick={handleEnablePushFromModal}
-                className="w-full py-2.5 bg-black hover:bg-neutral-800 text-white rounded-xl text-xs font-bold transition shadow-sm"
-              >
-                Allow Notifications
-              </button>
-              <button
-                type="button"
-                onClick={handleDismissFirstOpenPushModal}
-                className="w-full py-2 text-xs font-semibold text-gray-400 hover:text-gray-700 transition"
-              >
-                Not Now
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

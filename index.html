@@ -24,13 +24,20 @@
     <script>
       window.OneSignalDeferred = window.OneSignalDeferred || [];
       OneSignalDeferred.push(async function(OneSignal) {
-        await OneSignal.init({
-          appId: "93cb91c7-7f6c-4f75-a66b-40a5fb5375f9",
-          notifyButton: {
-            enable: false
-          },
-          allowLocalhostAsSecureOrigin: true
-        });
+        // Prevent fatal domain error on localhost
+        if (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1") {
+          console.log("OneSignal push SDK bypassed on localhost");
+          return;
+        }
+
+        try {
+          await OneSignal.init({
+            appId: "93cb91c7-7f6c-4f75-a66b-40a5fb5375f9",
+            notifyButton: { enable: false }
+          });
+        } catch (e) {
+          console.warn("OneSignal init error ignored:", e);
+        }
       });
     </script>
   </head>

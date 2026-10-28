@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   ArrowLeft, 
   Plus, 
@@ -7,14 +7,11 @@ import {
   Lock, 
   Unlock, 
   Send, 
-  FileText,
-  FileSpreadsheet,
-  ExternalLink,
-  CheckCircle2
+  FileText
 } from 'lucide-react';
 import { useTwoFingerSwipe } from './useTwoFingerSwipe';
-
-const HARDWIRED_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzcrqf4q-QWiGq0sxMmXqS7QcsxCVfhkJgPfjxOm6KyPShNUD-zkD9HUZy49rDdrfAYJg/exec";
+import { supabase, localDb, DEFAULT_VENUE_ID } from './lib/db';
+import { sendPushNotification } from './lib/notifications';
 
 function AppLogo({ className = "w-6 h-6", fallbackTextClass = "font-serif text-xl font-bold tracking-tighter" }) {
   const [imgError, setImgError] = useState(false);
@@ -33,80 +30,66 @@ function AppLogo({ className = "w-6 h-6", fallbackTextClass = "font-serif text-x
   return <span className={fallbackTextClass}>T</span>;
 }
 
-export default function GoodsReceivedApp({ currentUser, initialCatalog = [], onBackToHub, onLogout }) {
-  const parseCatalog = (data) => {
-    if (!data) return [];
-    if (Array.isArray(data)) return data;
-    if (Array.isArray(data.catalog)) return data.catalog;
-    if (Array.isArray(data.data)) return data.data;
-    return [];
-  };
-
+export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout }) {
   const [products, setProducts] = useState(() => {
-    const fromProp = parseCatalog(initialCatalog);
-    if (fromProp.length > 0) return fromProp;
     try {
-      const cached = localStorage.getItem('wst_catalog');
-      return cached ? parseCatalog(JSON.parse(cached)) : [];
+      const cached = localStorage.getItem('wst_catalog_cache');
+      return cached ? JSON.parse(cached) : [];
     } catch {
       return [];
     }
   });
 
-  // Delivery Metadata
   const [invoiceSupplier, setInvoiceSupplier] = useState('');
   const [invoiceRef, setInvoiceRef] = useState('');
   const [deliveryDate, setDeliveryDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [invoiceNotes, setInvoiceNotes] = useState('');
 
-  // Item Input State (with Catalog Autocomplete)
   const [itemSearch, setItemSearch] = useState('');
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [customName, setCustomName] = useState('');
   const [customUnit, setCustomUnit] = useState('case');
   const [qtyDelivered, setQtyDelivered] = useState('');
 
-  // 4-Way Pricing Engine
   const [unitEx, setUnitEx] = useState('');
   const [unitInc, setUnitInc] = useState('');
   const [totalEx, setTotalEx] = useState('');
   const [totalInc, setTotalInc] = useState('');
   const [isMathLocked, setIsMathLocked] = useState(true);
 
-  // Queue & Submissions
   const [receivedItems, setReceivedItems] = useState([]);
   const [submittingReport, setSubmittingReport] = useState(false);
   const [statusMsg, setStatusMsg] = useState(null);
-  const [savedFileUrl, setSavedFileUrl] = useState('');
 
-  // Two-Finger Gesture Hook: Return to Hub
   const swipeHandlers = useTwoFingerSwipe({
     onSwipeRight: () => {
       if (onBackToHub) onBackToHub();
     }
   });
 
-  // Fetch catalog if missing from cache
   useEffect(() => {
-    if (products.length === 0) {
-      const fetchCatalog = async () => {
-        try {
-          const res = await fetch(`${HARDWIRED_SCRIPT_URL}?action=all`);
-          const json = await res.json();
-          const fetched = parseCatalog(json);
-          if (fetched.length > 0) {
-            setProducts(fetched);
-            localStorage.setItem('wst_catalog', JSON.stringify(fetched));
+    const fetchCatalog = async () => {
+      try {
+        if (navigator.onLine) {
+          const { data } = await supabase
+            .from('catalog_items')
+            .select('id, name, unit, supplier')
+            .eq('venue_id', DEFAULT_VENUE_ID);
+          if (data && data.length > 0) {
+            setProducts(data);
+            localStorage.setItem('wst_catalog_cache', JSON.stringify(data));
           }
-        } catch (err) {
-          console.warn("Could not sync catalog in GoodsReceivedApp:", err);
+        } else {
+          const offline = await localDb.cached_catalog.toArray();
+          if (offline.length > 0) setProducts(offline);
         }
-      };
-      fetchCatalog();
-    }
-  }, [products.length]);
+      } catch (err) {
+        console.warn("Could not sync catalog in GoodsReceivedApp:", err);
+      }
+    };
+    fetchCatalog();
+  }, []);
 
-  // Catalog live search filter
   const productSearchResults = useMemo(() => {
     if (!itemSearch.trim() || selectedProduct) return [];
     const q = itemSearch.toLowerCase();
@@ -126,7 +109,6 @@ export default function GoodsReceivedApp({ currentUser, initialCatalog = [], onB
     }
   };
 
-  // Restored 4-way pricing mathematics engine
   const handlePriceChange = (field, val) => {
     const num = parseFloat(val);
     const qty = parseFloat(qtyDelivered) || 1;
@@ -211,34 +193,35 @@ export default function GoodsReceivedApp({ currentUser, initialCatalog = [], onB
     if (receivedItems.length === 0) return;
     setSubmittingReport(true);
     setStatusMsg(null);
+
+    const sup = invoiceSupplier.trim() || 'Supplier';
+
     try {
-      const payload = {
-        action: "goods_received_report",
-        invoiceRef: invoiceRef.trim(),
-        supplier: invoiceSupplier.trim() || 'Supplier',
-        deliveryDate,
+      const { error } = await supabase.from('goods_received').insert({
+        venue_id: DEFAULT_VENUE_ID,
+        supplier: sup,
+        delivery_date: deliveryDate,
+        invoice_ref: invoiceRef.trim(),
         notes: invoiceNotes.trim(),
         items: receivedItems
-      };
-
-      const res = await fetch(HARDWIRED_SCRIPT_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify(payload)
       });
-      const json = await res.json();
 
-      if (json && json.status === 'success') {
-        setStatusMsg({ type: 'success', text: `Delivery report for ${invoiceSupplier || 'Supplier'} filed to Drive!` });
-        if (json.fileUrl) setSavedFileUrl(json.fileUrl);
-        setReceivedItems([]);
-        setInvoiceRef('');
-        setInvoiceNotes('');
-      } else {
-        setStatusMsg({ type: 'error', text: 'Error saving report to Google Drive.' });
-      }
+      if (error) throw error;
+
+      sendPushNotification(
+        `Delivery Logged: ${sup}`,
+        `${receivedItems.length} items checked in (${invoiceRef ? "Ref: " + invoiceRef : deliveryDate})`,
+        null,
+        { module: 'goods' }
+      );
+
+      setStatusMsg({ type: 'success', text: `Delivery report for ${sup} saved!` });
+      setReceivedItems([]);
+      setInvoiceRef('');
+      setInvoiceNotes('');
     } catch (err) {
-      setStatusMsg({ type: 'error', text: 'Network error submitting delivery report.' });
+      console.error(err);
+      setStatusMsg({ type: 'error', text: 'Error saving delivery report.' });
     } finally {
       setSubmittingReport(false);
     }
@@ -270,7 +253,6 @@ export default function GoodsReceivedApp({ currentUser, initialCatalog = [], onB
       {...swipeHandlers}
       className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 overflow-x-hidden relative"
     >
-      {/* Top Header with Dynamic Island / Notch Inset Clearance */}
       <header className="flex items-center justify-between px-5 pt-[max(1.5rem,env(safe-area-inset-top))] pb-2 border-b border-gray-100 flex-shrink-0 bg-white z-20">
         <div className="flex items-center space-x-2">
           {onBackToHub && (
@@ -290,7 +272,6 @@ export default function GoodsReceivedApp({ currentUser, initialCatalog = [], onB
         </div>
       </header>
 
-      {/* Main Delivery Form View */}
       <div className="flex-1 flex flex-col overflow-y-auto px-5 py-3 space-y-3.5 pb-20">
         <div className="border-b border-gray-100 pb-2.5">
           <div className="flex justify-between items-start">
@@ -350,7 +331,6 @@ export default function GoodsReceivedApp({ currentUser, initialCatalog = [], onB
           </div>
         </div>
 
-        {/* Add Line Item Form with Autocomplete */}
         <form onSubmit={handleAddReceivedItem} className="bg-gray-50 border border-gray-200 rounded-xl p-3 space-y-2.5 text-xs">
           <span className="block font-bold text-gray-900 uppercase tracking-wider text-[10px]">Add Invoice Line Item</span>
           
@@ -420,7 +400,6 @@ export default function GoodsReceivedApp({ currentUser, initialCatalog = [], onB
             </div>
           </div>
 
-          {/* Pricing Grid */}
           <div className="grid grid-cols-2 gap-2 pt-0.5">
             <div>
               <label className="block text-[9px] font-bold text-gray-500 mb-0.5">Total (Inc VAT £)</label>
@@ -478,7 +457,6 @@ export default function GoodsReceivedApp({ currentUser, initialCatalog = [], onB
           </button>
         </form>
 
-        {/* Delivery Queue List */}
         <div className="space-y-1.5">
           <div className="flex justify-between items-center px-1">
             <span className="text-[10px] font-bold uppercase text-gray-400">
@@ -526,7 +504,6 @@ export default function GoodsReceivedApp({ currentUser, initialCatalog = [], onB
           )}
         </div>
 
-        {/* Delivery Notes */}
         <div className="space-y-1">
           <label className="block text-[10px] font-bold text-gray-700">Delivery Notes & Discrepancies</label>
           <textarea 
@@ -538,7 +515,6 @@ export default function GoodsReceivedApp({ currentUser, initialCatalog = [], onB
           />
         </div>
 
-        {/* Action Buttons: Export Doc & Save to Drive */}
         <div className="grid grid-cols-2 gap-2 pt-0.5 pb-2">
           <button 
             type="button" 
@@ -559,22 +535,8 @@ export default function GoodsReceivedApp({ currentUser, initialCatalog = [], onB
             <span>{submittingReport ? 'Saving...' : 'Submit Report'}</span>
           </button>
         </div>
-
-        {savedFileUrl && (
-          <a
-            href={savedFileUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="w-full py-2 bg-emerald-50 text-emerald-900 border border-emerald-200 rounded-xl flex items-center justify-center space-x-1.5 font-bold hover:bg-emerald-100 transition text-[11px]"
-          >
-            <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-700" />
-            <span>Open Delivery File in Drive</span>
-            <ExternalLink className="w-3 h-3 text-emerald-600 ml-1" />
-          </a>
-        )}
       </div>
 
-      {/* Floating Bottom Nav */}
       <nav className="fixed bottom-2 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-[390px] z-30 rounded-2xl bg-[#111111]/95 backdrop-blur-md text-white py-2 px-3 flex justify-around items-center text-xs font-semibold shadow-2xl border border-white/10 select-none pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))]">
         <button 
           onClick={onBackToHub} 
