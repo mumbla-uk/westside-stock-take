@@ -7,16 +7,9 @@ import {
   Save,
   X,
   Sliders,
-  DollarSign,
   Package,
-  Layers,
-  Building2,
-  MapPin,
   RefreshCw,
-  CheckCircle2,
-  Beer,
-  Wine,
-  GlassWater
+  SlidersHorizontal
 } from 'lucide-react';
 import { useTwoFingerSwipe } from './useTwoFingerSwipe';
 import { supabase, DEFAULT_VENUE_ID } from './lib/db';
@@ -33,12 +26,9 @@ const CATEGORIES = [
 
 export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }) {
   const [items, setItems] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
-  const [selectedSupplierFilter, setSelectedSupplierFilter] = useState('all');
-  
-  // Active Edit Item Drawer
   const [editingItem, setEditingItem] = useState(null);
   const [savingItem, setSavingItem] = useState(false);
   const [statusMsg, setStatusMsg] = useState(null);
@@ -61,12 +51,15 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
         .order('name');
 
       if (error) throw error;
-      if (data) {
+      if (Array.isArray(data)) {
         setItems(data);
+      } else {
+        setItems([]);
       }
     } catch (err) {
       console.warn("Could not sync master catalog:", err);
       setStatusMsg({ type: 'error', text: 'Error connecting to database items.' });
+      setItems([]);
     } finally {
       setLoading(false);
     }
@@ -76,20 +69,18 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
     fetchMasterCatalog();
   }, []);
 
-  const suppliersList = useMemo(() => {
-    const unique = Array.from(new Set(items.map(i => i.supplier).filter(Boolean)));
-    return ['all', ...unique];
-  }, [items]);
-
   const filteredItems = useMemo(() => {
+    if (!Array.isArray(items)) return [];
     return items.filter(it => {
+      const name = String(it.name || '').toLowerCase();
+      const id = String(it.id || '').toLowerCase();
       const q = searchQuery.toLowerCase();
-      const matchesSearch = !q || (it.name && it.name.toLowerCase().includes(q)) || (it.id && it.id.toLowerCase().includes(q));
-      const matchesCat = selectedCategory === 'all' || (it.category || '').toLowerCase() === selectedCategory;
-      const matchesSup = selectedSupplierFilter === 'all' || it.supplier === selectedSupplierFilter;
-      return matchesSearch && matchesCat && matchesSup;
+      const matchesSearch = !q || name.includes(q) || id.includes(q);
+      const itemCat = String(it.category || '').toLowerCase();
+      const matchesCat = selectedCategory === 'all' || itemCat === selectedCategory;
+      return matchesSearch && matchesCat;
     });
-  }, [items, searchQuery, selectedCategory, selectedSupplierFilter]);
+  }, [items, searchQuery, selectedCategory]);
 
   const handleCreateNewItem = () => {
     const newItem = {
@@ -115,7 +106,7 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
 
   const handleSaveItem = async (e) => {
     e.preventDefault();
-    if (!editingItem.id || !editingItem.name.trim()) return;
+    if (!editingItem?.id || !editingItem?.name?.trim()) return;
 
     setSavingItem(true);
     setStatusMsg(null);
@@ -183,20 +174,29 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
               <ArrowLeft className="w-4 h-4" />
             </button>
           )}
-          <AppLogo className="w-6 h-6" fallbackTextClass="font-serif text-2xl font-bold tracking-tighter" />
+          <div className="w-6 h-6 rounded bg-neutral-900 text-white flex items-center justify-center font-serif text-sm font-bold">
+            W
+          </div>
           <div>
             <h1 className="font-extrabold text-base tracking-tight text-gray-900 leading-tight">Master Catalog</h1>
-            <span className="text-[10px] text-gray-400 font-mono block">Unified Inventory, Pricing &amp; Units</span>
+            <span className="text-[10px] text-gray-400 font-mono block">Inventory, Costs &amp; Units</span>
           </div>
         </div>
 
         <div className="flex items-center space-x-1.5">
           <button
+            onClick={fetchMasterCatalog}
+            className="p-1.5 text-gray-500 hover:text-black rounded-lg transition"
+            title="Refresh"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+          </button>
+          <button
             onClick={handleCreateNewItem}
             className="flex items-center space-x-1 py-1.5 px-3 rounded-xl bg-black text-white hover:bg-neutral-800 text-xs font-bold transition active:scale-95 shadow-sm"
           >
             <Plus className="w-3.5 h-3.5" />
-            <span>Add Item</span>
+            <span>Add</span>
           </button>
         </div>
       </header>
@@ -208,7 +208,7 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search by SKU, product name, or supplier..."
+            placeholder="Search SKU or name..."
             className="w-full bg-white border border-gray-300 py-1.5 pl-3 pr-8 rounded-xl text-xs placeholder-gray-400 focus:outline-none focus:border-black"
           />
           {searchQuery ? (
@@ -246,7 +246,7 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
         </div>
       )}
 
-      {/* Main Items Ledger */}
+      {/* Items Ledger */}
       <div className="flex-1 overflow-y-auto px-5 divide-y divide-gray-100 pb-24 touch-pan-y overscroll-contain">
         {loading ? (
           <p className="text-center py-16 text-xs text-gray-400 italic">Syncing inventory attributes...</p>
@@ -267,25 +267,25 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
                   <span className="font-bold text-gray-900 text-xs block leading-tight group-hover:text-black">
                     {item.name}
                   </span>
-                  <span className="text-[9px] font-mono text-gray-400 bg-gray-100 px-1 py-0.2 rounded">
+                  <span className="text-[9px] font-mono text-gray-400 bg-gray-100 px-1 py-0.5 rounded">
                     {item.id}
                   </span>
                 </div>
                 <div className="flex items-center space-x-1.5 text-[9px] text-gray-500 font-mono">
-                  <span>{item.supplier}</span>
+                  <span>{item.supplier || 'General'}</span>
                   <span>•</span>
                   <span>{item.area || 'Main Bar'}</span>
                   <span>•</span>
-                  <span className="font-bold text-gray-700">Par: {item.par} {item.count_unit || 'unit'}</span>
+                  <span className="font-bold text-gray-700">Par: {item.par ?? 1} {item.count_unit || item.unit || 'unit'}</span>
                 </div>
               </div>
 
               <div className="text-right flex-shrink-0">
                 <span className="text-xs font-black text-gray-900 font-mono block">
-                  £{Number(item.cost_price_ex_vat || 0).toFixed(2)}
+                  £{Number(item.cost_price_ex_vat || item.cost_price || 0).toFixed(2)}
                 </span>
                 <span className="text-[9px] text-gray-400 font-mono block">
-                  per {item.order_unit || 'case'} ({item.units_per_order_case || 1}pk)
+                  per {item.order_unit || 'case'}
                 </span>
               </div>
             </div>
@@ -293,11 +293,10 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
         )}
       </div>
 
-      {/* ITEM CONFIGURATION DRAWER / MODAL */}
+      {/* EDIT DRAWER */}
       {editingItem && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200">
           <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl overflow-hidden shadow-2xl border border-gray-200 flex flex-col max-h-[92vh] animate-in slide-in-from-bottom duration-200">
-            {/* Drawer Header */}
             <div className="px-5 pt-4 pb-3 border-b border-gray-100 flex justify-between items-center bg-gray-50/80">
               <div>
                 <span className="text-[9px] font-mono uppercase text-gray-400 font-bold block">
@@ -316,12 +315,10 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
               </button>
             </div>
 
-            {/* Editable Form */}
             <form onSubmit={handleSaveItem} className="p-5 overflow-y-auto space-y-4 text-xs touch-pan-y overscroll-contain">
-              {/* Basic Info */}
               <div className="space-y-2">
                 <span className="font-bold uppercase tracking-wider text-[10px] text-gray-400 block">
-                  1. Identification & Classification
+                  1. Identification &amp; Category
                 </span>
                 <div className="grid grid-cols-12 gap-2">
                   <div className="col-span-4">
@@ -341,7 +338,7 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
                       required
                       value={editingItem.name}
                       onChange={(e) => setEditingItem({ ...editingItem, name: e.target.value })}
-                      placeholder="e.g. Tennent's Lager Keg 50L"
+                      placeholder="e.g. Tanqueray London Dry Gin"
                       className="w-full bg-[#EDEDED] py-1.5 px-2.5 rounded-xl text-xs font-bold text-gray-900 focus:outline-none"
                     />
                   </div>
@@ -388,7 +385,6 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
                 </div>
               </div>
 
-              {/* Unit Architecture */}
               <div className="space-y-2 pt-1 border-t border-gray-100">
                 <span className="font-bold uppercase tracking-wider text-[10px] text-gray-400 block">
                   2. Stocktake &amp; Ordering Units
@@ -399,7 +395,7 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
                     <label className="text-[9px] font-bold text-gray-600 uppercase block mb-0.5">Count Unit</label>
                     <input
                       type="text"
-                      value={editingItem.count_unit || 'bottle'}
+                      value={editingItem.count_unit || editingItem.unit || 'bottle'}
                       onChange={(e) => setEditingItem({ ...editingItem, count_unit: e.target.value })}
                       placeholder="bottle / keg"
                       className="w-full bg-white border border-gray-300 py-1 px-2 rounded-lg text-xs"
@@ -421,7 +417,7 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
                     <input
                       type="number"
                       step="any"
-                      value={editingItem.package_size_base}
+                      value={editingItem.package_size_base ?? 700}
                       onChange={(e) => setEditingItem({ ...editingItem, package_size_base: e.target.value })}
                       placeholder="700 or 50000"
                       className="w-full bg-white border border-gray-300 py-1 px-2 rounded-lg font-mono text-xs text-center font-bold"
@@ -442,7 +438,7 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
                     <label className="text-[9px] font-bold text-gray-600 uppercase block mb-0.5">Units per Order Case</label>
                     <input
                       type="number"
-                      value={editingItem.units_per_order_case}
+                      value={editingItem.units_per_order_case ?? 6}
                       onChange={(e) => setEditingItem({ ...editingItem, units_per_order_case: e.target.value })}
                       placeholder="6"
                       className="w-full bg-white border border-gray-300 py-1 px-2 rounded-lg font-mono text-xs text-center font-bold"
@@ -451,7 +447,6 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
                 </div>
               </div>
 
-              {/* Financials & Par Levels */}
               <div className="space-y-2 pt-1 border-t border-gray-100">
                 <span className="font-bold uppercase tracking-wider text-[10px] text-gray-400 block">
                   3. Pricing &amp; Par Target
@@ -465,7 +460,7 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
                       <input
                         type="number"
                         step="0.01"
-                        value={editingItem.cost_price_ex_vat}
+                        value={editingItem.cost_price_ex_vat ?? editingItem.cost_price ?? 0}
                         onChange={(e) => setEditingItem({ ...editingItem, cost_price_ex_vat: e.target.value })}
                         className="w-full bg-[#EDEDED] py-1.5 pl-5 pr-2 rounded-xl font-mono text-xs font-bold text-gray-900 focus:outline-none"
                       />
@@ -479,7 +474,7 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
                       <input
                         type="number"
                         step="0.01"
-                        value={editingItem.last_cost_ex_vat || editingItem.cost_price_ex_vat}
+                        value={editingItem.last_cost_ex_vat ?? editingItem.cost_price_ex_vat ?? 0}
                         onChange={(e) => setEditingItem({ ...editingItem, last_cost_ex_vat: e.target.value })}
                         className="w-full bg-[#EDEDED] py-1.5 pl-5 pr-2 rounded-xl font-mono text-xs font-bold text-gray-900 focus:outline-none"
                       />
@@ -491,7 +486,7 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
                     <input
                       type="number"
                       step="any"
-                      value={editingItem.par}
+                      value={editingItem.par ?? 1}
                       onChange={(e) => setEditingItem({ ...editingItem, par: e.target.value })}
                       className="w-full bg-[#EDEDED] py-1.5 px-2 rounded-xl font-mono text-xs font-bold text-center text-gray-900 focus:outline-none"
                     />
@@ -499,7 +494,6 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
                 </div>
               </div>
 
-              {/* Action Buttons */}
               <div className="pt-2 flex items-center space-x-2">
                 {!editingItem.isNew && (
                   <button
