@@ -6,6 +6,7 @@ import OrderListsApp from './OrderListsApp';
 import SpillageAndWastage from './SpillageAndWastage';
 import CatalogManagerApp from './CatalogManagerApp';
 import PrepCalculatorApp from './PrepCalculatorApp';
+import ProduceOrderApp from './ProduceOrderApp';
 import Settings from './Settings';
 import PreShiftCard from './PreShiftCard';
 import OpsChatDrawer from './OpsChatDrawer';
@@ -25,7 +26,8 @@ import {
   FolderOpen,
   TrendingDown,
   FlaskConical,
-  Package
+  Package,
+  Apple
 } from 'lucide-react';
 import { useTwoFingerSwipe } from './useTwoFingerSwipe';
 import { supabase, DEFAULT_VENUE_ID } from './lib/db';
@@ -527,6 +529,18 @@ export default function App() {
     );
   }
 
+  if (activeModule === 'produce') {
+    return (
+      <div {...swipeHandlers} className="h-screen w-full">
+        <ProduceOrderApp
+          currentUser={currentUser}
+          onBackToHub={() => setActiveModule('hub')}
+          onLogout={handleLogout}
+        />
+      </div>
+    );
+  }
+
   if (activeModule === 'wastage') {
     return (
       <div {...swipeHandlers} className="h-screen w-full">
@@ -678,7 +692,7 @@ export default function App() {
               </button>
             </div>
             
-            {/* Scrollable Tools Carousel Row (Prep & Batches Promoted to Spot #3) */}
+            {/* Scrollable Tools Carousel Row */}
             <div className="flex items-start justify-start gap-4 overflow-x-auto no-scrollbar py-1">
               {/* Diary */}
               <div
@@ -706,7 +720,7 @@ export default function App() {
                 </span>
               </div>
 
-              {/* Prep & Batches (PROMOTED FOR IMMEDIATE VISIBILITY) */}
+              {/* Prep & Batches */}
               <div
                 onClick={() => setActiveModule('prep')}
                 className="flex flex-col items-center space-y-2 cursor-pointer flex-shrink-0 group active:scale-95 transition"
@@ -719,7 +733,20 @@ export default function App() {
                 </span>
               </div>
 
-              {/* Petty Cash */}
+              {/* Fresh Produce & Herbs */}
+              <div
+                onClick={() => setActiveModule('produce')}
+                className="flex flex-col items-center space-y-2 cursor-pointer flex-shrink-0 group active:scale-95 transition"
+              >
+                <div className="w-[66px] h-[66px] rounded-2xl bg-[#D7F5DC] shadow-sm flex items-center justify-center text-neutral-900 border border-emerald-300">
+                  <Apple className="w-7 h-7 stroke-[2.2] text-emerald-800" />
+                </div>
+                <span className="text-xs font-bold text-neutral-900 text-center tracking-tight leading-tight max-w-[70px]">
+                  Produce &amp; Herbs
+                </span>
+              </div>
+
+              {/* Cash Up */}
               <div
                 onClick={() => setActiveModule('petty')}
                 className="flex flex-col items-center space-y-2 cursor-pointer flex-shrink-0 group active:scale-95 transition"
@@ -818,11 +845,35 @@ export default function App() {
                 </div>
                 <div className="space-y-1">
                   <p className="text-xs text-neutral-500">
-                    Station audits, recipe scaling &amp; produce picklists.
+                    Station audits, recipe scaling &amp; produce picklists[cite: 1, 6].
                   </p>
                   <div className="pt-3 flex items-center text-xs font-bold text-neutral-900 gap-1">
                     <FlaskConical className="w-4 h-4 text-purple-600" />
                     <span>Open Calculator</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Produce Quick Link Card */}
+              <div
+                onClick={() => setActiveModule('produce')}
+                className="w-[220px] h-[190px] rounded-3xl bg-[#F0FDF4] border border-emerald-200 p-5 flex flex-col justify-between flex-shrink-0 cursor-pointer active:scale-[0.98] transition hover:shadow-sm"
+              >
+                <div>
+                  <span className="text-[10px] font-black tracking-widest uppercase text-emerald-600 block mb-1">
+                    Fresh Order
+                  </span>
+                  <h3 className="text-base font-extrabold text-neutral-900 leading-snug">
+                    Fresh Produce &amp; Herbs
+                  </h3>
+                </div>
+                <div className="space-y-1">
+                  <p className="text-xs text-neutral-500">
+                    Limes, lemons, herbs &amp; chemicals with dynamic pars[cite: 5, 6].
+                  </p>
+                  <div className="pt-3 flex items-center text-xs font-bold text-neutral-900 gap-1">
+                    <Apple className="w-4 h-4 text-emerald-600" />
+                    <span>Order Produce</span>
                   </div>
                 </div>
               </div>
