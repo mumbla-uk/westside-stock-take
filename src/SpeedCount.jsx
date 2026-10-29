@@ -23,11 +23,11 @@ function triggerHaptic(duration = 10) {
 export default function SpeedCount({ 
   products = [], 
   counts = {}, 
+  sessionScope = { type: 'full', name: 'Full Venue Audit' },
   onUpdateCount, 
-  onClose,
-  initialArea = null 
+  onSaveAndFinish,
+  onClose 
 }) {
-  // Top Hierarchy: Suppliers
   const suppliers = useMemo(() => {
     const unique = Array.from(new Set(products.map(p => p.supplier || 'General'))).filter(Boolean);
     return ['ALL', ...unique];
@@ -40,7 +40,6 @@ export default function SpeedCount({
     return products.filter(p => (p.supplier || 'General') === selectedSupplier);
   }, [products, selectedSupplier]);
 
-  // Second Hierarchy: Physical Areas
   const areas = useMemo(() => {
     const unique = Array.from(new Set(supplierProducts.map(p => p.area || 'Main Bar'))).filter(Boolean);
     return unique.length > 0 ? unique : ['Main Bar'];
@@ -216,63 +215,73 @@ export default function SpeedCount({
             className="flex items-center space-x-1.5 py-1.5 px-3 rounded-xl bg-white/5 text-xs font-semibold text-neutral-300 hover:text-white hover:bg-white/10 transition active:scale-95 border border-white/5"
           >
             <ArrowLeft className="w-3.5 h-3.5" />
-            <span>Done</span>
+            <span>Cancel</span>
           </button>
 
-          <span className="font-serif italic text-xs text-neutral-400 tracking-wide">
-            Speed Count
-          </span>
-
-          <span className="text-[10px] font-mono font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2.5 py-1 rounded-full">
-            {activeSliceProducts.length > 0 ? `${currentItemIndex + 1} / ${activeSliceProducts.length}` : '0 Items'}
-          </span>
-        </div>
-
-        {/* Suppliers Row */}
-        <div className="space-y-1">
-          <div className="flex items-center space-x-1 px-1">
-            <Building2 className="w-3 h-3 text-neutral-400" />
-            <span className="text-[9px] uppercase font-mono tracking-wider text-neutral-400 font-bold">
-              Suppliers
+          <div className="text-center px-1">
+            <span className="text-[9px] font-mono uppercase tracking-wider text-neutral-400 font-bold block">
+              Counting Scope
+            </span>
+            <span className="text-xs font-black text-emerald-400 truncate max-w-[170px] inline-block">
+              {sessionScope.name}
             </span>
           </div>
 
-          <div className="flex items-center space-x-1.5 overflow-x-auto scrollbar-none pb-0.5">
-            {suppliers.map(sup => {
-              const isSelected = selectedSupplier === sup;
-              const status = supplierStatusMap[sup];
-              return (
-                <button
-                  key={sup}
-                  onClick={() => {
-                    triggerHaptic(8);
-                    setSelectedSupplier(sup);
-                  }}
-                  className={`relative py-1.5 px-3 rounded-xl text-[10px] transition whitespace-nowrap border flex items-center space-x-1.5 ${
-                    status === 'complete'
-                      ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 font-bold'
-                      : isSelected 
-                      ? 'bg-white text-neutral-900 border-white font-bold shadow-sm' 
-                      : 'bg-white/5 text-neutral-400 border-white/5 hover:text-white'
-                  }`}
-                >
-                  <span>{sup === 'ALL' ? 'All Suppliers' : sup}</span>
-                  {status === 'complete' && <Check className="w-3 h-3 text-emerald-400" />}
-                  {status === 'partial' && (
-                    <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-blue-500 ring-2 ring-[#18181B]" />
-                  )}
-                </button>
-              );
-            })}
-          </div>
+          <button 
+            onClick={onSaveAndFinish}
+            className="flex items-center space-x-1 py-1.5 px-3 rounded-xl bg-[#C2F19D] hover:bg-[#b2e88a] text-neutral-900 text-xs font-black transition active:scale-95 shadow-sm"
+          >
+            <Check className="w-3.5 h-3.5" />
+            <span>Finish</span>
+          </button>
         </div>
+
+        {/* Suppliers Row (if multi-supplier scope) */}
+        {suppliers.length > 2 && (
+          <div className="space-y-1">
+            <div className="flex items-center space-x-1 px-1">
+              <Building2 className="w-3 h-3 text-neutral-400" />
+              <span className="text-[9px] uppercase font-mono tracking-wider text-neutral-400 font-bold">
+                Suppliers
+              </span>
+            </div>
+            <div className="flex items-center space-x-1.5 overflow-x-auto scrollbar-none pb-0.5">
+              {suppliers.map(sup => {
+                const isSelected = selectedSupplier === sup;
+                const status = supplierStatusMap[sup];
+                return (
+                  <button
+                    key={sup}
+                    onClick={() => {
+                      triggerHaptic(8);
+                      setSelectedSupplier(sup);
+                    }}
+                    className={`relative py-1.5 px-3 rounded-xl text-[10px] transition whitespace-nowrap border flex items-center space-x-1.5 ${
+                      status === 'complete'
+                        ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 font-bold'
+                        : isSelected 
+                        ? 'bg-white text-neutral-900 border-white font-bold shadow-sm' 
+                        : 'bg-white/5 text-neutral-400 border-white/5 hover:text-white'
+                    }`}
+                  >
+                    <span>{sup === 'ALL' ? 'All' : sup}</span>
+                    {status === 'complete' && <Check className="w-3 h-3 text-emerald-400" />}
+                    {status === 'partial' && (
+                      <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-blue-500 ring-2 ring-[#18181B]" />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Areas Row */}
         <div className="space-y-1 pt-0.5">
           <div className="flex items-center space-x-1 px-1">
             <MapPin className="w-3 h-3 text-emerald-400" />
             <span className="text-[9px] uppercase font-mono tracking-wider text-neutral-400 font-bold">
-              Bar Area
+              Bar Area ({areas.length})
             </span>
           </div>
 
@@ -307,7 +316,7 @@ export default function SpeedCount({
         </div>
       </header>
 
-      {/* Hero Count Card */}
+      {/* Hero Bottle Card */}
       <main className="flex-1 flex flex-col justify-between px-5 py-2.5 overflow-hidden">
         {activeProduct ? (
           <div className="flex-1 flex flex-col justify-center items-center text-center space-y-2.5">
