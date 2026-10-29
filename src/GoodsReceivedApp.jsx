@@ -51,6 +51,7 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
   const [customUnit, setCustomUnit] = useState('case');
   const [qtyDelivered, setQtyDelivered] = useState('');
 
+  // Fixed Anchor Unit Price: Stored as pure reference
   const [unitEx, setUnitEx] = useState('');
   const [unitInc, setUnitInc] = useState('');
   const [totalEx, setTotalEx] = useState('');
@@ -99,6 +100,7 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
     ).slice(0, 6);
   }, [products, itemSearch, selectedProduct]);
 
+  // When a product is selected, set its unit price reference, but do NOT multiply until qty is given
   const handleSelectProduct = (prod) => {
     setSelectedProduct(prod);
     setCustomName(prod.name);
@@ -107,16 +109,41 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
     if (!invoiceSupplier && prod.supplier) {
       setInvoiceSupplier(prod.supplier);
     }
-    // Auto-fill cost from catalog if available
-    if (prod.cost_price_ex_vat) {
-      const cEx = Number(prod.cost_price_ex_vat);
+    
+    const cEx = Number(prod.last_cost_ex_vat || prod.cost_price_ex_vat || prod.cost_price || 0);
+    if (cEx > 0) {
       setUnitEx(cEx.toFixed(2));
       setUnitInc((cEx * 1.20).toFixed(2));
-      if (qtyDelivered) {
-        const qty = parseFloat(qtyDelivered) || 1;
+      const qty = parseFloat(qtyDelivered) || 0;
+      if (qty > 0) {
         setTotalEx((cEx * qty).toFixed(2));
         setTotalInc((cEx * qty * 1.20).toFixed(2));
+      } else {
+        setTotalEx('');
+        setTotalInc('');
       }
+    }
+  };
+
+  // Changing Delivered Qty scales forward from the Unit Price without dividing
+  const handleQtyChange = (val) => {
+    setQtyDelivered(val);
+    const qty = parseFloat(val);
+
+    if (isNaN(qty) || qty <= 0) {
+      setTotalEx('');
+      setTotalInc('');
+      return;
+    }
+
+    if (unitEx) {
+      const uEx = parseFloat(unitEx) || 0;
+      setTotalEx((uEx * qty).toFixed(2));
+      setTotalInc((uEx * qty * 1.20).toFixed(2));
+    } else if (totalEx) {
+      const tEx = parseFloat(totalEx) || 0;
+      setUnitEx((tEx / qty).toFixed(2));
+      setUnitInc((tEx / qty * 1.20).toFixed(2));
     }
   };
 
@@ -137,37 +164,37 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
       return;
     }
 
-    if (field === 'totalInc') {
-      const tEx = num / 1.20;
-      setTotalInc(val); setTotalEx(tEx.toFixed(2));
-      setUnitInc((num / qty).toFixed(2)); setUnitEx((tEx / qty).toFixed(2));
+    if (field === 'unitEx') {
+      const uInc = num * 1.20;
+      setUnitEx(val);
+      setUnitInc(uInc.toFixed(2));
+      if (qty > 0) {
+        setTotalEx((num * qty).toFixed(2));
+        setTotalInc((num * qty * 1.20).toFixed(2));
+      }
+    } else if (field === 'unitInc') {
+      const uEx = num / 1.20;
+      setUnitInc(val);
+      setUnitEx(uEx.toFixed(2));
+      if (qty > 0) {
+        setTotalEx((uEx * qty).toFixed(2));
+        setTotalInc((num * qty).toFixed(2));
+      }
     } else if (field === 'totalEx') {
       const tInc = num * 1.20;
-      setTotalEx(val); setTotalInc(tInc.toFixed(2));
-      setUnitEx((num / qty).toFixed(2)); setUnitInc((tInc / qty).toFixed(2));
-    } else if (field === 'unitEx') {
-      const uInc = num * 1.20; const tEx = num * qty;
-      setUnitEx(val); setUnitInc(uInc.toFixed(2));
-      setTotalEx(tEx.toFixed(2)); setTotalInc((tEx * 1.20).toFixed(2));
-    } else if (field === 'unitInc') {
-      const uEx = num / 1.20; const tInc = num * qty;
-      setUnitInc(val); setUnitEx(uEx.toFixed(2));
-      setTotalInc(tInc.toFixed(2)); setTotalEx((tInc / 1.20).toFixed(2));
-    }
-  };
-
-  const handleQtyChange = (val) => {
-    setQtyDelivered(val);
-    const qty = parseFloat(val);
-    if (isMathLocked && qty > 0) {
-      if (totalInc) {
-        const tInc = parseFloat(totalInc);
+      setTotalEx(val);
+      setTotalInc(tInc.toFixed(2));
+      if (qty > 0) {
+        setUnitEx((num / qty).toFixed(2));
         setUnitInc((tInc / qty).toFixed(2));
-        setUnitEx((tInc / 1.20 / qty).toFixed(2));
-      } else if (unitEx) {
-        const uEx = parseFloat(unitEx);
-        setTotalEx((uEx * qty).toFixed(2));
-        setTotalInc((uEx * qty * 1.20).toFixed(2));
+      }
+    } else if (field === 'totalInc') {
+      const tEx = num / 1.20;
+      setTotalInc(val);
+      setTotalEx(tEx.toFixed(2));
+      if (qty > 0) {
+        setUnitInc((num / qty).toFixed(2));
+        setUnitEx((tEx / qty).toFixed(2));
       }
     }
   };
@@ -200,7 +227,6 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
     setTotalInc('');
   };
 
-  // Submit delivery report & automatically propagate unit costs to master catalog
   const handleSubmitInvoiceReport = async () => {
     if (receivedItems.length === 0) return;
     setSubmittingReport(true);
@@ -209,7 +235,6 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
     const sup = invoiceSupplier.trim() || 'Supplier';
 
     try {
-      // 1. Insert into goods_received ledger[cite: 9]
       const { error } = await supabase.from('goods_received').insert({
         venue_id: DEFAULT_VENUE_ID,
         supplier: sup,
@@ -221,7 +246,7 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
 
       if (error) throw error;
 
-      // 2. Automatically sync unit prices back to catalog_items for live GP & cost calculations
+      // Update last invoice cost ex VAT in catalog
       for (const item of receivedItems) {
         if (item.unitEx > 0 && item.id && !item.id.startsWith('CUSTOM-')) {
           await supabase
@@ -274,6 +299,8 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
     link.click();
     document.body.removeChild(link);
   };
+
+  const hasQty = parseFloat(qtyDelivered) > 0;
 
   return (
     <div 
@@ -395,31 +422,32 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
                       <span className="font-bold text-gray-900">{prod.name}</span>
                       <span className="text-[9px] text-gray-400 font-mono ml-1.5">[{prod.id}]</span>
                     </div>
-                    <span className="text-[9px] text-gray-500 italic">{prod.supplier}</span>
+                    <span className="text-[9px] text-gray-500 italic">£{Number(prod.last_cost_ex_vat || prod.cost_price_ex_vat || 0).toFixed(2)}</span>
                   </button>
                 ))}
               </div>
             )}
           </div>
 
+          {/* STEP 1: DELIVERED QUANTITY MUST BE ENTERED FIRST */}
           <div className="grid grid-cols-2 gap-2">
             <div>
-              <label className="block text-[9px] font-bold text-gray-500 mb-0.5">Delivered Qty *</label>
+              <label className="block text-[9px] font-bold text-gray-900 uppercase mb-0.5">1. Delivered Qty *</label>
               <input 
                 type="number" 
                 step="any" 
                 required 
-                placeholder="5" 
+                placeholder="e.g. 6" 
                 value={qtyDelivered} 
                 onChange={(e) => handleQtyChange(e.target.value)} 
-                className="w-full bg-white border border-gray-300 py-1 px-2.5 rounded-lg text-xs font-bold text-black focus:outline-none" 
+                className="w-full bg-white border-2 border-black py-1 px-2.5 rounded-lg text-xs font-black text-black focus:outline-none" 
               />
             </div>
             <div>
               <label className="block text-[9px] font-bold text-gray-500 mb-0.5">Unit Format</label>
               <input 
                 type="text" 
-                placeholder="case / keg" 
+                placeholder="case / bottle / keg" 
                 value={customUnit} 
                 onChange={(e) => setCustomUnit(e.target.value)} 
                 className="w-full bg-white border border-gray-300 py-1 px-2.5 rounded-lg text-xs focus:outline-none" 
@@ -427,9 +455,10 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-2 pt-0.5">
+          {/* STEP 2: PRICE FIELDS (LOCKED UNTIL QUANTITY IS ENTERED) */}
+          <div className={`grid grid-cols-2 gap-2 pt-0.5 transition-opacity ${hasQty ? 'opacity-100' : 'opacity-40 pointer-events-none'}`}>
             <div>
-              <label className="block text-[9px] font-bold text-gray-500 mb-0.5">Unit (Ex VAT £)</label>
+              <label className="block text-[9px] font-bold text-gray-600 mb-0.5">Unit Cost (Ex VAT £)</label>
               <input 
                 type="number" 
                 step="0.01" 
@@ -440,7 +469,7 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
               />
             </div>
             <div>
-              <label className="block text-[9px] font-bold text-gray-500 mb-0.5">Total (Ex VAT £)</label>
+              <label className="block text-[9px] font-bold text-gray-600 mb-0.5">Total Line (Ex VAT £)</label>
               <input 
                 type="number" 
                 step="0.01" 
@@ -451,7 +480,7 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
               />
             </div>
             <div>
-              <label className="block text-[9px] font-bold text-gray-500 mb-0.5">Unit (Inc VAT £)</label>
+              <label className="block text-[9px] font-bold text-gray-500 mb-0.5">Unit Cost (Inc VAT £)</label>
               <input 
                 type="number" 
                 step="0.01" 
@@ -462,7 +491,7 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
               />
             </div>
             <div>
-              <label className="block text-[9px] font-bold text-gray-500 mb-0.5">Total (Inc VAT £)</label>
+              <label className="block text-[9px] font-bold text-gray-500 mb-0.5">Total Line (Inc VAT £)</label>
               <input 
                 type="number" 
                 step="0.01" 
@@ -476,7 +505,7 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
 
           <button 
             type="submit" 
-            disabled={!qtyDelivered || (!selectedProduct && !customName.trim())} 
+            disabled={!hasQty || (!selectedProduct && !customName.trim())} 
             className="w-full py-2 bg-black text-white hover:bg-neutral-800 disabled:opacity-40 rounded-xl text-xs font-bold transition flex items-center justify-center space-x-1"
           >
             <Plus className="w-3.5 h-3.5" />
@@ -532,10 +561,10 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
         </div>
 
         <div className="space-y-1 flex-shrink-0">
-          <label className="block text-[10px] font-bold text-gray-700">Delivery Notes & Discrepancies</label>
+          <label className="block text-[10px] font-bold text-gray-700">Delivery Notes &amp; Discrepancies</label>
           <textarea 
             rows={2} 
-            placeholder="Driver signature, damaged items, bottle shortages..." 
+            placeholder="Driver signature, damaged items, shortages..." 
             value={invoiceNotes} 
             onChange={(e) => setInvoiceNotes(e.target.value)} 
             className="w-full bg-[#EDEDED] p-2.5 rounded-2xl text-xs focus:outline-none resize-none leading-relaxed" 

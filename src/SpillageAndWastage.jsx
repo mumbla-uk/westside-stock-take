@@ -9,7 +9,9 @@ import {
   FlaskConical,
   CheckCircle2,
   RefreshCw,
-  X
+  X,
+  Calendar,
+  Filter
 } from 'lucide-react';
 import { useTwoFingerSwipe } from './useTwoFingerSwipe';
 import { supabase, DEFAULT_VENUE_ID } from './lib/db';
@@ -62,6 +64,9 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
   const [submitting, setSubmitting] = useState(false);
   const [statusMsg, setStatusMsg] = useState(null);
 
+  // Daily Logging & Audit Period Filter
+  const [spillageDate, setSpillageDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [auditPeriodFilter, setAuditPeriodFilter] = useState('today'); // 'today' | 'week' | 'all'
   const [recentLogs, setRecentLogs] = useState([]);
   const [loadingLogs, setLoadingLogs] = useState(false);
 
@@ -98,7 +103,9 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
           if (baseUom === 'each') packageSizeBase = 1;
 
           const unitsPerCase = Number(item.units_per_order_case) || (isDraught ? 1 : isPackage ? 24 : 6);
-          const costPerOrderUnit = Number(item.last_cost_ex_vat || item.cost_price_ex_vat || item.cost_price || 35.00);
+          
+          // Bottle / Container cost (Ex VAT)
+          const rawCost = Number(item.last_cost_ex_vat || item.cost_price_ex_vat || item.cost_price || 0);
 
           return {
             id: item.id,
@@ -107,7 +114,7 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
             base_uom: baseUom,
             package_size_base: packageSizeBase,
             units_per_order_case: unitsPerCase,
-            cost_per_order_unit: costPerOrderUnit,
+            cost_price_ex_vat: rawCost,
             current_stock_base: Number(item.current_stock_base ?? (item.count ? item.count * packageSizeBase : 0))
           };
         });
@@ -127,7 +134,7 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
         .from('wastage_log')
         .select('*')
         .order('created_at', { ascending: false })
-        .limit(30);
+        .limit(100);
 
       if (!error && data) {
         setRecentLogs(data);
@@ -170,8 +177,11 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
     }
   };
 
+  // CORRECTED FORMULA:
+  // Spirits/Kegs/Wine are entered by individual bottle/keg price.
+  // Packaged Beer/Cider cases are divided by units_per_order_case to find single can cost.
   const wastageMetrics = useMemo(() => {
-    if (!selectedItem) return { totalBaseUnits: 0, costImpact: 0, displayVolume: '' };
+    if (!selectedItem) return { totalBaseUnits: 0, costImpact: 0, displayVolume: '', unitCostEx: 0 };
 
     let totalBaseUnits = 0;
     let displayVolume = '';
@@ -185,15 +195,29 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
       displayVolume = selectedPreset.label;
     }
 
-    const totalBaseUnitsInCase = selectedItem.package_size_base * selectedItem.units_per_order_case;
-    const costImpact = totalBaseUnitsInCase > 0 
-      ? (totalBaseUnits / totalBaseUnitsInCase) * selectedItem.cost_per_order_unit
-      : 0;
+    const itemCost = Number(selectedItem.cost_price_ex_vat) || 0;
+    let costImpact = 0;
+
+    if (selectedItem.category === 'packaged_beer') {
+      // If packaged in cases, cost is per case / units per case
+      const singleCanCost = selectedItem.units_per_order_case > 0 
+        ? itemCost / selectedItem.units_per_order_case 
+        : itemCost;
+      costImpact = totalBaseUnits * singleCanCost;
+    } else {
+      // Liquid container (Bottle of Spirit 700ml, Wine 750ml, Keg 50L)
+      // itemCost is the cost of THAT bottle or keg
+      const containerBaseSize = Number(selectedItem.package_size_base) || 700;
+      costImpact = containerBaseSize > 0 
+        ? (totalBaseUnits / containerBaseSize) * itemCost 
+        : 0;
+    }
 
     return {
       totalBaseUnits,
       costImpact: Math.max(0, costImpact),
-      displayVolume
+      displayVolume,
+      unitCostEx: itemCost
     };
   }, [selectedItem, selectedPreset, customQtyInput]);
 
@@ -217,7 +241,7 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
       reason: selectedReason,
       notes: customNotes ? customNotes.trim() : '',
       staff_name: staffName,
-      created_at: new Date().toISOString()
+      created_at: new Date(`${spillageDate}T12:00:00Z`).toISOString()
     };
 
     try {
@@ -264,15 +288,28 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
     }
   };
 
-  const dailySummary = useMemo(() => {
-    const todayStr = new Date().toISOString().slice(0, 10);
-    const todayLogs = recentLogs.filter(l => (l.created_at || '').slice(0, 10) === todayStr);
+  // Filter logs for Daily close vs. Weekly Stock Audit Periods
+  const filteredLogs = useMemo(() => {
+    const todayStr = spillageDate;
+    if (auditPeriodFilter === 'today') {
+      return recentLogs.filter(l => (l.created_at || '').slice(0, 10) === todayStr);
+    }
+    if (auditPeriodFilter === 'week') {
+      const now = new Date(spillageDate);
+      const day = now.getDay();
+      const diff = now.getDate() - day + (day === 0 ? -6 : 1);
+      const monday = new Date(now.setDate(diff)).toISOString().slice(0, 10);
+      return recentLogs.filter(l => (l.created_at || '').slice(0, 10) >= monday);
+    }
+    return recentLogs;
+  }, [recentLogs, spillageDate, auditPeriodFilter]);
 
+  const summaryMetrics = useMemo(() => {
     let totalCost = 0;
     let pintsWasted = 0;
     const catCount = {};
 
-    todayLogs.forEach(l => {
+    filteredLogs.forEach(l => {
       totalCost += Number(l.cost_impact || 0);
       if (l.category === 'draught') {
         pintsWasted += Math.round((Number(l.total_base_deducted || 0) / 568) * 10) / 10;
@@ -290,7 +327,7 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
     });
 
     return { totalCost, pintsWasted, topCategory };
-  }, [recentLogs]);
+  }, [filteredLogs]);
 
   return (
     <div
@@ -307,7 +344,7 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
           <AppLogo className="w-6 h-6 invert" fallbackTextClass="font-serif text-2xl font-bold tracking-tighter text-white" />
           <div>
             <h1 className="font-black text-sm tracking-tight text-white leading-tight">Spillage &amp; Wastage</h1>
-            <span className="text-[10px] text-neutral-400 font-mono block">Direct Stock Loss Deductions</span>
+            <span className="text-[10px] text-neutral-400 font-mono block">Daily Loss &amp; Period Audit</span>
           </div>
         </div>
 
@@ -316,26 +353,68 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
         </button>
       </header>
 
+      {/* Daily / Period Selector Bar */}
+      <div className="flex items-center justify-between px-5 py-2 bg-[#12151D] border-b border-white/5 flex-shrink-0">
+        <div className="flex items-center space-x-1.5">
+          <Calendar className="w-3.5 h-3.5 text-neutral-400" />
+          <input
+            type="date"
+            value={spillageDate}
+            onChange={(e) => setSpillageDate(e.target.value)}
+            className="bg-transparent text-xs font-mono font-bold text-neutral-200 focus:outline-none appearance-none"
+          />
+        </div>
+
+        <div className="flex items-center space-x-1">
+          <button
+            onClick={() => setAuditPeriodFilter('today')}
+            className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition ${
+              auditPeriodFilter === 'today' ? 'bg-white text-black' : 'text-neutral-400 hover:text-white'
+            }`}
+          >
+            Daily
+          </button>
+          <button
+            onClick={() => setAuditPeriodFilter('week')}
+            className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition ${
+              auditPeriodFilter === 'week' ? 'bg-white text-black' : 'text-neutral-400 hover:text-white'
+            }`}
+          >
+            Weekly
+          </button>
+          <button
+            onClick={() => setAuditPeriodFilter('all')}
+            className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition ${
+              auditPeriodFilter === 'all' ? 'bg-white text-black' : 'text-neutral-400 hover:text-white'
+            }`}
+          >
+            Audit Log
+          </button>
+        </div>
+      </div>
+
       {/* Loss KPI Cards */}
       <div className="grid grid-cols-3 gap-2 px-5 py-2.5 bg-[#14171F] border-b border-white/5 flex-shrink-0 text-left">
         <div className="bg-white/5 p-2.5 rounded-2xl border border-white/5 space-y-0.5">
-          <span className="text-[9px] font-mono uppercase text-neutral-400 font-bold block">Today's Loss</span>
+          <span className="text-[9px] font-mono uppercase text-neutral-400 font-bold block">
+            {auditPeriodFilter === 'today' ? "Today's Loss" : auditPeriodFilter === 'week' ? "Week Loss" : "Total Audit"}
+          </span>
           <span className="text-base font-black text-rose-400 font-mono">
-            £{dailySummary.totalCost.toFixed(2)}
+            £{summaryMetrics.totalCost.toFixed(2)}
           </span>
         </div>
 
         <div className="bg-white/5 p-2.5 rounded-2xl border border-white/5 space-y-0.5">
           <span className="text-[9px] font-mono uppercase text-neutral-400 font-bold block">Draught Lost</span>
           <span className="text-base font-black text-amber-300 font-mono">
-            {dailySummary.pintsWasted} <span className="text-[10px] font-sans font-normal text-neutral-400">pts</span>
+            {summaryMetrics.pintsWasted} <span className="text-[10px] font-sans font-normal text-neutral-400">pts</span>
           </span>
         </div>
 
         <div className="bg-white/5 p-2.5 rounded-2xl border border-white/5 space-y-0.5">
           <span className="text-[9px] font-mono uppercase text-neutral-400 font-bold block">Top Waste</span>
           <span className="text-xs font-black text-white truncate block pt-0.5">
-            {dailySummary.topCategory}
+            {summaryMetrics.topCategory}
           </span>
         </div>
       </div>
@@ -384,7 +463,7 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search SKU or product..."
+              placeholder="Search SKU or product (e.g. Aberfeldy)..."
               className="w-full bg-[#181B24] border border-white/10 py-2 pl-3 pr-8 rounded-xl text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-white/30"
             />
             {searchQuery ? (
@@ -412,7 +491,7 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
                 >
                   <span className="font-bold text-xs truncate block">{item.name}</span>
                   <span className="text-[9px] font-mono text-neutral-400 block mt-0.5">
-                    {item.category.toUpperCase()} • {item.package_size_base}{item.base_uom}
+                    {item.package_size_base}{item.base_uom} • £{item.cost_price_ex_vat.toFixed(2)} cost
                   </span>
                 </button>
               );
@@ -430,7 +509,7 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
                 </span>
                 <h3 className="text-sm font-black text-white">{selectedItem.name}</h3>
                 <span className="text-[10px] text-neutral-400 font-mono">
-                  Container: {selectedItem.package_size_base}{selectedItem.base_uom} • Base Cost: £{(selectedItem.cost_per_order_unit / selectedItem.units_per_order_case).toFixed(2)}
+                  Bottle/Unit Cost: £{wastageMetrics.unitCostEx.toFixed(2)} ({selectedItem.package_size_base}{selectedItem.base_uom})
                 </span>
               </div>
               <button
@@ -445,7 +524,7 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
             {/* Presets by Specific Bar Dispense Measures */}
             <div className="space-y-1.5">
               <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-neutral-400">
-                Wastage Volume
+                Wastage Measure
               </span>
 
               <div className="grid grid-cols-2 gap-1.5">
@@ -643,22 +722,19 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
           </form>
         )}
 
-        {/* Rolling Activity Ledger */}
+        {/* Rolling Activity Ledger with Audit Range */}
         <div className="space-y-2 pt-2">
           <div className="flex items-center justify-between px-1">
             <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-neutral-400">
-              Recent Spillage Activity
-            </span>
-            <span className="text-[10px] font-mono text-neutral-500">
-              {recentLogs.length} logged
+              {auditPeriodFilter.toUpperCase()} ACTIVITY ({filteredLogs.length})
             </span>
           </div>
 
           <div className="divide-y divide-white/5 bg-[#14171F] border border-white/10 rounded-3xl overflow-hidden shadow-sm">
-            {recentLogs.length === 0 ? (
-              <p className="p-5 text-center text-xs text-neutral-500 italic">No spillage entries logged yet.</p>
+            {filteredLogs.length === 0 ? (
+              <p className="p-5 text-center text-xs text-neutral-500 italic">No spillage entries for this period.</p>
             ) : (
-              recentLogs.map((log) => (
+              filteredLogs.map((log) => (
                 <div key={log.id} className="p-3 flex items-center justify-between text-xs">
                   <div>
                     <div className="flex items-center space-x-1.5">
@@ -668,7 +744,7 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
                       </span>
                     </div>
                     <span className="text-[10px] text-neutral-400 font-mono block mt-0.5">
-                      {log.total_base_deducted} ml/ea • {log.staff_name} • {new Date(log.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      {log.total_base_deducted} ml/ea • {log.staff_name} • {new Date(log.created_at).toLocaleDateString('en-GB')} {new Date(log.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                     </span>
                   </div>
 
