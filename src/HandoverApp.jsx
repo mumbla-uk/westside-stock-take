@@ -71,8 +71,6 @@ export default function HandoverApp({
   onBackToHub, 
   onLogout 
 }) {
-  const [currentTab, setCurrentTab] = useState('history');
-
   const [catalog, setCatalog] = useState(() => {
     try {
       const cached = localStorage.getItem('wst_catalog_cache');
@@ -85,6 +83,8 @@ export default function HandoverApp({
   const [historyList, setHistoryList] = useState([]);
   const [sheetDuties, setSheetDuties] = useState([]);
 
+  // Submission Form State (Now Inside Modal)
+  const [isNewEntryOpen, setIsNewEntryOpen] = useState(false);
   const [manager, setManager] = useState(currentUser?.name || 'Ross');
   const [role, setRole] = useState(currentUser?.role || 'Assistant General Manager');
   const [shiftDate, setShiftDate] = useState(() => new Date().toISOString().slice(0, 10));
@@ -100,6 +100,7 @@ export default function HandoverApp({
   const [tomorrowInput, setTomorrowInput] = useState('');
   const [tomorrowList, setTomorrowList] = useState([]);
 
+  // Search & Filtering State
   const [historySearch, setHistorySearch] = useState('');
   const [historyDateFilter, setHistoryDateFilter] = useState('');
   const [selectedHistoryItem, setSelectedHistoryItem] = useState(null);
@@ -125,7 +126,6 @@ export default function HandoverApp({
     if (initialDeepLink && initialDeepLink.entryId && historyList.length > 0) {
       const match = historyList.find(item => String(item.id).trim() === String(initialDeepLink.entryId).trim());
       if (match) {
-        setCurrentTab('history');
         setSelectedHistoryItem(match);
         if (onClearDeepLink) onClearDeepLink();
       }
@@ -145,16 +145,9 @@ export default function HandoverApp({
   }, []);
 
   const swipeHandlers = useTwoFingerSwipe({
-    disabled: currentTab === 'settings' || Boolean(selectedHistoryItem) || Boolean(reactorsModalItem) || showNotifications,
-    onSwipeLeft: () => {
-      if (currentTab === 'history') setCurrentTab('today');
-    },
+    disabled: isNewEntryOpen || Boolean(selectedHistoryItem) || Boolean(reactorsModalItem) || showNotifications,
     onSwipeRight: () => {
-      if (currentTab === 'today') {
-        setCurrentTab('history');
-      } else if (currentTab === 'history' && onBackToHub) {
-        onBackToHub();
-      }
+      if (onBackToHub) onBackToHub();
     }
   });
 
@@ -424,7 +417,7 @@ export default function HandoverApp({
 
       setStatusMsg({ 
         type: 'success', 
-        text: isDayNote ? 'Day note saved to diary!' : 'Handover saved & logged!' 
+        text: isDayNote ? 'Day note posted to diary!' : 'Handover posted to diary!' 
       });
 
       sendPushNotification(
@@ -439,9 +432,9 @@ export default function HandoverApp({
       setGeneralNotes('');
       setEightySixList([]);
       setTomorrowList([]);
+      setIsNewEntryOpen(false);
       
       await fetchAllHandoverData();
-      setCurrentTab('history');
     } catch (err) {
       console.error(err);
       setStatusMsg({ type: 'error', text: 'Error saving handover report.' });
@@ -519,8 +512,9 @@ export default function HandoverApp({
   return (
     <div 
       {...swipeHandlers}
-      className="flex flex-col h-[100dvh] w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 overflow-hidden relative"
+      className="flex flex-col h-[100dvh] w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 overflow-hidden relative select-none"
     >
+      {/* Top Header */}
       <header className="flex items-center justify-between px-5 pt-[max(1.5rem,env(safe-area-inset-top))] pb-2 border-b border-gray-100 flex-shrink-0 bg-white z-20">
         <div className="flex items-center space-x-2">
           {onBackToHub && (
@@ -548,6 +542,7 @@ export default function HandoverApp({
         </div>
       </header>
 
+      {/* Notifications Dropdown */}
       {showNotifications && (
         <div className="absolute top-[max(3.8rem,calc(env(safe-area-inset-top)+2.5rem))] right-4 z-40 w-72 bg-white rounded-2xl shadow-2xl border border-gray-200 overflow-hidden divide-y divide-gray-100 animate-in fade-in slide-in-from-top-2 duration-150">
           <div className="p-3 bg-gray-50 flex justify-between items-center">
@@ -596,472 +591,517 @@ export default function HandoverApp({
         </div>
       )}
 
-      {currentTab === 'history' ? (
-        <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-          <div className="px-5 pt-3 pb-2 border-b border-gray-100 flex-shrink-0 space-y-2">
-            <div className="flex justify-between items-baseline">
-              <div>
-                <p className="text-gray-500 italic text-[11px] font-serif">Shift Logs</p>
-                <h1 className="text-xl font-black tracking-tight text-gray-900">Handover Diary</h1>
-              </div>
-              <button onClick={fetchAllHandoverData} className="text-xs font-semibold text-gray-500 hover:text-black underline">Refresh</button>
+      {/* Main Single-Page Physical Diary Body */}
+      <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+        <div className="px-5 pt-3 pb-2 border-b border-gray-100 flex-shrink-0 space-y-2 bg-white">
+          <div className="flex justify-between items-baseline">
+            <div>
+              <p className="text-gray-500 italic text-[11px] font-serif">Shift Logs</p>
+              <h1 className="text-xl font-black tracking-tight text-gray-900">Handover Diary</h1>
             </div>
-
-            <div className="relative">
-              <input
-                type="text"
-                value={historySearch}
-                onChange={(e) => setHistorySearch(e.target.value)}
-                placeholder="Search by manager, notes, or 86 item..."
-                className="w-full bg-[#EDEDED] py-1.5 pl-3 pr-8 rounded-lg text-xs italic placeholder-gray-400 focus:outline-none"
-              />
-              {historySearch ? (
-                <button onClick={() => setHistorySearch('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-black">
-                  <X className="w-3 h-3" />
-                </button>
-              ) : (
-                <Search className="w-3 h-3 absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-              )}
-            </div>
-
-            <div className="flex items-center space-x-2 text-[11px]">
-              <label className="text-[9px] font-bold uppercase text-gray-400">Date:</label>
-              <input type="date" value={historyDateFilter} onChange={(e) => setHistoryDateFilter(e.target.value)} className="bg-[#EDEDED] py-0.5 px-1.5 rounded-md font-semibold text-[10px] text-gray-800 focus:outline-none" />
-              {historyDateFilter && (
-                <button onClick={() => setHistoryDateFilter('')} className="text-[9px] text-gray-500 hover:text-black underline">Clear date</button>
-              )}
-            </div>
+            <button onClick={fetchAllHandoverData} className="text-xs font-semibold text-gray-500 hover:text-black underline">Refresh</button>
           </div>
 
-          <div className="flex-1 min-h-0 overflow-y-auto px-5 py-3 space-y-3 pb-32 touch-pan-y overscroll-contain">
-            {loadingHistory ? (
-              <p className="text-center py-12 text-xs text-gray-400 italic">Connecting to archive...</p>
-            ) : historyList.length === 0 ? (
-              <div className="text-center py-16 text-gray-400">
-                <Calendar className="w-8 h-8 mx-auto mb-2 opacity-30" />
-                <p className="text-xs font-semibold text-gray-600">No shift handovers found</p>
-              </div>
+          <div className="relative">
+            <input
+              type="text"
+              value={historySearch}
+              onChange={(e) => setHistorySearch(e.target.value)}
+              placeholder="Search by manager, notes, or 86 item..."
+              className="w-full bg-[#EDEDED] py-1.5 pl-3 pr-8 rounded-lg text-xs italic placeholder-gray-400 focus:outline-none"
+            />
+            {historySearch ? (
+              <button onClick={() => setHistorySearch('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-black">
+                <X className="w-3 h-3" />
+              </button>
             ) : (
-              <>
-                {!historySearch && !historyDateFilter && latestHandover && (
-                  <div className="space-y-1">
-                    <div className="flex items-center space-x-1.5 px-1">
-                      <Sparkles className="w-3 h-3 text-emerald-600" />
-                      <span className="text-[9px] font-black uppercase tracking-wider text-emerald-800">
-                        {latestHandover.entryType === 'Day Note' ? 'Most Recent Day Note' : 'Most Recent Handover'}
-                      </span>
-                    </div>
-
-                    <div onClick={() => setSelectedHistoryItem(latestHandover)} className="border-2 border-black bg-[#FAFCF8] rounded-2xl p-3.5 cursor-pointer shadow-sm hover:shadow-md transition active:scale-[0.99] group space-y-1.5">
-                      <div className="flex justify-between items-baseline">
-                        <span className="font-extrabold text-xs text-gray-900">{formatDisplayDate(latestHandover.dateStr || latestHandover.timestamp)}</span>
-                        {latestHandover.takings && latestHandover.takings !== "0.00" && latestHandover.takings !== "0" && (
-                          <span className="font-mono text-xs font-black text-gray-900">£{latestHandover.takings}</span>
-                        )}
-                      </div>
-                      <div className="flex items-center space-x-1.5 text-[9px] text-gray-500 font-mono">
-                        <span>Duty: {latestHandover.manager}</span>
-                        {latestHandover.closeTime && (
-                          <><span>•</span><span>Close: {latestHandover.closeTime}</span></>
-                        )}
-                        <span>•</span>
-                        <span className="text-red-600 font-bold">{(latestHandover.eightySixList || []).length} items 86'd</span>
-                      </div>
-                      {latestHandover.generalNotes && (
-                        <p className="text-[11px] text-gray-700 italic line-clamp-2 leading-relaxed">"{latestHandover.generalNotes}"</p>
-                      )}
-
-                      <div className="flex items-center justify-between pt-0.5">
-                        <ReactionBar item={latestHandover} />
-                        {(latestHandover.comments || []).length > 0 && (
-                          <span className="inline-flex items-center space-x-1 text-[10px] text-gray-500 font-bold bg-gray-100 px-2 py-0.5 rounded-full">
-                            <MessageCircle className="w-3 h-3" />
-                            <span>{(latestHandover.comments || []).length}</span>
-                          </span>
-                        )}
-                      </div>
-
-                      <div className="flex justify-between items-center pt-1 text-[10px] font-bold text-black border-t border-gray-100">
-                        <span>Tap to open briefing & comments</span>
-                        <ChevronRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                <div className="space-y-2 pt-1">
-                  {!historySearch && !historyDateFilter && filteredHistory.length > 0 && (
-                    <span className="text-[9px] font-bold uppercase tracking-wider text-gray-400 px-1 block">Previous Diaries ({filteredHistory.length})</span>
-                  )}
-                  {filteredHistory.map((item) => (
-                    <div key={item.id} onClick={() => setSelectedHistoryItem(item)} className="border border-gray-200 rounded-xl p-3 hover:border-black transition cursor-pointer bg-white shadow-sm space-y-1 group">
-                      <div className="flex justify-between items-baseline">
-                        <span className="font-bold text-[11px] text-gray-900 group-hover:text-black">{formatDisplayDate(item.dateStr || item.timestamp)}</span>
-                        {item.takings && item.takings !== "0.00" && item.takings !== "0" ? (
-                          <span className="font-mono text-[11px] font-bold text-gray-900">£{item.takings}</span>
-                        ) : (
-                          <span className="text-[8px] font-bold uppercase bg-amber-50 text-amber-800 px-1.5 py-0.5 rounded">Day Note</span>
-                        )}
-                      </div>
-                      <div className="flex items-center space-x-1.5 text-[9px] text-gray-400 font-mono">
-                        <span>{item.manager}</span>
-                        {item.closeTime && <><span>•</span><span>{item.closeTime}</span></>}
-                        <span>•</span>
-                        <span>{(item.eightySixList || []).length} on 86</span>
-                      </div>
-                      {item.generalNotes && <p className="text-[11px] text-gray-500 line-clamp-1 italic">"{item.generalNotes}"</p>}
-
-                      <div className="flex items-center justify-between pt-0.5">
-                        <ReactionBar item={item} />
-                        {(item.comments || []).length > 0 && (
-                          <span className="inline-flex items-center space-x-1 text-[10px] text-gray-500 font-bold bg-gray-100 px-2 py-0.5 rounded-full">
-                            <MessageCircle className="w-3 h-3" />
-                            <span>{(item.comments || []).length}</span>
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </>
+              <Search className="w-3 h-3 absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
             )}
           </div>
 
-          {selectedHistoryItem && (
-            <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-              <div className="bg-white w-full max-w-sm rounded-3xl overflow-hidden shadow-2xl border border-gray-200 flex flex-col max-h-[85vh]">
-                <div className="px-5 pt-5 pb-3 border-b border-gray-100 flex justify-between items-start bg-gray-50/50">
-                  <div>
-                    <span className="text-[9px] font-mono uppercase text-gray-400 block font-bold">
-                      LOGGED BY {selectedHistoryItem.manager.toUpperCase()} • {selectedHistoryItem.entryType || 'HANDOVER'}
+          <div className="flex items-center space-x-2 text-[11px]">
+            <label className="text-[9px] font-bold uppercase text-gray-400">Date:</label>
+            <input type="date" value={historyDateFilter} onChange={(e) => setHistoryDateFilter(e.target.value)} className="bg-[#EDEDED] py-0.5 px-1.5 rounded-md font-semibold text-[10px] text-gray-800 focus:outline-none" />
+            {historyDateFilter && (
+              <button onClick={() => setHistoryDateFilter('')} className="text-[9px] text-gray-500 hover:text-black underline">Clear date</button>
+            )}
+          </div>
+        </div>
+
+        {/* Scrollable Diary Feed */}
+        <div className="flex-1 min-h-0 overflow-y-auto px-5 py-3 space-y-3 pb-28 touch-pan-y overscroll-contain">
+          {loadingHistory ? (
+            <p className="text-center py-12 text-xs text-gray-400 italic">Connecting to archive...</p>
+          ) : historyList.length === 0 ? (
+            <div className="text-center py-16 text-gray-400">
+              <Calendar className="w-8 h-8 mx-auto mb-2 opacity-30" />
+              <p className="text-xs font-semibold text-gray-600">No shift handovers found</p>
+            </div>
+          ) : (
+            <>
+              {!historySearch && !historyDateFilter && latestHandover && (
+                <div className="space-y-1">
+                  <div className="flex items-center space-x-1.5 px-1">
+                    <Sparkles className="w-3 h-3 text-emerald-600" />
+                    <span className="text-[9px] font-black uppercase tracking-wider text-emerald-800">
+                      {latestHandover.entryType === 'Day Note' ? 'Most Recent Day Note' : 'Most Recent Handover'}
                     </span>
-                    <h2 className="text-sm font-black text-gray-900 leading-snug mt-0.5">{formatDisplayDate(selectedHistoryItem.dateStr || selectedHistoryItem.timestamp)}</h2>
-                    {selectedHistoryItem.takings && selectedHistoryItem.takings !== "0.00" && selectedHistoryItem.takings !== "0" && (
-                      <span className="text-[11px] font-mono font-bold text-gray-900 mt-0.5 block">
-                        Takings: £{selectedHistoryItem.takings} {selectedHistoryItem.closeTime ? `| Close: ${selectedHistoryItem.closeTime}` : ''}
-                      </span>
-                    )}
                   </div>
-                  <button onClick={() => setSelectedHistoryItem(null)} className="p-1 text-gray-400 hover:text-black bg-white rounded-full border border-gray-200 shadow-sm">
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                </div>
 
-                <div className="p-4 overflow-y-auto space-y-3.5 text-[11px]">
-                  <div className="p-2.5 bg-gray-50 rounded-xl border border-gray-100 flex items-center justify-between">
-                    <div>
-                      <span className="font-bold uppercase tracking-wider text-[9px] text-gray-400 block mb-1">Acknowledgements</span>
-                      <ReactionBar item={selectedHistoryItem} />
+                  <div onClick={() => setSelectedHistoryItem(latestHandover)} className="border-2 border-black bg-[#FAFCF8] rounded-2xl p-3.5 cursor-pointer shadow-sm hover:shadow-md transition active:scale-[0.99] group space-y-1.5">
+                    <div className="flex justify-between items-baseline">
+                      <span className="font-extrabold text-xs text-gray-900">{formatDisplayDate(latestHandover.dateStr || latestHandover.timestamp)}</span>
+                      {latestHandover.takings && latestHandover.takings !== "0.00" && latestHandover.takings !== "0" && (
+                        <span className="font-mono text-xs font-black text-gray-900">£{latestHandover.takings}</span>
+                      )}
                     </div>
-                  </div>
-
-                  <div>
-                    <span className="font-bold uppercase tracking-wider text-[9px] text-gray-400 block mb-1">General Notes</span>
-                    <p className="p-2.5 bg-gray-50 rounded-xl text-gray-800 leading-relaxed italic border border-gray-100 whitespace-pre-line text-[11px]">
-                      {selectedHistoryItem.generalNotes || 'No notes logged.'}
-                    </p>
-                  </div>
-
-                  <div>
-                    <span className="font-bold uppercase tracking-wider text-[9px] text-gray-400 block mb-1">86 List (Out of Stock SKUs)</span>
-                    {(selectedHistoryItem.eightySixList || []).length === 0 ? (
-                      <p className="p-1.5 text-gray-400 italic text-[10px]">No items out of stock.</p>
-                    ) : (
-                      <div className="border border-gray-200 rounded-xl divide-y divide-gray-100 overflow-hidden bg-white">
-                        {selectedHistoryItem.eightySixList.map((prod, i) => (
-                          <div key={i} className="p-1.5 flex justify-between items-center text-[10px]">
-                            <div><span className="font-bold text-gray-900">{prod.name || prod}</span>{prod.sku && <span className="font-mono text-[8px] text-gray-400 ml-1">[{prod.sku}]</span>}</div>
-                            <span className="font-mono text-[9px] font-bold text-red-600 bg-red-50 px-1.5 py-0.5 rounded">{prod.qty || 1} {prod.unit || 'unit'}</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  {selectedHistoryItem.tomorrowTasks && selectedHistoryItem.tomorrowTasks.length > 0 && (
-                    <div>
-                      <span className="font-bold uppercase tracking-wider text-[9px] text-gray-400 block mb-1">Tomorrow / Handover Actions</span>
-                      <div className="p-2.5 bg-gray-50 rounded-xl border border-gray-100 space-y-1">
-                        {selectedHistoryItem.tomorrowTasks.map((t, idx) => (
-                          <div key={idx} className="flex items-center space-x-1.5 text-gray-800 text-[10px]">
-                            <span className="text-[9px] text-gray-400">•</span>
-                            <span>{t}</span>
-                          </div>
-                        ))}
-                      </div>
+                    <div className="flex items-center space-x-1.5 text-[9px] text-gray-500 font-mono">
+                      <span>Duty: {latestHandover.manager}</span>
+                      {latestHandover.closeTime && (
+                        <><span>•</span><span>Close: {latestHandover.closeTime}</span></>
+                      )}
+                      <span>•</span>
+                      <span className="text-red-600 font-bold">{(latestHandover.eightySixList || []).length} items 86'd</span>
                     </div>
-                  )}
+                    {latestHandover.generalNotes && (
+                      <p className="text-[11px] text-gray-700 italic line-clamp-2 leading-relaxed">"{latestHandover.generalNotes}"</p>
+                    )}
 
-                  <div className="border-t border-gray-100 pt-3 space-y-2">
-                    <span className="font-bold uppercase tracking-wider text-[9px] text-gray-400 block">
-                      Manager Discussion ({(selectedHistoryItem.comments || []).length})
-                    </span>
-
-                    <div className="space-y-2">
-                      {(selectedHistoryItem.comments || []).length === 0 ? (
-                        <p className="text-[10px] text-gray-400 italic">No comments yet. Start the conversation below.</p>
-                      ) : (
-                        (selectedHistoryItem.comments || []).map((c) => (
-                          <div key={c.id} className="p-2 bg-gray-50 rounded-xl space-y-0.5 border border-gray-100">
-                            <div className="flex justify-between items-baseline">
-                              <span className="font-bold text-gray-900 text-[10px]">{c.user}</span>
-                              <span className="text-[8px] text-gray-400 font-mono">{c.timestamp}</span>
-                            </div>
-                            <p className="text-gray-700 leading-snug">{c.text}</p>
-                          </div>
-                        ))
+                    <div className="flex items-center justify-between pt-0.5">
+                      <ReactionBar item={latestHandover} />
+                      {(latestHandover.comments || []).length > 0 && (
+                        <span className="inline-flex items-center space-x-1 text-[10px] text-gray-500 font-bold bg-gray-100 px-2 py-0.5 rounded-full">
+                          <MessageCircle className="w-3 h-3" />
+                          <span>{(latestHandover.comments || []).length}</span>
+                        </span>
                       )}
                     </div>
 
-                    <form onSubmit={handleAddComment} className="flex items-center space-x-1.5 pt-1">
-                      <input
-                        type="text"
-                        placeholder="Write a reply or note..."
-                        value={commentInput}
-                        onChange={(e) => setCommentInput(e.target.value)}
-                        className="flex-1 bg-gray-100 py-1.5 px-2.5 rounded-xl text-xs focus:bg-white focus:outline-none border border-transparent focus:border-gray-300 transition"
-                      />
-                      <button
-                        type="submit"
-                        disabled={submittingComment || !commentInput.trim()}
-                        className="p-2 bg-black text-white hover:bg-neutral-800 disabled:opacity-40 rounded-xl transition"
-                      >
-                        <Send className="w-3 h-3" />
-                      </button>
-                    </form>
+                    <div className="flex justify-between items-center pt-1 text-[10px] font-bold text-black border-t border-gray-100">
+                      <span>Tap to open briefing & comments</span>
+                      <ChevronRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
+                    </div>
                   </div>
                 </div>
-              </div>
-            </div>
-          )}
+              )}
 
-          {reactorsModalItem && (
-            <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-              <div className="bg-white w-full max-w-xs rounded-3xl overflow-hidden shadow-2xl border border-gray-200 flex flex-col max-h-[60vh]">
-                <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
-                  <span className="text-xs font-black text-gray-900">Reactions</span>
-                  <button onClick={() => setReactorsModalItem(null)} className="p-1 text-gray-400 hover:text-black">
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-                <div className="p-4 overflow-y-auto divide-y divide-gray-100">
-                  {(reactorsModalItem.reactions || []).map((rx, idx) => (
-                    <div key={idx} className="py-2 flex items-center justify-between text-xs">
-                      <span className="font-bold text-gray-800">{rx.user}</span>
-                      <span className="text-sm">{rx.emoji}</span>
+              <div className="space-y-2 pt-1">
+                {!historySearch && !historyDateFilter && filteredHistory.length > 0 && (
+                  <span className="text-[9px] font-bold uppercase tracking-wider text-gray-400 px-1 block">Previous Diaries ({filteredHistory.length})</span>
+                )}
+                {filteredHistory.map((item) => (
+                  <div key={item.id} onClick={() => setSelectedHistoryItem(item)} className="border border-gray-200 rounded-xl p-3 hover:border-black transition cursor-pointer bg-white shadow-sm space-y-1 group">
+                    <div className="flex justify-between items-baseline">
+                      <span className="font-bold text-[11px] text-gray-900 group-hover:text-black">{formatDisplayDate(item.dateStr || item.timestamp)}</span>
+                      {item.takings && item.takings !== "0.00" && item.takings !== "0" ? (
+                        <span className="font-mono text-[11px] font-bold text-gray-900">£{item.takings}</span>
+                      ) : (
+                        <span className="text-[8px] font-bold uppercase bg-amber-50 text-amber-800 px-1.5 py-0.5 rounded">Day Note</span>
+                      )}
                     </div>
-                  ))}
-                </div>
+                    <div className="flex items-center space-x-1.5 text-[9px] text-gray-400 font-mono">
+                      <span>{item.manager}</span>
+                      {item.closeTime && <><span>•</span><span>{item.closeTime}</span></>}
+                      <span>•</span>
+                      <span>{(item.eightySixList || []).length} on 86</span>
+                    </div>
+                    {item.generalNotes && <p className="text-[11px] text-gray-500 line-clamp-1 italic">"{item.generalNotes}"</p>}
+
+                    <div className="flex items-center justify-between pt-0.5">
+                      <ReactionBar item={item} />
+                      {(item.comments || []).length > 0 && (
+                        <span className="inline-flex items-center space-x-1 text-[10px] text-gray-500 font-bold bg-gray-100 px-2 py-0.5 rounded-full">
+                          <MessageCircle className="w-3 h-3" />
+                          <span>{(item.comments || []).length}</span>
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))}
               </div>
-            </div>
+            </>
           )}
         </div>
-      ) : (
-        /* FIXED: Added min-h-0, touch-pan-y, overscroll-contain, and safe pb-36 padding */
-        <div className="flex-1 min-h-0 flex flex-col overflow-y-auto px-5 py-3 space-y-4 pb-36 touch-pan-y overscroll-contain">
-          <div className="border-b border-gray-100 pb-3 space-y-2.5 flex-shrink-0">
-            <div>
-              <p className="text-gray-500 italic text-[11px] font-serif">Shift Wrap-Up</p>
-              <h1 className="text-lg font-black tracking-tight text-gray-900">{formatDisplayDate(shiftDate)}</h1>
-            </div>
-            {statusMsg && (
-              <div className={`p-2 rounded-xl text-[11px] font-semibold ${statusMsg.type === 'success' ? 'bg-green-50 text-green-800 border border-green-200' : 'bg-red-50 text-red-800 border border-red-200'}`}>{statusMsg.text}</div>
-            )}
-            
-            <div className="grid grid-cols-12 gap-1.5 text-[11px]">
-              <div className="col-span-4 min-w-0">
-                <label className="block text-[9px] font-bold uppercase text-gray-400 mb-0.5 truncate">Shift Date</label>
-                <input type="date" value={shiftDate} onChange={(e) => setShiftDate(e.target.value)} className="w-full min-w-0 bg-[#EDEDED] py-1.5 px-1.5 rounded-lg font-semibold text-gray-900 text-[10px] focus:outline-none appearance-none" />
+      </div>
+
+      {/* Floating Add New Entry Button (+) */}
+      <div className="fixed bottom-6 right-6 z-30">
+        <button
+          onClick={() => {
+            setShiftDate(new Date().toISOString().slice(0, 10));
+            setIsNewEntryOpen(true);
+          }}
+          className="w-14 h-14 rounded-full bg-black hover:bg-neutral-800 text-white shadow-2xl flex items-center justify-center transition active:scale-95 border border-white/10"
+          aria-label="Add New Handover Entry"
+        >
+          <Plus className="w-6 h-6 stroke-[2.5]" />
+        </button>
+      </div>
+
+      {/* NEW ENTRY SUBMISSION MODAL / DRAWER */}
+      {isNewEntryOpen && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200">
+          <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl overflow-hidden shadow-2xl border border-gray-200 flex flex-col max-h-[92vh] animate-in slide-in-from-bottom duration-200">
+            {/* Modal Header */}
+            <div className="px-5 pt-4 pb-3 border-b border-gray-100 flex justify-between items-center bg-gray-50/70">
+              <div>
+                <span className="text-[10px] font-mono uppercase text-gray-400 font-bold block">New Diary Record</span>
+                <h2 className="text-base font-black text-gray-900 leading-tight">Post Shift Entry</h2>
               </div>
-              <div className="col-span-4 min-w-0">
-                <label className="block text-[9px] font-bold uppercase text-gray-400 mb-0.5 truncate">Duty Manager</label>
-                <input type="text" readOnly value={`${manager} (${role})`} className="w-full min-w-0 bg-[#EDEDED] py-1.5 px-2 rounded-lg font-semibold text-gray-900 text-[10px] cursor-not-allowed focus:outline-none" />
-              </div>
-              <div className="col-span-4 min-w-0">
-                <label className="block text-[9px] font-bold uppercase text-gray-400 mb-0.5 truncate">Close Time</label>
-                <select value={closeTime} onChange={(e) => setCloseTime(e.target.value)} className="w-full min-w-0 bg-[#EDEDED] py-1.5 px-1 rounded-lg font-semibold text-gray-900 text-[10px] focus:outline-none">
-                  <option value=""></option>
-                  {timeOptions15Min.map((t) => (
-                    <option key={t} value={t}>{t}</option>
-                  ))}
-                </select>
-              </div>
+              <button 
+                onClick={() => setIsNewEntryOpen(false)} 
+                className="p-1.5 text-gray-400 hover:text-black bg-white rounded-full border border-gray-200 shadow-xs"
+              >
+                <X className="w-4 h-4" />
+              </button>
             </div>
 
-            <div className="flex items-center space-x-2 pt-0.5">
-              <label className="text-xs font-extrabold text-gray-900">Takings (£):</label>
-              <div className="relative bg-[#EDEDED] rounded-lg px-2.5 py-1 flex items-center">
-                <span className="text-[11px] font-bold text-gray-500 mr-1">£</span>
-                <input 
-                  type="text" 
-                  value={takings} 
-                  onChange={(e) => setTakings(e.target.value)} 
-                  className="w-24 text-xs font-bold bg-transparent text-gray-900 focus:outline-none" 
-                />
+            {/* Scrollable Form Body */}
+            <div className="p-5 overflow-y-auto space-y-4 text-xs touch-pan-y overscroll-contain">
+              <div className="border-b border-gray-100 pb-3 space-y-2">
+                <div className="grid grid-cols-12 gap-1.5 text-[11px]">
+                  <div className="col-span-4 min-w-0">
+                    <label className="block text-[9px] font-bold uppercase text-gray-400 mb-0.5 truncate">Shift Date</label>
+                    <input 
+                      type="date" 
+                      value={shiftDate} 
+                      onChange={(e) => setShiftDate(e.target.value)} 
+                      className="w-full min-w-0 bg-[#EDEDED] py-1.5 px-1.5 rounded-lg font-semibold text-gray-900 text-[10px] focus:outline-none appearance-none" 
+                    />
+                  </div>
+                  <div className="col-span-4 min-w-0">
+                    <label className="block text-[9px] font-bold uppercase text-gray-400 mb-0.5 truncate">Duty Manager</label>
+                    <input 
+                      type="text" 
+                      readOnly 
+                      value={`${manager} (${role})`} 
+                      className="w-full min-w-0 bg-[#EDEDED] py-1.5 px-2 rounded-lg font-semibold text-gray-900 text-[10px] cursor-not-allowed focus:outline-none" 
+                    />
+                  </div>
+                  <div className="col-span-4 min-w-0">
+                    <label className="block text-[9px] font-bold uppercase text-gray-400 mb-0.5 truncate">Close Time</label>
+                    <select 
+                      value={closeTime} 
+                      onChange={(e) => setCloseTime(e.target.value)} 
+                      className="w-full min-w-0 bg-[#EDEDED] py-1.5 px-1 rounded-lg font-semibold text-gray-900 text-[10px] focus:outline-none"
+                    >
+                      <option value=""></option>
+                      {timeOptions15Min.map((t) => (
+                        <option key={t} value={t}>{t}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="flex items-center space-x-2 pt-0.5">
+                  <label className="text-xs font-extrabold text-gray-900">Takings (£):</label>
+                  <div className="relative bg-[#EDEDED] rounded-lg px-2.5 py-1 flex items-center">
+                    <span className="text-[11px] font-bold text-gray-500 mr-1">£</span>
+                    <input 
+                      type="text" 
+                      value={takings} 
+                      onChange={(e) => setTakings(e.target.value)} 
+                      placeholder="0.00"
+                      className="w-24 text-xs font-bold bg-transparent text-gray-900 focus:outline-none" 
+                    />
+                  </div>
+                  <span className="text-[10px] text-gray-400 italic">(Leave empty for Day Note)</span>
+                </div>
               </div>
-            </div>
-          </div>
 
-          <div className="space-y-1 flex-shrink-0">
-            <div className="flex justify-between items-baseline">
-              <label className="block text-[11px] font-extrabold text-gray-900">General Notes</label>
-              <span className={`text-[9px] font-mono ${generalNotes.length >= 1200 ? 'text-red-500 font-bold' : 'text-gray-400'}`}>
-                {generalNotes.length}/1250
-              </span>
-            </div>
-            <div className="relative bg-[#EDEDED] rounded-xl p-2.5 focus-within:bg-gray-100 transition">
-              <textarea 
-                rows={5} 
-                maxLength={1250} 
-                value={generalNotes} 
-                onChange={(e) => setGeneralNotes(e.target.value)} 
-                className="w-full text-xs text-gray-900 bg-transparent focus:outline-none resize-none leading-relaxed" 
-              />
-            </div>
-          </div>
+              {/* General Notes */}
+              <div className="space-y-1">
+                <div className="flex justify-between items-baseline">
+                  <label className="block text-[11px] font-extrabold text-gray-900">General Notes</label>
+                  <span className={`text-[9px] font-mono ${generalNotes.length >= 1200 ? 'text-red-500 font-bold' : 'text-gray-400'}`}>
+                    {generalNotes.length}/1250
+                  </span>
+                </div>
+                <div className="relative bg-[#EDEDED] rounded-xl p-2.5 focus-within:bg-gray-100 transition">
+                  <textarea 
+                    rows={4} 
+                    maxLength={1250} 
+                    placeholder="Shift commentary, trade notes, maintenance..."
+                    value={generalNotes} 
+                    onChange={(e) => setGeneralNotes(e.target.value)} 
+                    className="w-full text-xs text-gray-900 bg-transparent focus:outline-none resize-none leading-relaxed" 
+                  />
+                </div>
+              </div>
 
-          <div className="space-y-2 bg-gray-50 border border-gray-200 rounded-xl p-3 flex-shrink-0">
-            <div className="flex justify-between items-center">
-              <span className="block font-bold text-gray-900 uppercase tracking-wider text-[10px]">86 List (Stock SKU Lookup)</span>
-              <span className="text-[9px] text-gray-400 font-mono">{catalog.length} SKUs ready</span>
-            </div>
-            
-            <form onSubmit={handleAdd86} className="space-y-1.5">
-              <div className="relative">
-                <input
-                  type="text"
-                  value={eightySixInput}
-                  onChange={(e) => { setEightySixInput(e.target.value); setSelectedProduct(null); }}
-                  placeholder="Search catalog or item..."
-                  className="w-full bg-white border border-gray-300 py-1.5 pl-2.5 pr-7 rounded-lg text-xs italic focus:outline-none placeholder-gray-400"
-                />
-                {eightySixInput && (
-                  <button type="button" onClick={() => { setEightySixInput(''); setSelectedProduct(null); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-black">
-                    <X className="w-3 h-3" />
-                  </button>
-                )}
-                {catalogSuggestions.length > 0 && !selectedProduct && (
-                  <div className="absolute z-20 left-0 right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg divide-y divide-gray-100 max-h-36 overflow-y-auto">
-                    {catalogSuggestions.map(prod => (
-                      <button key={prod.id} type="button" onClick={() => { setSelectedProduct(prod); setEightySixInput(prod.name); }} className="w-full text-left px-2.5 py-1.5 text-xs hover:bg-gray-100 flex items-center justify-between">
-                        <div><span className="font-bold text-gray-900">{prod.name}</span><span className="text-[9px] text-gray-400 font-mono ml-1.5">[{prod.id}]</span></div>
-                        <span className="text-[9px] text-gray-500 italic">({prod.unit})</span>
+              {/* 86 List SKU Lookup */}
+              <div className="space-y-2 bg-gray-50 border border-gray-200 rounded-xl p-3">
+                <div className="flex justify-between items-center">
+                  <span className="block font-bold text-gray-900 uppercase tracking-wider text-[10px]">86 List (Stock Shortages)</span>
+                  <span className="text-[9px] text-gray-400 font-mono">{catalog.length} SKUs ready</span>
+                </div>
+                
+                <form onSubmit={handleAdd86} className="space-y-1.5">
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={eightySixInput}
+                      onChange={(e) => { setEightySixInput(e.target.value); setSelectedProduct(null); }}
+                      placeholder="Search catalog or item..."
+                      className="w-full bg-white border border-gray-300 py-1.5 pl-2.5 pr-7 rounded-lg text-xs italic focus:outline-none placeholder-gray-400"
+                    />
+                    {eightySixInput && (
+                      <button type="button" onClick={() => { setEightySixInput(''); setSelectedProduct(null); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-black">
+                        <X className="w-3 h-3" />
                       </button>
+                    )}
+                    {catalogSuggestions.length > 0 && !selectedProduct && (
+                      <div className="absolute z-20 left-0 right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg divide-y divide-gray-100 max-h-36 overflow-y-auto">
+                        {catalogSuggestions.map(prod => (
+                          <button key={prod.id} type="button" onClick={() => { setSelectedProduct(prod); setEightySixInput(prod.name); }} className="w-full text-left px-2.5 py-1.5 text-xs hover:bg-gray-100 flex items-center justify-between">
+                            <div><span className="font-bold text-gray-900">{prod.name}</span><span className="text-[9px] text-gray-400 font-mono ml-1.5">[{prod.id}]</span></div>
+                            <span className="text-[9px] text-gray-500 italic">({prod.unit})</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-12 gap-1.5">
+                    <div className="col-span-4">
+                      <input 
+                        type="number" 
+                        step="any" 
+                        value={eightySixQty} 
+                        onChange={(e) => setEightySixQty(e.target.value)} 
+                        placeholder="Qty" 
+                        className="w-full bg-white border border-gray-300 py-1 px-2 rounded-lg text-xs font-bold text-center focus:outline-none" 
+                      />
+                    </div>
+                    <div className="col-span-8">
+                      <button type="submit" disabled={!eightySixInput.trim()} className="w-full py-1 bg-black text-white hover:bg-gray-800 disabled:opacity-40 rounded-lg text-xs font-bold transition flex items-center justify-center space-x-1">
+                        <Plus className="w-3 h-3" />
+                        <span>Add to 86 List</span>
+                      </button>
+                    </div>
+                  </div>
+                </form>
+
+                <div className="divide-y divide-gray-200 pt-0.5">
+                  {eightySixList.length === 0 ? (
+                    <p className="text-[10px] text-gray-400 italic py-1 text-center">No items 86'd this shift.</p>
+                  ) : (
+                    eightySixList.map((item, idx) => (
+                      <div key={idx} className="flex justify-between items-center py-1.5 text-xs">
+                        <div>
+                          <span className="font-bold text-gray-900">{item.name}</span>
+                          <div className="flex items-center space-x-1 text-[9px] text-gray-400 font-mono">
+                            <span>SKU: {item.sku}</span><span>•</span><span>{item.supplier}</span>
+                          </div>
+                        </div>
+                        <div className="flex items-center space-x-1.5">
+                          <span className="font-mono text-[10px] font-bold text-red-600 bg-red-50 px-1.5 py-0.5 rounded">{item.qty} {item.unit}</span>
+                          <button type="button" onClick={() => setEightySixList(prev => prev.filter((_, i) => i !== idx))} className="text-gray-400 hover:text-red-500 font-mono px-1">✕</button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              {/* Tomorrow Handover Duties */}
+              <div className="space-y-1.5">
+                <div className="flex justify-between items-center">
+                  <label className="block text-[11px] font-extrabold text-gray-900">Tomorrow / Handover Actions</label>
+                  {sheetDuties.length > 0 && (
+                    <span className="text-[9px] text-gray-400 font-mono">{sheetDuties.length} Duties live</span>
+                  )}
+                </div>
+                
+                <div className="relative">
+                  <input 
+                    type="text" 
+                    value={tomorrowInput} 
+                    onChange={(e) => setTomorrowInput(e.target.value)} 
+                    onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), handleAddTomorrow())} 
+                    placeholder="Search duties or type task..." 
+                    className="w-full bg-[#EDEDED] rounded-xl py-1.5 px-2.5 text-xs focus:outline-none pr-8" 
+                  />
+                  <button type="button" onClick={() => handleAddTomorrow()} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-600 font-bold hover:text-black text-xs">→</button>
+                </div>
+
+                {dutySuggestions.length > 0 && (
+                  <div className="border border-neutral-200 rounded-xl overflow-hidden divide-y divide-neutral-100 bg-[#FBFBFB]">
+                    {dutySuggestions.map((suggestion, idx) => (
+                      <button 
+                        key={idx} 
+                        type="button" 
+                        onClick={() => handleAddTomorrow(suggestion)} 
+                        className="w-full text-left px-2.5 py-1.5 text-xs text-black flex justify-between items-center hover:bg-neutral-100"
+                      >
+                        <span>{suggestion}</span>
+                        <span className="text-neutral-400 font-mono text-[10px]">+ Add Duty</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                <div className="divide-y divide-gray-100 pt-0.5">
+                  {tomorrowList.length === 0 ? (
+                    <p className="text-[10px] text-gray-400 italic py-1 text-center">No tomorrow tasks assigned yet.</p>
+                  ) : (
+                    tomorrowList.map((item, idx) => (
+                      <div key={idx} className="flex justify-between items-center py-1.5 text-xs text-gray-900 font-medium">
+                        <span>{item}</span>
+                        <button type="button" onClick={() => setTomorrowList(prev => prev.filter((_, i) => i !== idx))} className="text-gray-400 hover:text-black px-1 font-mono">✕</button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              {/* Submit Post Button */}
+              <div className="pt-2 pb-2">
+                <button 
+                  type="button" 
+                  onClick={handleSubmit} 
+                  disabled={isSubmitting} 
+                  className="w-full py-3 bg-[#141414] text-white rounded-xl text-xs font-bold hover:bg-black transition active:scale-[0.98] disabled:opacity-50 flex items-center justify-center space-x-1.5 shadow-md"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>{isSubmitting ? 'Posting to Diary...' : 'Post Entry to Diary'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DETAIL VIEW MODAL */}
+      {selectedHistoryItem && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-sm rounded-3xl overflow-hidden shadow-2xl border border-gray-200 flex flex-col max-h-[85vh]">
+            <div className="px-5 pt-5 pb-3 border-b border-gray-100 flex justify-between items-start bg-gray-50/50">
+              <div>
+                <span className="text-[9px] font-mono uppercase text-gray-400 block font-bold">
+                  LOGGED BY {selectedHistoryItem.manager.toUpperCase()} • {selectedHistoryItem.entryType || 'HANDOVER'}
+                </span>
+                <h2 className="text-sm font-black text-gray-900 leading-snug mt-0.5">{formatDisplayDate(selectedHistoryItem.dateStr || selectedHistoryItem.timestamp)}</h2>
+                {selectedHistoryItem.takings && selectedHistoryItem.takings !== "0.00" && selectedHistoryItem.takings !== "0" && (
+                  <span className="text-[11px] font-mono font-bold text-gray-900 mt-0.5 block">
+                    Takings: £{selectedHistoryItem.takings} {selectedHistoryItem.closeTime ? `| Close: ${selectedHistoryItem.closeTime}` : ''}
+                  </span>
+                )}
+              </div>
+              <button onClick={() => setSelectedHistoryItem(null)} className="p-1 text-gray-400 hover:text-black bg-white rounded-full border border-gray-200 shadow-sm">
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            <div className="p-4 overflow-y-auto space-y-3.5 text-[11px]">
+              <div className="p-2.5 bg-gray-50 rounded-xl border border-gray-100 flex items-center justify-between">
+                <div>
+                  <span className="font-bold uppercase tracking-wider text-[9px] text-gray-400 block mb-1">Acknowledgements</span>
+                  <ReactionBar item={selectedHistoryItem} />
+                </div>
+              </div>
+
+              <div>
+                <span className="font-bold uppercase tracking-wider text-[9px] text-gray-400 block mb-1">General Notes</span>
+                <p className="p-2.5 bg-gray-50 rounded-xl text-gray-800 leading-relaxed italic border border-gray-100 whitespace-pre-line text-[11px]">
+                  {selectedHistoryItem.generalNotes || 'No notes logged.'}
+                </p>
+              </div>
+
+              <div>
+                <span className="font-bold uppercase tracking-wider text-[9px] text-gray-400 block mb-1">86 List (Out of Stock SKUs)</span>
+                {(selectedHistoryItem.eightySixList || []).length === 0 ? (
+                  <p className="p-1.5 text-gray-400 italic text-[10px]">No items out of stock.</p>
+                ) : (
+                  <div className="border border-gray-200 rounded-xl divide-y divide-gray-100 overflow-hidden bg-white">
+                    {selectedHistoryItem.eightySixList.map((prod, i) => (
+                      <div key={i} className="p-1.5 flex justify-between items-center text-[10px]">
+                        <div><span className="font-bold text-gray-900">{prod.name || prod}</span>{prod.sku && <span className="font-mono text-[8px] text-gray-400 ml-1">[{prod.sku}]</span>}</div>
+                        <span className="font-mono text-[9px] font-bold text-red-600 bg-red-50 px-1.5 py-0.5 rounded">{prod.qty || 1} {prod.unit || 'unit'}</span>
+                      </div>
                     ))}
                   </div>
                 )}
               </div>
 
-              <div className="grid grid-cols-12 gap-1.5">
-                <div className="col-span-4">
-                  <input 
-                    type="number" 
-                    step="any" 
-                    value={eightySixQty} 
-                    onChange={(e) => setEightySixQty(e.target.value)} 
-                    placeholder="Qty" 
-                    className="w-full bg-white border border-gray-300 py-1 px-2 rounded-lg text-xs font-bold text-center focus:outline-none" 
-                  />
-                </div>
-                <div className="col-span-8">
-                  <button type="submit" disabled={!eightySixInput.trim()} className="w-full py-1 bg-black text-white hover:bg-gray-800 disabled:opacity-40 rounded-lg text-xs font-bold transition flex items-center justify-center space-x-1">
-                    <Plus className="w-3 h-3" />
-                    <span>Add to 86 List</span>
-                  </button>
-                </div>
-              </div>
-            </form>
-
-            <div className="divide-y divide-gray-200 pt-0.5">
-              {eightySixList.length === 0 ? (
-                <p className="text-[10px] text-gray-400 italic py-1 text-center">No items 86'd this shift.</p>
-              ) : (
-                eightySixList.map((item, idx) => (
-                  <div key={idx} className="flex justify-between items-center py-1.5 text-xs">
-                    <div>
-                      <span className="font-bold text-gray-900">{item.name}</span>
-                      <div className="flex items-center space-x-1 text-[9px] text-gray-400 font-mono">
-                        <span>SKU: {item.sku}</span><span>•</span><span>{item.supplier}</span>
+              {selectedHistoryItem.tomorrowTasks && selectedHistoryItem.tomorrowTasks.length > 0 && (
+                <div>
+                  <span className="font-bold uppercase tracking-wider text-[9px] text-gray-400 block mb-1">Tomorrow / Handover Actions</span>
+                  <div className="p-2.5 bg-gray-50 rounded-xl border border-gray-100 space-y-1">
+                    {selectedHistoryItem.tomorrowTasks.map((t, idx) => (
+                      <div key={idx} className="flex items-center space-x-1.5 text-gray-800 text-[10px]">
+                        <span className="text-[9px] text-gray-400">•</span>
+                        <span>{t}</span>
                       </div>
-                    </div>
-                    <div className="flex items-center space-x-1.5">
-                      <span className="font-mono text-[10px] font-bold text-red-600 bg-red-50 px-1.5 py-0.5 rounded">{item.qty} {item.unit}</span>
-                      <button type="button" onClick={() => setEightySixList(prev => prev.filter((_, i) => i !== idx))} className="text-gray-400 hover:text-red-500 font-mono px-1">✕</button>
-                    </div>
+                    ))}
                   </div>
-                ))
+                </div>
               )}
-            </div>
-          </div>
 
-          <div className="space-y-1.5 flex-shrink-0">
-            <div className="flex justify-between items-center">
-              <label className="block text-[11px] font-extrabold text-gray-900">Tomorrow / Handover Actions</label>
-              {sheetDuties.length > 0 && (
-                <span className="text-[9px] text-gray-400 font-mono">{sheetDuties.length} Duties live</span>
-              )}
-            </div>
-            
-            <div className="relative">
-              <input 
-                type="text" 
-                value={tomorrowInput} 
-                onChange={(e) => setTomorrowInput(e.target.value)} 
-                onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), handleAddTomorrow())} 
-                placeholder="Search duties or type task..." 
-                className="w-full bg-[#EDEDED] rounded-xl py-1.5 px-2.5 text-xs focus:outline-none pr-8" 
-              />
-              <button type="button" onClick={() => handleAddTomorrow()} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-600 font-bold hover:text-black text-xs">→</button>
-            </div>
+              <div className="border-t border-gray-100 pt-3 space-y-2">
+                <span className="font-bold uppercase tracking-wider text-[9px] text-gray-400 block">
+                  Manager Discussion ({(selectedHistoryItem.comments || []).length})
+                </span>
 
-            {dutySuggestions.length > 0 && (
-              <div className="border border-neutral-200 rounded-xl overflow-hidden divide-y divide-neutral-100 bg-[#FBFBFB]">
-                {dutySuggestions.map((suggestion, idx) => (
-                  <button 
-                    key={idx} 
-                    type="button" 
-                    onClick={() => handleAddTomorrow(suggestion)} 
-                    className="w-full text-left px-2.5 py-1.5 text-xs text-black flex justify-between items-center hover:bg-neutral-100"
+                <div className="space-y-2">
+                  {(selectedHistoryItem.comments || []).length === 0 ? (
+                    <p className="text-[10px] text-gray-400 italic">No comments yet. Start the conversation below.</p>
+                  ) : (
+                    (selectedHistoryItem.comments || []).map((c) => (
+                      <div key={c.id} className="p-2 bg-gray-50 rounded-xl space-y-0.5 border border-gray-100">
+                        <div className="flex justify-between items-baseline">
+                          <span className="font-bold text-gray-900 text-[10px]">{c.user}</span>
+                          <span className="text-[8px] text-gray-400 font-mono">{c.timestamp}</span>
+                        </div>
+                        <p className="text-gray-700 leading-snug">{c.text}</p>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                <form onSubmit={handleAddComment} className="flex items-center space-x-1.5 pt-1">
+                  <input
+                    type="text"
+                    placeholder="Write a reply or note..."
+                    value={commentInput}
+                    onChange={(e) => setCommentInput(e.target.value)}
+                    className="flex-1 bg-gray-100 py-1.5 px-2.5 rounded-xl text-xs focus:bg-white focus:outline-none border border-transparent focus:border-gray-300 transition"
+                  />
+                  <button
+                    type="submit"
+                    disabled={submittingComment || !commentInput.trim()}
+                    className="p-2 bg-black text-white hover:bg-neutral-800 disabled:opacity-40 rounded-xl transition"
                   >
-                    <span>{suggestion}</span>
-                    <span className="text-neutral-400 font-mono text-[10px]">+ Add Duty</span>
+                    <Send className="w-3 h-3" />
                   </button>
-                ))}
+                </form>
               </div>
-            )}
-
-            <div className="divide-y divide-gray-100 pt-0.5">
-              {tomorrowList.length === 0 ? (
-                <p className="text-[10px] text-gray-400 italic py-1 text-center">No tomorrow tasks assigned yet.</p>
-              ) : (
-                tomorrowList.map((item, idx) => (
-                  <div key={idx} className="flex justify-between items-center py-1.5 text-xs text-gray-900 font-medium">
-                    <span>{item}</span>
-                    <button type="button" onClick={() => setTomorrowList(prev => prev.filter((_, i) => i !== idx))} className="text-gray-400 hover:text-black px-1 font-mono">✕</button>
-                  </div>
-                ))
-              )}
             </div>
-          </div>
-
-          <div className="pt-2 pb-6 flex-shrink-0">
-            <button 
-              type="button" 
-              onClick={handleSubmit} 
-              disabled={isSubmitting} 
-              className="w-full py-3 bg-[#141414] text-white rounded-xl text-xs font-bold hover:bg-black transition active:scale-[0.98] disabled:opacity-50 flex items-center justify-center space-x-1.5 shadow-md"
-            >
-              <Send className="w-3.5 h-3.5" />
-              <span>{isSubmitting ? 'Saving to Database...' : 'Submit Handover Report'}</span>
-            </button>
           </div>
         </div>
       )}
 
-      <nav className="fixed bottom-2 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-[390px] z-30 rounded-2xl bg-[#111111]/95 backdrop-blur-md text-white py-2 px-3 flex justify-around items-center text-xs font-semibold shadow-2xl border border-white/10 select-none pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))]">
-        <button onClick={() => setCurrentTab('history')} className={`flex-1 py-1 text-center rounded-xl transition ${currentTab === 'history' ? 'text-white bg-white/15 font-bold shadow-inner' : 'text-gray-400 hover:text-white'}`}>Diary</button>
-        <button onClick={() => setCurrentTab('today')} className={`flex-1 py-1 text-center rounded-xl transition ${currentTab === 'today' ? 'text-white bg-white/15 font-bold shadow-inner' : 'text-gray-400 hover:text-white'}`}>New Entry</button>
-      </nav>
+      {/* REACTIONS MODAL */}
+      {reactorsModalItem && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-xs rounded-3xl overflow-hidden shadow-2xl border border-gray-200 flex flex-col max-h-[60vh]">
+            <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+              <span className="text-xs font-black text-gray-900">Reactions</span>
+              <button onClick={() => setReactorsModalItem(null)} className="p-1 text-gray-400 hover:text-black">
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+            <div className="p-4 overflow-y-auto divide-y divide-gray-100">
+              {(reactorsModalItem.reactions || []).map((rx, idx) => (
+                <div key={idx} className="py-2 flex items-center justify-between text-xs">
+                  <span className="font-bold text-gray-800">{rx.user}</span>
+                  <span className="text-sm">{rx.emoji}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
