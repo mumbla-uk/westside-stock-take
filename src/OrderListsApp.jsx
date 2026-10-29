@@ -1,5 +1,1132 @@
-{/* Elevated Pill Button */}
-<button className="flex items-center space-x-2 px-4 py-2.5 rounded-full bg-neutral-950 text-white shadow-2xl border border-white/15 active:scale-95">
-  <Maximize2 className="w-4 h-4 text-emerald-400" />
-  <span className="text-xs font-bold">Speed Count</span>
-</button>
+import React, { useState, useEffect, useMemo } from 'react';
+import {
+  ArrowLeft,
+  Search,
+  Plus,
+  Minus,
+  RefreshCw,
+  X,
+  Copy,
+  Check,
+  ClipboardList,
+  ChevronRight,
+  CheckCircle2,
+  ListTodo,
+  Layers,
+  SlidersHorizontal,
+  WifiOff,
+  Upload as CloudUpload,
+  Maximize2,
+  Building2,
+  MapPin,
+  Sparkles
+} from 'lucide-react';
+import { useTwoFingerSwipe } from './useTwoFingerSwipe';
+import { supabase, localDb, DEFAULT_VENUE_ID } from './lib/db';
+import { sendPushNotification } from './lib/notifications';
+import SpeedCount from './SpeedCount';
+
+function AppLogo({ className = "w-6 h-6", fallbackTextClass = "font-serif text-xl font-bold tracking-tighter" }) {
+  const [imgError, setImgError] = useState(false);
+  if (!imgError) {
+    return (
+      <img
+        src="/img/icon.png"
+        alt="West Side Tavern"
+        className={`${className} object-contain`}
+        onError={() => setImgError(true)}
+      />
+    );
+  }
+  return <span className={fallbackTextClass}>T</span>;
+}
+
+function getFormattedDates() {
+  const now = new Date();
+  const dayName = now.toLocaleDateString('en-GB', { weekday: 'long' });
+  const day = now.getDay();
+  const diff = now.getDate() - day + (day === 0 ? -6 : 1);
+  const monday = new Date(now.setDate(diff));
+  const dayOfMonth = monday.getDate();
+  const monthName = monday.toLocaleDateString('en-GB', { month: 'long' });
+  const getOrdinalSuffix = (d) => {
+    if (d > 3 && d < 21) return 'th';
+    switch (d % 10) {
+      case 1:  return "st";
+      case 2:  return "nd";
+      case 3:  return "rd";
+      default: return "th";
+    }
+  };
+  const weekBeginningStr = `${dayOfMonth}${getOrdinalSuffix(dayOfMonth)} ${monthName}`;
+  const fullDateStr = `${dayName} ${dayOfMonth}${getOrdinalSuffix(dayOfMonth)} ${monthName}`;
+  return { dayName, weekBeginningStr, fullDateStr };
+}
+
+function calculateOrderQty(parLevel, currentStock) {
+  const par = Number(parLevel) || 0;
+  const count = Number(currentStock) || 0;
+  if (count <= 0.25) {
+    return Math.max(1, Math.ceil(par - count));
+  }
+  return Math.max(0, Math.ceil(par - count));
+}
+
+export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
+  const [activeTab, setActiveTab] = useState('Stocktake'); // 'Stocktake' | 'Orders'
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedSuppliers, setSelectedSuppliers] = useState([]);
+  const [selectedAreas, setSelectedAreas] = useState([]);
+  const [detailedMode, setDetailedMode] = useState(false);
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [hasUnsyncedCounts, setHasUnsyncedCounts] = useState(false);
+
+  // SpeedCount Launcher & Scope State
+  const [showScopeLauncher, setShowScopeLauncher] = useState(false);
+  const [speedCountOpen, setSpeedCountOpen] = useState(false);
+  const [activeCountScope, setActiveCountScope] = useState({ type: 'full', name: 'Full Venue Audit' });
+
+  // Scoped Stocktake Sessions
+  const [savedSessions, setSavedSessions] = useState([]);
+  const [loadingSessions, setLoadingSessions] = useState(false);
+  const [activeSessionDetail, setActiveSessionDetail] = useState(null);
+  const [sessionOrderOverrides, setSessionOrderOverrides] = useState({});
+  const [orderMode, setOrderMode] = useState(false);
+  const [checkedItemIds, setCheckedItemIds] = useState(new Set());
+  const [savingSessionAction, setSavingSessionAction] = useState(false);
+  const [copyFeedback, setCopyFeedback] = useState(false);
+
+  const [products, setProducts] = useState(() => {
+    try {
+      const cached = localStorage.getItem('wst_catalog_cache');
+      return cached ? JSON.parse(cached) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const [counts, setCounts] = useState(() => {
+    try {
+      const cachedCounts = localStorage.getItem('wst_active_counts');
+      return cachedCounts ? JSON.parse(cachedCounts) : {};
+    } catch {
+      return {};
+    }
+  });
+
+  const [modifiedIds, setModifiedIds] = useState(() => {
+    try {
+      const cached = localStorage.getItem('wst_modified_ids');
+      return cached ? new Set(JSON.parse(cached)) : new Set();
+    } catch {
+      return new Set();
+    }
+  });
+
+  const [saving, setSaving] = useState(false);
+  const [statusMsg, setStatusMsg] = useState(null);
+
+  const { dayName, weekBeginningStr, fullDateStr } = useMemo(() => getFormattedDates(), []);
+
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  useEffect(() => {
+    localDb.pending_stock_counts.count().then(cnt => {
+      setHasUnsyncedCounts(cnt > 0);
+    });
+  }, [counts]);
+
+  useEffect(() => {
+    localStorage.setItem('wst_active_counts', JSON.stringify(counts));
+    localStorage.setItem('wst_modified_ids', JSON.stringify(Array.from(modifiedIds)));
+  }, [counts, modifiedIds]);
+
+  const swipeHandlers = useTwoFingerSwipe({
+    disabled: speedCountOpen || showScopeLauncher || Boolean(activeSessionDetail),
+    onSwipeLeft: () => {
+      if (activeTab === 'Stocktake') setActiveTab('Orders');
+    },
+    onSwipeRight: () => {
+      if (activeTab === 'Orders') {
+        setActiveTab('Stocktake');
+      } else if (activeTab === 'Stocktake' && onBackToHub) {
+        onBackToHub();
+      }
+    }
+  });
+
+  const fetchCatalogData = async () => {
+    setSaving(true);
+    setStatusMsg(null);
+    try {
+      if (navigator.onLine) {
+        const { data, error } = await supabase
+          .from('catalog_items')
+          .select('*')
+          .eq('venue_id', DEFAULT_VENUE_ID)
+          .order('name');
+        if (error) throw error;
+        if (data && data.length > 0) {
+          setProducts(data);
+          localStorage.setItem('wst_catalog_cache', JSON.stringify(data));
+          await localDb.cached_catalog.bulkPut(data);
+
+          setCounts(prevCounts => {
+            const next = { ...prevCounts };
+            data.forEach(p => {
+              if (next[p.id] === undefined) {
+                next[p.id] = Number(p.count) || 0;
+              }
+            });
+            return next;
+          });
+        }
+      } else {
+        const offlineData = await localDb.cached_catalog.toArray();
+        if (offlineData.length > 0) setProducts(offlineData);
+      }
+    } catch (err) {
+      console.warn("Catalog fetch error:", err);
+      const offlineData = await localDb.cached_catalog.toArray();
+      if (offlineData.length > 0) setProducts(offlineData);
+      setStatusMsg({ type: 'info', text: 'Loaded catalog from offline storage.' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const fetchStocktakeSessions = async () => {
+    setLoadingSessions(true);
+    try {
+      const { data, error } = await supabase
+        .from('stocktake_snapshots')
+        .select('*')
+        .eq('venue_id', DEFAULT_VENUE_ID)
+        .order('logged_at', { ascending: false })
+        .limit(25);
+      if (error) throw error;
+      if (data) {
+        setSavedSessions(data);
+      }
+    } catch (err) {
+      console.warn("Could not fetch stocktake sessions:", err);
+    } finally {
+      setLoadingSessions(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchCatalogData();
+    fetchStocktakeSessions();
+  }, []);
+
+  const updateCount = (id, delta) => {
+    setModifiedIds(prev => new Set(prev).add(id));
+    setCounts(prev => {
+      const rawCurrent = prev[id] ?? 0;
+      const nextVal = Math.max(0, Math.round((rawCurrent + delta) * 10) / 10);
+      localDb.pending_stock_counts.put({
+        id,
+        count: nextVal,
+        updatedAt: new Date().toISOString()
+      });
+      return { ...prev, [id]: nextVal };
+    });
+  };
+
+  const saveSnapshotBatch = async (scopeType, scopeName, items) => {
+    const timestamp = new Date().toISOString();
+    const dateStr = timestamp.slice(0, 10);
+    const managerName = currentUser?.name || 'Duty Manager';
+
+    const updates = items.map(it => ({
+      id: it.id,
+      venue_id: DEFAULT_VENUE_ID,
+      name: it.name,
+      count: it.count,
+      unit: it.unit,
+      par: it.par,
+      supplier: it.supplier,
+      area: it.area,
+      updated_at: timestamp
+    }));
+    await supabase.from('catalog_items').upsert(updates, { onConflict: 'id' });
+
+    await supabase.from('stocktake_snapshots').insert({
+      venue_id: DEFAULT_VENUE_ID,
+      date_str: dateStr,
+      manager_name: managerName,
+      scope_type: scopeType,
+      scope_name: scopeName,
+      status: 'pending',
+      items
+    });
+
+    await localDb.pending_stock_counts.clear();
+    setHasUnsyncedCounts(false);
+    await fetchStocktakeSessions();
+  };
+
+  const handleSaveToSheet = async () => {
+    setSaving(true);
+    setStatusMsg(null);
+    let scopeType = 'full';
+    let scopeName = 'Full Venue';
+    if (selectedSuppliers.length === 1) {
+      scopeType = 'supplier';
+      scopeName = selectedSuppliers[0];
+    } else if (selectedSuppliers.length > 1) {
+      scopeType = 'supplier';
+      scopeName = selectedSuppliers.join(', ');
+    } else if (selectedAreas.length === 1) {
+      scopeType = 'area';
+      scopeName = selectedAreas[0];
+    } else if (selectedAreas.length > 1) {
+      scopeType = 'area';
+      scopeName = selectedAreas.join(', ');
+    }
+
+    const itemsToSave = filteredProducts.map(p => {
+      const countedVal = counts[p.id] ?? 0;
+      const parVal = p.par || 0;
+      return {
+        id: p.id,
+        name: p.name,
+        count: countedVal,
+        unit: p.unit || 'unit',
+        par: parVal,
+        orderQty: calculateOrderQty(parVal, countedVal),
+        supplier: p.supplier || 'General',
+        area: p.area || 'Main Bar'
+      };
+    });
+
+    try {
+      await saveSnapshotBatch(scopeType, scopeName, itemsToSave);
+      setStatusMsg({ type: 'success', text: `Saved count for ${scopeName}!` });
+    } catch (err) {
+      console.error(err);
+      setStatusMsg({ type: 'error', text: 'Error saving count session.' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const toggleSupplier = (sup) => {
+    setSelectedSuppliers(prev => prev.includes(sup) ? prev.filter(s => s !== sup) : [...prev, sup]);
+  };
+
+  const toggleArea = (area) => {
+    setSelectedAreas(prev => prev.includes(area) ? prev.filter(a => a !== area) : [...prev, area]);
+  };
+
+  const allSuppliers = useMemo(() => Array.from(new Set(products.map(p => p.supplier))).filter(Boolean), [products]);
+
+  const availableAreas = useMemo(() => {
+    const relevantProducts = selectedSuppliers.length > 0
+      ? products.filter(p => selectedSuppliers.includes(p.supplier))
+      : products;
+    return Array.from(new Set(relevantProducts.map(p => p.area || 'Main Bar'))).filter(Boolean);
+  }, [products, selectedSuppliers]);
+
+  useEffect(() => {
+    setSelectedAreas(prev => prev.filter(a => availableAreas.includes(a)));
+  }, [availableAreas]);
+
+  const filteredProducts = useMemo(() => {
+    return products.filter(p => {
+      const itemArea = p.area || 'Main Bar';
+      const matchesSearch = p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                            p.id.toLowerCase().includes(searchQuery.toLowerCase());
+      const matchesSupplier = selectedSuppliers.length > 0 ? selectedSuppliers.includes(p.supplier) : true;
+      const matchesArea = selectedAreas.length > 0 ? selectedAreas.includes(itemArea) : true;
+      return matchesSearch && matchesSupplier && matchesArea;
+    });
+  }, [products, searchQuery, selectedSuppliers, selectedAreas]);
+
+  const handleLaunchSpeedCountScope = (scopeType, scopeName, filteredList) => {
+    setActiveCountScope({ type: scopeType, name: scopeName, list: filteredList });
+    setShowScopeLauncher(false);
+    setSpeedCountOpen(true);
+  };
+
+  const handleFinishSpeedCount = async () => {
+    setSpeedCountOpen(false);
+    const scopeItems = (activeCountScope.list || products).map(p => {
+      const countedVal = counts[p.id] ?? 0;
+      const parVal = p.par || 0;
+      return {
+        id: p.id,
+        name: p.name,
+        count: countedVal,
+        unit: p.unit || 'unit',
+        par: parVal,
+        orderQty: calculateOrderQty(parVal, countedVal),
+        supplier: p.supplier || 'General',
+        area: p.area || 'Main Bar'
+      };
+    });
+
+    try {
+      await saveSnapshotBatch(activeCountScope.type, activeCountScope.name, scopeItems);
+      setStatusMsg({ type: 'success', text: `Saved count for ${activeCountScope.name}!` });
+      setActiveTab('Orders');
+    } catch (err) {
+      console.warn("Could not auto-save speed count batch:", err);
+    }
+  };
+
+  const handleOpenSession = (session) => {
+    setActiveSessionDetail(session);
+    setOrderMode(false);
+    setCheckedItemIds(new Set());
+    const initialOverrides = {};
+    (session.items || []).forEach(it => {
+      initialOverrides[it.id] = it.orderQty ?? calculateOrderQty(it.par, it.count);
+    });
+    setSessionOrderOverrides(initialOverrides);
+  };
+
+  const updateSessionOrderQty = (id, delta) => {
+    setSessionOrderOverrides(prev => ({
+      ...prev,
+      [id]: Math.max(0, (prev[id] ?? 0) + delta)
+    }));
+  };
+
+  const toggleCheckItem = (id) => {
+    setCheckedItemIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const handleCopySessionOrder = (session) => {
+    let text = `WEST SIDE TAVERN - ${session.scope_name?.toUpperCase() || 'STOCK'} ORDER\nDate: ${fullDateStr}\n----------------------------------\n`;
+    (session.items || []).forEach(it => {
+      const qty = sessionOrderOverrides[it.id] ?? it.orderQty;
+      if (qty > 0) {
+        text += `• [${it.id}] ${it.name} (${it.unit}) x ${qty}\n`;
+      }
+    });
+    navigator.clipboard.writeText(text);
+    setCopyFeedback(true);
+    setTimeout(() => setCopyFeedback(false), 2000);
+  };
+
+  const handleConfirmOrderPlaced = async () => {
+    if (!activeSessionDetail) return;
+    setSavingSessionAction(true);
+    const managerName = currentUser?.name || 'Duty Manager';
+    const timestamp = new Date().toISOString();
+
+    const finalItems = (activeSessionDetail.items || []).map(it => ({
+      ...it,
+      orderQty: sessionOrderOverrides[it.id] ?? it.orderQty,
+      checked: checkedItemIds.has(it.id)
+    }));
+
+    try {
+      const { error: snapErr } = await supabase
+        .from('stocktake_snapshots')
+        .update({
+          status: 'ordered',
+          placed_by: managerName,
+          placed_at: timestamp,
+          items: finalItems
+        })
+        .eq('id', activeSessionDetail.id);
+      if (snapErr) throw snapErr;
+
+      await supabase
+        .from('supplier_orders')
+        .insert({
+          venue_id: DEFAULT_VENUE_ID,
+          supplier_name: activeSessionDetail.scope_name || 'General',
+          order_date: timestamp.slice(0, 10),
+          manager_name: managerName,
+          is_placed: true,
+          placed_at: timestamp,
+          items: finalItems
+        });
+
+      sendPushNotification(
+        `Order Placed: ${activeSessionDetail.scope_name || 'Stock'}`,
+        `${managerName} placed the order based on ${activeSessionDetail.date_str} count.`,
+        null,
+        { module: 'orders' }
+      );
+
+      setStatusMsg({ type: 'success', text: `Order for ${activeSessionDetail.scope_name} marked placed!` });
+      setActiveSessionDetail(null);
+      await fetchStocktakeSessions();
+    } catch (err) {
+      console.error(err);
+      setStatusMsg({ type: 'error', text: 'Error recording placed order.' });
+    } finally {
+      setSavingSessionAction(false);
+    }
+  };
+
+  return (
+    <div
+      {...swipeHandlers}
+      className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 overflow-x-hidden relative select-none"
+    >
+      {/* Single Consolidated Top Header */}
+      <header className="flex items-center justify-between px-5 pt-[max(1.5rem,env(safe-area-inset-top))] pb-2 border-b border-gray-100 flex-shrink-0 bg-white z-20">
+        <div className="flex items-center space-x-2">
+          {onBackToHub && (
+            <button onClick={onBackToHub} className="mr-0.5 p-1 -ml-1 text-gray-500 hover:text-black rounded-lg transition" title="Return to Hub">
+              <ArrowLeft className="w-4 h-4" />
+            </button>
+          )}
+          <AppLogo className="w-6 h-6" fallbackTextClass="font-serif text-2xl font-bold tracking-tighter" />
+          <span className="font-semibold text-base tracking-tight">West Side Tavern</span>
+          {!isOnline ? (
+            <span className="flex items-center space-x-1 text-[9px] font-bold text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded-full">
+              <WifiOff className="w-2.5 h-2.5" />
+              <span>Offline</span>
+            </span>
+          ) : hasUnsyncedCounts ? (
+            <span className="flex items-center space-x-1 text-[9px] font-bold text-blue-700 bg-blue-100 px-1.5 py-0.5 rounded-full">
+              <CloudUpload className="w-2.5 h-2.5 animate-pulse" />
+              <span>Disk</span>
+            </span>
+          ) : null}
+        </div>
+        <div className="flex items-center space-x-3 text-xs font-medium">
+          {onBackToHub ? (
+            <button onClick={onBackToHub} className="text-gray-900 hover:text-black font-semibold">Hub</button>
+          ) : (
+            <button onClick={onLogout} className="text-gray-900 hover:text-black">Logout</button>
+          )}
+        </div>
+      </header>
+
+      {/* ORDERS TAB */}
+      {activeTab === 'Orders' ? (
+        <div className="flex-1 flex flex-col overflow-hidden pb-20">
+          <div className="px-5 pt-3 pb-2 border-b border-gray-100 flex-shrink-0 bg-white">
+            <div className="flex justify-between items-baseline">
+              <div>
+                <p className="text-gray-500 italic text-[11px] font-serif">Order Generator</p>
+                <h1 className="text-xl font-black tracking-tight text-gray-900 leading-tight">Count Sessions</h1>
+              </div>
+              <button onClick={fetchStocktakeSessions} className="text-xs font-semibold text-gray-500 hover:text-black underline flex items-center space-x-1">
+                <RefreshCw className={`w-3 h-3 ${loadingSessions ? 'animate-spin' : ''}`} />
+                <span>Refresh</span>
+              </button>
+            </div>
+            <p className="text-[10px] text-gray-400 mt-0.5">
+              Select a saved count session to review deficits, adjust quantities, and place orders.
+            </p>
+          </div>
+
+          {statusMsg && (
+            <div className={`mx-5 my-1.5 p-2 rounded-xl text-xs font-semibold flex-shrink-0 ${
+              statusMsg.type === 'success' ? 'bg-green-50 text-green-800 border border-green-200' : 'bg-red-50 text-red-800 border border-red-200'
+            }`}>
+              {statusMsg.text}
+            </div>
+          )}
+
+          <div className="flex-1 overflow-y-auto px-5 py-3 space-y-3">
+            {loadingSessions ? (
+              <p className="text-center py-16 text-xs text-gray-400 italic">Loading stocktake sessions...</p>
+            ) : savedSessions.length === 0 ? (
+              <div className="text-center py-16 text-gray-400 space-y-1">
+                <ClipboardList className="w-10 h-10 mx-auto opacity-30 mb-2" />
+                <p className="text-xs font-semibold text-gray-700">No saved counts yet</p>
+                <p className="text-[10px] text-gray-400">Complete a count on the Stocktake tab or Speed Count to generate an order sheet.</p>
+              </div>
+            ) : (
+              savedSessions.map(session => {
+                const isOrdered = session.status === 'ordered';
+                const itemsBelowPar = (session.items || []).filter(it => (it.orderQty ?? calculateOrderQty(it.par, it.count)) > 0);
+                const scopeLabel = session.scope_name || 'Full Venue';
+                const dateDisplay = session.date_str || new Date(session.logged_at).toLocaleDateString('en-GB');
+
+                return (
+                  <div
+                    key={session.id}
+                    onClick={() => handleOpenSession(session)}
+                    className={`border rounded-2xl p-4 cursor-pointer transition active:scale-[0.99] shadow-xs space-y-2.5 ${
+                      isOrdered 
+                        ? 'bg-neutral-50 border-neutral-200 opacity-80' 
+                        : 'bg-white border-neutral-300 hover:border-black'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <div className="flex items-center space-x-1.5">
+                          <span className="text-[9px] font-mono font-bold uppercase tracking-wider text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">
+                            {session.scope_type || 'count'}
+                          </span>
+                          <span className="text-[10px] text-gray-400 font-mono">
+                            {dateDisplay}
+                          </span>
+                        </div>
+                        <h3 className="text-base font-black text-gray-900 leading-tight mt-1">
+                          {scopeLabel}
+                        </h3>
+                      </div>
+
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                        isOrdered
+                          ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                          : 'bg-amber-50 text-amber-800 border-amber-200'
+                      }`}>
+                        {isOrdered ? 'PLACED' : 'READY TO ORDER'}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center justify-between text-[11px] text-gray-500 pt-1 border-t border-gray-100">
+                      <span>Counted by: <strong className="text-gray-800">{session.manager_name || 'Staff'}</strong></span>
+                      <span className="font-bold text-gray-900 font-mono">
+                        {itemsBelowPar.length} lines need ordering
+                      </span>
+                    </div>
+
+                    {isOrdered && session.placed_by && (
+                      <div className="text-[10px] text-emerald-700 bg-emerald-50/50 p-1.5 rounded-lg flex items-center justify-between font-mono">
+                        <span>Placed by: {session.placed_by}</span>
+                        <span>{session.placed_at ? new Date(session.placed_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+      ) : (
+        /* STOCKTAKE TAB */
+        <div className="flex-1 flex flex-col overflow-hidden pb-20">
+          <div className="px-5 pt-3 pb-1 flex justify-between items-baseline flex-shrink-0">
+            <div>
+              <p className="text-gray-500 italic text-[11px] font-serif">Stocktake</p>
+              <h1 className="text-base font-extrabold tracking-tight text-gray-900 mt-0.5 leading-snug">
+                Week beginning {weekBeginningStr}
+              </h1>
+            </div>
+            <button onClick={fetchCatalogData} className="p-1.5 text-gray-500 hover:text-black rounded-lg bg-gray-50 border border-gray-100" title="Sync with Database">
+              <RefreshCw className={`w-3.5 h-3.5 ${saving ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
+
+          {statusMsg && (
+            <div className={`mx-5 my-1 p-2 rounded-lg text-xs font-medium flex-shrink-0 ${
+              statusMsg.type === 'success' ? 'bg-green-50 text-green-800 border border-green-200' : 'bg-red-50 text-red-800 border border-red-200'
+            }`}>
+              {statusMsg.text}
+            </div>
+          )}
+
+          {/* Sub-Bar */}
+          <div className="flex items-center justify-between px-5 py-2 flex-shrink-0 bg-white">
+            <div className="flex items-center space-x-2">
+              <span className="bg-[#F3F3F3] font-black px-2.5 py-1 rounded-lg text-[10px] text-gray-800 tracking-wider uppercase">
+                {dayName}
+              </span>
+              <span className="text-[10px] text-gray-500 font-mono font-semibold">
+                {modifiedIds.size} counted
+              </span>
+            </div>
+
+            <div className="flex items-center space-x-1.5">
+              <button
+                type="button"
+                onClick={() => setDetailedMode(!detailedMode)}
+                className={`w-[78px] py-1 rounded-lg text-[10px] font-bold border transition text-center flex items-center justify-center space-x-1 ${
+                  detailedMode
+                    ? 'bg-black text-white border-black shadow-xs'
+                    : 'bg-[#EDEDED] text-gray-700 border-transparent hover:bg-gray-200'
+                }`}
+                title="Toggle Decimal Precision"
+              >
+                <SlidersHorizontal className="w-2.5 h-2.5 text-emerald-400" />
+                <span>{detailedMode ? '0.1 Mode' : 'Standard'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setCounts({});
+                  setModifiedIds(new Set());
+                  localStorage.removeItem('wst_active_counts');
+                  localStorage.removeItem('wst_modified_ids');
+                }}
+                className="px-2 py-1 text-gray-400 hover:text-black rounded-lg text-[10px] font-bold transition"
+                title="Clear current counts"
+              >
+                Clear
+              </button>
+
+              <button
+                onClick={handleSaveToSheet}
+                disabled={saving}
+                className="flex items-center space-x-1 px-3 py-1 bg-[#C2F19D] hover:bg-[#b2e88a] rounded-lg text-xs font-black text-gray-900 transition shadow-xs flex-shrink-0"
+              >
+                <span>{saving ? 'Saving...' : 'Save Stocktake'}</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Filter Pills */}
+          <div className="px-5 py-1 flex-shrink-0 space-y-1.5">
+            <div className="relative">
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search products..."
+                className="w-full bg-[#EDEDED] py-1.5 pl-3 pr-8 rounded-lg text-xs italic placeholder-gray-500 focus:outline-none"
+              />
+              {searchQuery ? (
+                <button onClick={() => setSearchQuery('')} className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-gray-500 hover:text-black">
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              ) : (
+                <Search className="w-3.5 h-3.5 absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+              )}
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-0.5">
+                <span className="text-[9px] font-bold text-gray-400 uppercase tracking-wider block">
+                  Suppliers {selectedSuppliers.length > 0 && `(${selectedSuppliers.length})`}
+                </span>
+                {selectedSuppliers.length > 0 && <button onClick={() => setSelectedSuppliers([])} className="text-[9px] text-gray-400 hover:text-black font-semibold">Clear</button>}
+              </div>
+              <div className="flex items-center space-x-1 overflow-x-auto pb-0.5 scrollbar-none">
+                {allSuppliers.map(sup => {
+                  const isSelected = selectedSuppliers.includes(sup);
+                  return (
+                    <button key={sup} onClick={() => toggleSupplier(sup)} className={`px-2 py-0.5 rounded-md text-[10px] font-medium italic whitespace-nowrap transition border ${
+                      isSelected ? 'bg-black text-white border-black font-bold' : 'bg-[#EDEDED] text-gray-700 border-transparent hover:bg-gray-200'
+                    }`}>
+                      {sup}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {availableAreas.length > 0 && (
+              <div>
+                <div className="flex items-center justify-between mb-0.5">
+                  <span className="text-[9px] font-bold text-gray-400 uppercase tracking-wider block">
+                    Areas {selectedAreas.length > 0 && `(${selectedAreas.length})`}
+                  </span>
+                  {selectedAreas.length > 0 && <button onClick={() => setSelectedAreas([])} className="text-[9px] text-gray-400 hover:text-black font-semibold">Clear</button>}
+                </div>
+                <div className="flex items-center space-x-1 overflow-x-auto pb-0.5 scrollbar-none">
+                  {availableAreas.map(area => {
+                    const isSelected = selectedAreas.includes(area);
+                    return (
+                      <button key={area} onClick={() => toggleArea(area)} className={`px-2 py-0.5 rounded-md text-[10px] font-medium whitespace-nowrap transition border ${
+                        isSelected ? 'bg-black text-white border-black font-bold' : 'bg-[#EDEDED] text-gray-700 border-transparent hover:bg-gray-200'
+                      }`}>
+                        {area}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Table Headers */}
+          <div className="grid grid-cols-12 px-5 py-1.5 border-b border-gray-100 text-[11px] font-bold text-gray-900 mt-1 flex-shrink-0">
+            <span className={detailedMode ? "col-span-4" : "col-span-5"}>Stock Item</span>
+            <span className={detailedMode ? "col-span-2 text-center" : "col-span-2 text-center"}>Order</span>
+            <span className={detailedMode ? "col-span-2 text-center" : "col-span-2 text-center"}>Par</span>
+            <span className={detailedMode ? "col-span-4 text-center" : "col-span-3 text-center"}>
+              {detailedMode ? "Count (+1 / +0.1)" : "Count"}
+            </span>
+          </div>
+
+          {/* Table Body */}
+          <div className="flex-1 overflow-y-auto px-5 divide-y divide-gray-100">
+            {filteredProducts.length === 0 ? (
+              <p className="text-center py-8 text-xs text-gray-500">No matching products found.</p>
+            ) : (
+              filteredProducts.map(product => {
+                const currentCount = counts[product.id] ?? 0;
+                const orderAmt = calculateOrderQty(product.par ?? 0, currentCount);
+                const isModified = modifiedIds.has(product.id);
+                return (
+                  <div key={product.id} className={`grid grid-cols-12 items-center py-2 text-xs transition-colors ${isModified ? 'bg-[#FAFCF8] border-l-2 border-black pl-2 -ml-2 pr-1' : ''}`}>
+                    <div className={`${detailedMode ? "col-span-4" : "col-span-5"} pr-1`}>
+                      <span className={`leading-tight text-[11px] block ${isModified ? 'font-bold text-black' : 'font-medium text-gray-800'}`}>
+                        {product.name}
+                      </span>
+                      <div className="flex items-center space-x-1 mt-0.5">
+                        <span className="font-mono text-[8px] bg-gray-100 text-gray-500 px-1 rounded">{product.id}</span>
+                        <span className="text-[9px] text-gray-400 italic">({product.unit})</span>
+                      </div>
+                    </div>
+                    <div className={`col-span-2 text-center text-xs ${isModified && orderAmt > 0 ? 'font-black text-black' : 'font-normal text-gray-400'}`}>
+                      {orderAmt}
+                    </div>
+                    <div className="col-span-2 text-center text-gray-700 font-medium text-xs">
+                      {product.par}
+                    </div>
+                    <div className={`${detailedMode ? "col-span-4" : "col-span-3"} flex items-center justify-end space-x-1`}>
+                      {detailedMode ? (
+                        <div className="flex items-center space-x-1">
+                          <div className="flex flex-col space-y-0.5">
+                            <button
+                              onClick={() => updateCount(product.id, 1)}
+                              className="px-1 py-0.5 bg-gray-100 hover:bg-gray-200 text-[9px] font-bold rounded"
+                              title="+1 Whole Unit"
+                            >
+                              +1
+                            </button>
+                            <button
+                              onClick={() => updateCount(product.id, -1)}
+                              className="px-1 py-0.5 bg-gray-100 hover:bg-gray-200 text-[9px] font-bold rounded"
+                              title="-1 Whole Unit"
+                            >
+                              -1
+                            </button>
+                          </div>
+                          <span className={`w-9 py-1 text-center rounded text-xs transition-colors font-mono font-bold ${isModified ? 'bg-[#D9EECD] text-black' : 'bg-[#EDEDED] text-gray-700'}`}>
+                            {Number(currentCount).toFixed(1)}
+                          </span>
+                          <div className="flex flex-col space-y-0.5">
+                            <button
+                              onClick={() => updateCount(product.id, 0.1)}
+                              className="px-1 py-0.5 bg-gray-100 hover:bg-gray-200 text-[8px] font-bold rounded"
+                              title="+0.1 Tenth"
+                            >
+                              +.1
+                            </button>
+                            <button
+                              onClick={() => updateCount(product.id, -0.1)}
+                              className="px-1 py-0.5 bg-gray-100 hover:bg-gray-200 text-[8px] font-bold rounded"
+                              title="-0.1 Tenth"
+                            >
+                              -.1
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <button onClick={() => updateCount(product.id, -1)} className="p-0.5 text-gray-800 hover:bg-gray-100 rounded transition">
+                            <Minus className="w-3 h-3" />
+                          </button>
+                          <span className={`w-6 py-0.5 text-center rounded text-xs transition-colors font-mono ${isModified ? 'bg-[#D9EECD] text-black font-bold' : 'bg-[#EDEDED] text-gray-600 font-medium'}`}>
+                            {currentCount}
+                          </span>
+                          <button onClick={() => updateCount(product.id, 1)} className="p-0.5 text-gray-800 hover:bg-gray-100 rounded transition">
+                            <Plus className="w-3 h-3" />
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Redesigned Floating Speed Count Action Button */}
+      {activeTab === 'Stocktake' && (
+        <div className="fixed bottom-20 right-5 z-30 select-none">
+          <button
+            onClick={() => setShowScopeLauncher(true)}
+            className="flex items-center space-x-2 pl-3.5 pr-4 py-2.5 rounded-full bg-neutral-950 text-white shadow-2xl border border-white/20 active:scale-95 transition-all hover:bg-neutral-900"
+            title="Configure and Launch Speed Count"
+            aria-label="Speed Count"
+          >
+            <Maximize2 className="w-4 h-4 text-emerald-400 stroke-[2.5]" />
+            <span className="text-xs font-black tracking-tight">Speed Count</span>
+          </button>
+        </div>
+      )}
+
+      {/* PRE-FLIGHT LAUNCHER MODAL */}
+      {showScopeLauncher && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200">
+          <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl overflow-hidden shadow-2xl border border-gray-200 flex flex-col max-h-[85vh] animate-in slide-in-from-bottom duration-200">
+            <div className="px-5 pt-4 pb-3 border-b border-gray-100 flex justify-between items-start bg-gray-50/70">
+              <div>
+                <span className="text-[10px] font-mono uppercase text-gray-400 font-bold block">Targeted Speed Count</span>
+                <h2 className="text-base font-black text-gray-900 leading-tight mt-0.5">
+                  What would you like to count today?
+                </h2>
+              </div>
+              <button 
+                onClick={() => setShowScopeLauncher(false)}
+                className="p-1.5 text-gray-400 hover:text-black bg-white rounded-full border border-gray-200 shadow-xs"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 overflow-y-auto space-y-4 text-xs">
+              {/* Option 1: Major Audit */}
+              <div 
+                onClick={() => handleLaunchSpeedCountScope('full', 'Full Venue Audit', products)}
+                className="border-2 border-black bg-neutral-900 text-white rounded-2xl p-4 cursor-pointer transition active:scale-[0.98] shadow-sm flex items-center justify-between group"
+              >
+                <div className="space-y-0.5">
+                  <div className="flex items-center space-x-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+                    <span className="font-black text-sm text-white">Full Venue Stocktake Audit</span>
+                  </div>
+                  <p className="text-[11px] text-gray-400 leading-snug">
+                    Major periodic audit across all suppliers, cellar lines, and backroom spaces ({products.length} products).
+                  </p>
+                </div>
+                <ChevronRight className="w-4 h-4 text-gray-400 group-hover:translate-x-0.5 transition-transform" />
+              </div>
+
+              {/* Option 2: By Supplier */}
+              <div className="space-y-1.5">
+                <div className="flex items-center space-x-1 text-gray-500 font-bold text-[10px] uppercase tracking-wider">
+                  <Building2 className="w-3.5 h-3.5 text-gray-700" />
+                  <span>Count a Specific Supplier</span>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  {allSuppliers.map(sup => {
+                    const supProds = products.filter(p => p.supplier === sup);
+                    return (
+                      <button
+                        key={sup}
+                        type="button"
+                        onClick={() => handleLaunchSpeedCountScope('supplier', sup, supProds)}
+                        className="p-3 border border-gray-200 hover:border-black rounded-xl text-left bg-white transition active:scale-[0.98] hover:bg-gray-50 group flex flex-col justify-between"
+                      >
+                        <span className="font-extrabold text-xs text-gray-900 group-hover:text-black block truncate">
+                          {sup}
+                        </span>
+                        <span className="text-[10px] font-mono text-gray-400 mt-1 block">
+                          {supProds.length} items
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Option 3: By Area */}
+              <div className="space-y-1.5 pt-1">
+                <div className="flex items-center space-x-1 text-gray-500 font-bold text-[10px] uppercase tracking-wider">
+                  <MapPin className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Count a Physical Area</span>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  {availableAreas.map(ar => {
+                    const arProds = products.filter(p => (p.area || 'Main Bar') === ar);
+                    return (
+                      <button
+                        key={ar}
+                        type="button"
+                        onClick={() => handleLaunchSpeedCountScope('area', ar, arProds)}
+                        className="p-3 border border-gray-200 hover:border-black rounded-xl text-left bg-white transition active:scale-[0.98] hover:bg-gray-50 group flex flex-col justify-between"
+                      >
+                        <span className="font-extrabold text-xs text-gray-900 group-hover:text-black block truncate">
+                          {ar}
+                        </span>
+                        <span className="text-[10px] font-mono text-gray-400 mt-1 block">
+                          {arProds.length} items
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SESSION ORDER SHEET MODAL */}
+      {activeSessionDetail && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200">
+          <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl overflow-hidden shadow-2xl border border-gray-200 flex flex-col max-h-[92vh] animate-in slide-in-from-bottom duration-200">
+            <div className="px-5 pt-4 pb-3 border-b border-gray-100 flex justify-between items-start bg-gray-50/70">
+              <div>
+                <div className="flex items-center space-x-1.5">
+                  <span className="text-[9px] font-mono font-bold uppercase tracking-wider text-gray-400 bg-gray-200 px-1.5 py-0.5 rounded">
+                    {activeSessionDetail.scope_type || 'Session'}
+                  </span>
+                  <span className="text-[10px] text-gray-400 font-mono">
+                    {activeSessionDetail.date_str}
+                  </span>
+                </div>
+                <h2 className="text-base font-black text-gray-900 leading-tight mt-0.5">
+                  {activeSessionDetail.scope_name || 'Stock Order Sheet'}
+                </h2>
+                <p className="text-[10px] text-gray-500 font-mono">
+                  Counted by {activeSessionDetail.manager_name || 'Staff'}
+                </p>
+              </div>
+
+              <div className="flex items-center space-x-2">
+                <button
+                  type="button"
+                  onClick={() => setOrderMode(!orderMode)}
+                  className={`flex items-center space-x-1 px-2.5 py-1 rounded-full text-[10px] font-bold border transition ${
+                    orderMode
+                      ? 'bg-black text-white border-black shadow-xs'
+                      : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-100'
+                  }`}
+                >
+                  <ListTodo className="w-3 h-3 text-emerald-400" />
+                  <span>{orderMode ? 'Order Mode' : 'Edit'}</span>
+                </button>
+                <button
+                  onClick={() => setActiveSessionDetail(null)}
+                  className="p-1.5 text-gray-400 hover:text-black bg-white rounded-full border border-gray-200 shadow-xs"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto px-5 py-3 divide-y divide-gray-100 text-xs">
+              {(activeSessionDetail.items || []).filter(it => (sessionOrderOverrides[it.id] ?? it.orderQty) > 0 || !orderMode).map(item => {
+                const orderQty = sessionOrderOverrides[item.id] ?? item.orderQty;
+                const isChecked = checkedItemIds.has(item.id);
+
+                return (
+                  <div
+                    key={item.id}
+                    onClick={() => { if (orderMode) toggleCheckItem(item.id); }}
+                    className={`py-2.5 flex items-center justify-between transition-colors ${
+                      orderMode ? 'cursor-pointer hover:bg-gray-50' : ''
+                    } ${isChecked && orderMode ? 'bg-emerald-50/40 opacity-70' : ''}`}
+                  >
+                    <div className="flex items-center space-x-2 pr-2">
+                      {orderMode && (
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={() => toggleCheckItem(item.id)}
+                          className="w-4 h-4 rounded text-black border-gray-300 focus:ring-0 cursor-pointer"
+                        />
+                      )}
+                      <div>
+                        <span className={`font-bold block leading-tight text-[11px] ${isChecked && orderMode ? 'line-through text-gray-400' : 'text-gray-900'}`}>
+                          {item.name}
+                        </span>
+                        <span className="text-[9px] text-gray-400 font-mono">
+                          {item.id} • Count: {item.count} • Par: {item.par} ({item.unit})
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center space-x-1 flex-shrink-0">
+                      {!orderMode ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => updateSessionOrderQty(item.id, -1)}
+                            className="p-1 text-gray-700 hover:bg-gray-100 rounded"
+                          >
+                            <Minus className="w-3 h-3" />
+                          </button>
+                          <span className="w-8 py-0.5 bg-[#EDEDED] text-center font-mono font-bold text-gray-900 rounded text-xs">
+                            {orderQty}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => updateSessionOrderQty(item.id, 1)}
+                            className="p-1 text-gray-700 hover:bg-gray-100 rounded"
+                          >
+                            <Plus className="w-3 h-3" />
+                          </button>
+                        </>
+                      ) : (
+                        <span className="font-mono text-xs font-bold px-2 py-0.5 bg-gray-100 rounded text-gray-800">
+                          {orderQty} {item.unit}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="p-4 border-t border-gray-100 bg-gray-50 flex items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={() => handleCopySessionOrder(activeSessionDetail)}
+                className="py-2.5 px-3 bg-white hover:bg-gray-100 border border-gray-200 rounded-xl text-xs font-bold text-gray-800 transition flex items-center space-x-1.5"
+              >
+                {copyFeedback ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{copyFeedback ? 'Copied' : 'Copy'}</span>
+              </button>
+
+              <button
+                type="button"
+                disabled={savingSessionAction}
+                onClick={handleConfirmOrderPlaced}
+                className="flex-1 py-2.5 bg-black hover:bg-neutral-800 disabled:opacity-50 text-white rounded-xl text-xs font-black transition flex items-center justify-center space-x-1.5 shadow-sm"
+              >
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                <span>{savingSessionAction ? 'Recording...' : 'Mark Order Placed'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Floating Bottom Nav */}
+      <nav className="fixed bottom-2 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-[390px] z-20 rounded-2xl bg-[#111111]/95 backdrop-blur-md text-white py-2 px-3 flex justify-around items-center text-xs font-semibold shadow-2xl border border-white/10 select-none pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))]">
+        <button
+          onClick={() => setActiveTab('Stocktake')}
+          className={`flex-1 py-1 text-center rounded-xl transition ${activeTab === 'Stocktake' ? 'text-white bg-white/15 font-bold shadow-inner' : 'text-gray-400 hover:text-white'}`}
+        >
+          Stocktake
+        </button>
+        <button
+          onClick={() => {
+            setActiveTab('Orders');
+            fetchStocktakeSessions();
+          }}
+          className={`flex-1 py-1 text-center rounded-xl transition ${activeTab === 'Orders' ? 'text-white bg-white/15 font-bold shadow-inner' : 'text-gray-400 hover:text-white'}`}
+        >
+          Orders
+        </button>
+      </nav>
+
+      {/* SpeedCount Fullscreen View */}
+      {speedCountOpen && (
+        <SpeedCount
+          products={activeCountScope.list || filteredProducts}
+          counts={counts}
+          sessionScope={activeCountScope}
+          onUpdateCount={(id, val) => {
+            setModifiedIds(prev => new Set(prev).add(id));
+            setCounts(prev => ({ ...prev, [id]: val }));
+            localDb.pending_stock_counts.put({
+              id,
+              count: val,
+              updatedAt: new Date().toISOString()
+            });
+          }}
+          onSaveAndFinish={handleFinishSpeedCount}
+          onClose={() => setSpeedCountOpen(false)}
+        />
+      )}
+    </div>
+  );
+}
