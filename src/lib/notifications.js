@@ -26,7 +26,9 @@ export async function sendPushNotification(title, message, targetManager = null,
 
     if (targetManager) {
       const cleanTarget = String(targetManager).split("(")[0].trim();
+      // Support both legacy external_user_ids and modern v16 aliases
       payload.include_aliases = { external_id: [cleanTarget] };
+      payload.include_external_user_ids = [cleanTarget];
       payload.target_channel = "push";
     } else {
       payload.included_segments = ["Subscribed Users"];
@@ -45,13 +47,12 @@ export async function sendPushNotification(title, message, targetManager = null,
     if (!res.ok) {
       console.error("OneSignal API error response:", data);
     } else {
-      console.log("OneSignal push dispatched successfully:", data);
+      console.log("OneSignal push dispatched:", data);
     }
   } catch (err) {
     console.warn("Push dispatch error:", err);
   }
 }
 
-// Safety alias so any import style resolves without throwing Rollup errors
 export const sendNotification = sendPushNotification;
 export default sendPushNotification;

@@ -669,6 +669,42 @@ export default function App() {
         </button>
       </footer>
 
+{/* First-Open Push Permission Modal */}
+      {showFirstOpenPushModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-xs rounded-3xl overflow-hidden shadow-2xl border border-gray-200 p-5 space-y-3.5 animate-in fade-in zoom-in-95 duration-200">
+            <div className="w-12 h-12 bg-black rounded-2xl flex items-center justify-center mx-auto shadow-md">
+              <Bell className="w-6 h-6 text-emerald-400" />
+            </div>
+            <div className="text-center space-y-1">
+              <h2 className="text-base font-black text-gray-900 tracking-tight">Enable Operations Alerts</h2>
+              <p className="text-xs text-gray-500 leading-snug">
+                Receive instant alerts for shift handovers, team comments, deliveries, and safe float updates.
+              </p>
+            </div>
+            <div className="space-y-2 pt-1">
+              <button
+                type="button"
+                onClick={handleEnablePush}
+                className="w-full py-2.5 bg-black hover:bg-neutral-800 text-white rounded-xl text-xs font-bold transition shadow-sm active:scale-95"
+              >
+                Allow Notifications
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  localStorage.setItem('wst_push_prompted', 'true');
+                  setShowFirstOpenPushModal(false);
+                }}
+                className="w-full py-2 text-xs font-semibold text-gray-400 hover:text-gray-700 transition"
+              >
+                Not Now
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 5. FLOATING AI TRIGGER & CHAT DRAWER */}
       <OpsFloatingTrigger onTrigger={() => setChatOpen(true)} />
       <OpsChatDrawer isOpen={chatOpen} onClose={() => setChatOpen(false)} />
