@@ -356,7 +356,7 @@ export default function App() {
     setActiveModule('hub');
   };
 
-  // Auth Screen
+  // Auth Keypad Screen
   if (!currentUser) {
     return (
       <div className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-100 justify-between px-8 pt-[max(2.5rem,env(safe-area-inset-top))] pb-[max(2rem,env(safe-area-inset-bottom))] select-none">
@@ -441,7 +441,7 @@ export default function App() {
     );
   }
 
-  // Module Router
+  // Active Module Views
   if (activeModule === 'notifications') {
     return (
       <NotificationCenterApp
@@ -515,6 +515,18 @@ export default function App() {
     );
   }
 
+  if (activeModule === 'prep') {
+    return (
+      <div {...swipeHandlers} className="h-screen w-full">
+        <PrepCalculatorApp
+          currentUser={currentUser}
+          onBackToHub={() => setActiveModule('hub')}
+          onLogout={handleLogout}
+        />
+      </div>
+    );
+  }
+
   if (activeModule === 'wastage') {
     return (
       <div {...swipeHandlers} className="h-screen w-full">
@@ -531,18 +543,6 @@ export default function App() {
     return (
       <div {...swipeHandlers} className="h-screen w-full">
         <CatalogManagerApp
-          currentUser={currentUser}
-          onBackToHub={() => setActiveModule('hub')}
-          onLogout={handleLogout}
-        />
-      </div>
-    );
-  }
-
-  if (activeModule === 'prep') {
-    return (
-      <div {...swipeHandlers} className="h-screen w-full">
-        <PrepCalculatorApp
           currentUser={currentUser}
           onBackToHub={() => setActiveModule('hub')}
           onLogout={handleLogout}
@@ -584,7 +584,7 @@ export default function App() {
             )}
           </button>
 
-          {/* Notifications Dropdown */}
+          {/* Quick Notifications Dropdown */}
           {showNotifications && (
             <div className="absolute right-0 mt-2 w-80 bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl border border-gray-100 p-3 z-50 animate-in fade-in slide-in-from-top-2 duration-150">
               <div className="flex items-center justify-between pb-2 border-b border-gray-100 px-1">
@@ -678,9 +678,9 @@ export default function App() {
               </button>
             </div>
             
-            {/* Scrollable Tools Carousel Row */}
+            {/* Scrollable Tools Carousel Row (Prep & Batches Promoted to Spot #3) */}
             <div className="flex items-start justify-start gap-4 overflow-x-auto no-scrollbar py-1">
-              {/* Diary / Handover */}
+              {/* Diary */}
               <div
                 onClick={() => setActiveModule('handover')}
                 className="flex flex-col items-center space-y-2 cursor-pointer flex-shrink-0 group active:scale-95 transition"
@@ -703,6 +703,19 @@ export default function App() {
                 </div>
                 <span className="text-xs font-bold text-neutral-900 text-center tracking-tight leading-tight max-w-[70px]">
                   Stock &amp; Deliveries
+                </span>
+              </div>
+
+              {/* Prep & Batches (PROMOTED FOR IMMEDIATE VISIBILITY) */}
+              <div
+                onClick={() => setActiveModule('prep')}
+                className="flex flex-col items-center space-y-2 cursor-pointer flex-shrink-0 group active:scale-95 transition"
+              >
+                <div className="w-[66px] h-[66px] rounded-2xl bg-[#F3E5F5] shadow-sm flex items-center justify-center text-neutral-900 border border-purple-200">
+                  <FlaskConical className="w-7 h-7 stroke-[2.2] text-purple-700" />
+                </div>
+                <span className="text-xs font-bold text-neutral-900 text-center tracking-tight leading-tight max-w-[70px]">
+                  Prep &amp; Batches
                 </span>
               </div>
 
@@ -732,20 +745,7 @@ export default function App() {
                 </span>
               </div>
 
-              {/* Prep & Batches */}
-              <div
-                onClick={() => setActiveModule('prep')}
-                className="flex flex-col items-center space-y-2 cursor-pointer flex-shrink-0 group active:scale-95 transition"
-              >
-                <div className="w-[66px] h-[66px] rounded-2xl bg-[#F3E5F5] shadow-sm flex items-center justify-center text-neutral-900">
-                  <FlaskConical className="w-7 h-7 stroke-[2.2] text-purple-700" />
-                </div>
-                <span className="text-xs font-bold text-neutral-900 text-center tracking-tight leading-tight max-w-[70px]">
-                  Prep &amp; Batches
-                </span>
-              </div>
-
-              {/* Spillage & Wastage */}
+              {/* Spillage & Waste */}
               <div
                 onClick={() => setActiveModule('wastage')}
                 className="flex flex-col items-center space-y-2 cursor-pointer flex-shrink-0 group active:scale-95 transition"
@@ -803,6 +803,31 @@ export default function App() {
           <div className="space-y-3">
             <h2 className="text-lg font-black tracking-tight text-neutral-900">Quick Links</h2>
             <div className="flex gap-4 overflow-x-auto no-scrollbar pb-2">
+              {/* Prep Quick Link Card */}
+              <div
+                onClick={() => setActiveModule('prep')}
+                className="w-[220px] h-[190px] rounded-3xl bg-[#FBF7FD] border border-purple-200 p-5 flex flex-col justify-between flex-shrink-0 cursor-pointer active:scale-[0.98] transition hover:shadow-sm"
+              >
+                <div>
+                  <span className="text-[10px] font-black tracking-widest uppercase text-purple-600 block mb-1">
+                    Kitchen &amp; Bar
+                  </span>
+                  <h3 className="text-base font-extrabold text-neutral-900 leading-snug">
+                    Daily Prep Production
+                  </h3>
+                </div>
+                <div className="space-y-1">
+                  <p className="text-xs text-neutral-500">
+                    Station audits, recipe scaling &amp; produce picklists.
+                  </p>
+                  <div className="pt-3 flex items-center text-xs font-bold text-neutral-900 gap-1">
+                    <FlaskConical className="w-4 h-4 text-purple-600" />
+                    <span>Open Calculator</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Handover Card */}
               <div
                 onClick={() => setActiveModule('handover')}
                 className="w-[220px] h-[190px] rounded-3xl bg-[#FFF0F2] border border-[#FFD9DF] p-5 flex flex-col justify-between flex-shrink-0 cursor-pointer active:scale-[0.98] transition hover:shadow-sm"
@@ -835,30 +860,7 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Prep & Batches Quick Card */}
-              <div
-                onClick={() => setActiveModule('prep')}
-                className="w-[220px] h-[190px] rounded-3xl bg-[#FBF7FD] border border-purple-200 p-5 flex flex-col justify-between flex-shrink-0 cursor-pointer active:scale-[0.98] transition hover:shadow-sm"
-              >
-                <div>
-                  <span className="text-[10px] font-black tracking-widest uppercase text-purple-600 block mb-1">
-                    Kitchen &amp; Bar
-                  </span>
-                  <h3 className="text-base font-extrabold text-neutral-900 leading-snug">
-                    Daily Prep Production
-                  </h3>
-                </div>
-                <div className="space-y-1">
-                  <p className="text-xs text-neutral-500">
-                    Station audits, recipe scaling &amp; produce picklist.
-                  </p>
-                  <div className="pt-3 flex items-center text-xs font-bold text-neutral-900 gap-1">
-                    <FlaskConical className="w-4 h-4 text-purple-600" />
-                    <span>Open Calculator</span>
-                  </div>
-                </div>
-              </div>
-
+              {/* Petty Cash Card */}
               <div
                 onClick={() => setActiveModule('petty')}
                 className="w-[220px] h-[190px] rounded-3xl bg-white border border-neutral-200/90 p-5 flex flex-col justify-between flex-shrink-0 cursor-pointer active:scale-[0.98] transition hover:shadow-sm"
@@ -882,6 +884,7 @@ export default function App() {
                 </div>
               </div>
 
+              {/* Orders Card */}
               <div
                 onClick={() => setActiveModule('orders')}
                 className="w-[220px] h-[190px] rounded-3xl bg-[#F4F5F7] border border-neutral-200 p-5 flex flex-col justify-between flex-shrink-0 cursor-pointer active:scale-[0.98] transition hover:shadow-sm"
@@ -905,6 +908,7 @@ export default function App() {
                 </div>
               </div>
 
+              {/* Spillage Card */}
               <div
                 onClick={() => setActiveModule('wastage')}
                 className="w-[220px] h-[190px] rounded-3xl bg-[#FFF5F5] border border-rose-200 p-5 flex flex-col justify-between flex-shrink-0 cursor-pointer active:scale-[0.98] transition hover:shadow-sm"
