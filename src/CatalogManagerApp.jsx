@@ -7,15 +7,14 @@ import {
   Save,
   X,
   Package,
-  RefreshCw,
-  SlidersHorizontal
+  RefreshCw
 } from 'lucide-react';
 import { useTwoFingerSwipe } from './useTwoFingerSwipe';
 import { supabase, DEFAULT_VENUE_ID } from './lib/db';
 
 const CATEGORIES = [
   { id: 'all', label: 'All Categories' },
-  { id: 'draught', label: 'Draught Kegs' },
+  { id: 'draught', label: 'Draught Beer' },
   { id: 'spirits', label: 'Spirits & Liqueurs' },
   { id: 'packaged_beer', label: 'Packaged Beer / Cans' },
   { id: 'wine', label: 'Wine & Fizz' },
@@ -78,8 +77,19 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
       const id = String(it.id || '').toLowerCase();
       const q = searchQuery.toLowerCase();
       const matchesSearch = !q || name.includes(q) || id.includes(q);
+      
       const itemCat = String(it.category || '').toLowerCase();
-      const matchesCat = selectedCategory === 'all' || itemCat === selectedCategory;
+      let matchesCat = selectedCategory === 'all';
+      if (!matchesCat) {
+        if (selectedCategory === 'draught') {
+          matchesCat = itemCat.includes('draught') || itemCat.includes('keg');
+        } else if (selectedCategory === 'packaged_beer') {
+          matchesCat = (itemCat.includes('packaged') || itemCat.includes('beer')) && !itemCat.includes('draught');
+        } else {
+          matchesCat = itemCat === selectedCategory;
+        }
+      }
+
       return matchesSearch && matchesCat;
     });
   }, [items, searchQuery, selectedCategory]);
@@ -89,14 +99,14 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
       id: `SKU-${Date.now().toString().slice(-4)}`,
       venue_id: DEFAULT_VENUE_ID,
       name: '',
-      category: 'spirits',
+      category: 'draught',
       supplier: 'Tennents',
-      area: 'Main Bar',
-      count_unit: 'bottle',
-      package_size_base: 700,
+      area: 'Cellar',
+      count_unit: 'keg',
+      package_size_base: 50000,
       base_uom: 'ml',
-      order_unit: 'case',
-      units_per_order_case: 6,
+      order_unit: 'keg',
+      units_per_order_case: 1,
       cost_price_ex_vat: 0.00,
       last_cost_ex_vat: 0.00,
       par: 1,
@@ -124,11 +134,14 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
     setSavingItem(true);
     setStatusMsg(null);
 
+    let cat = (editingItem.category || 'spirits').toLowerCase();
+    if (cat.includes('keg')) cat = 'draught';
+
     const payload = {
       id: editingItem.id.trim(),
       venue_id: DEFAULT_VENUE_ID,
       name: editingItem.name.trim(),
-      category: editingItem.category || 'spirits',
+      category: cat,
       supplier: editingItem.supplier?.trim() || 'General',
       area: editingItem.area?.trim() || 'Main Bar',
       count_unit: editingItem.count_unit?.trim() || 'unit',
@@ -149,14 +162,26 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
         .from('catalog_items')
         .upsert(payload, { onConflict: 'id' });
 
-      if (error) throw error;
+      if (error) {
+        // Fallback: If menu_prices column has not been added in Supabase yet, retry without it
+        if (error.message && error.message.includes('menu_prices')) {
+          const fallbackPayload = { ...payload };
+          delete fallbackPayload.menu_prices;
+          const { error: retryError } = await supabase
+            .from('catalog_items')
+            .upsert(fallbackPayload, { onConflict: 'id' });
+          if (retryError) throw retryError;
+        } else {
+          throw error;
+        }
+      }
 
       setStatusMsg({ type: 'success', text: `Saved ${payload.name} (${payload.id})` });
       setEditingItem(null);
       await fetchMasterCatalog();
     } catch (err) {
       console.error("Save error:", err);
-      setStatusMsg({ type: 'error', text: 'Error saving product configuration.' });
+      setStatusMsg({ type: 'error', text: err.message || 'Error saving product configuration.' });
     } finally {
       setSavingItem(false);
     }
@@ -363,7 +388,7 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
                   <div>
                     <label className="text-[9px] font-bold text-gray-500 uppercase block mb-0.5">Category</label>
                     <select
-                      value={editingItem.category || 'spirits'}
+                      value={activeCategoryType.includes('keg') ? 'draught' : activeCategoryType}
                       onChange={(e) => setEditingItem({ ...editingItem, category: e.target.value })}
                       className="w-full bg-[#EDEDED] py-1.5 px-2 rounded-xl text-xs font-medium text-gray-800 focus:outline-none"
                     >
@@ -411,9 +436,9 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
                     <label className="text-[9px] font-bold text-gray-600 uppercase block mb-0.5">Count Unit</label>
                     <input
                       type="text"
-                      value={editingItem.count_unit || editingItem.unit || 'bottle'}
+                      value={editingItem.count_unit || editingItem.unit || 'unit'}
                       onChange={(e) => setEditingItem({ ...editingItem, count_unit: e.target.value })}
-                      placeholder="bottle / keg"
+                      placeholder="keg / bottle"
                       className="w-full bg-white border border-gray-300 py-1 px-2 rounded-lg text-xs"
                     />
                   </div>
@@ -433,9 +458,9 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
                     <input
                       type="number"
                       step="any"
-                      value={editingItem.package_size_base ?? 700}
+                      value={editingItem.package_size_base ?? (activeCategoryType === 'draught' ? 50000 : 700)}
                       onChange={(e) => setEditingItem({ ...editingItem, package_size_base: e.target.value })}
-                      placeholder="700 or 50000"
+                      placeholder="50000 or 700"
                       className="w-full bg-white border border-gray-300 py-1 px-2 rounded-lg font-mono text-xs text-center font-bold"
                     />
                   </div>
@@ -444,9 +469,9 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
                     <label className="text-[9px] font-bold text-gray-600 uppercase block mb-0.5">Order Unit Format</label>
                     <input
                       type="text"
-                      value={editingItem.order_unit || 'case'}
+                      value={editingItem.order_unit || (activeCategoryType === 'draught' ? 'keg' : 'case')}
                       onChange={(e) => setEditingItem({ ...editingItem, order_unit: e.target.value })}
-                      placeholder="case / keg"
+                      placeholder="keg / case"
                       className="w-full bg-white border border-gray-300 py-1 px-2 rounded-lg text-xs"
                     />
                   </div>
@@ -454,9 +479,9 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
                     <label className="text-[9px] font-bold text-gray-600 uppercase block mb-0.5">Units per Order Case</label>
                     <input
                       type="number"
-                      value={editingItem.units_per_order_case ?? 6}
+                      value={editingItem.units_per_order_case ?? 1}
                       onChange={(e) => setEditingItem({ ...editingItem, units_per_order_case: e.target.value })}
-                      placeholder="6"
+                      placeholder="1"
                       className="w-full bg-white border border-gray-300 py-1 px-2 rounded-lg font-mono text-xs text-center font-bold"
                     />
                   </div>
@@ -510,7 +535,6 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
                   </div>
                 </div>
 
-                {/* Buffer Slider with Human-Friendly Explanation */}
                 <div className="space-y-1.5 pt-2 bg-gray-50 p-3 rounded-2xl border border-gray-200/60">
                   <div className="flex items-center justify-between">
                     <label className="text-[10px] font-bold text-gray-800 uppercase tracking-wider block">
@@ -543,7 +567,6 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
                   4. Menu Dispense Prices (£ Inc VAT)
                 </span>
 
-                {/* Category-aware dispense fields */}
                 {activeCategoryType === 'draught' && (
                   <div className="grid grid-cols-2 gap-2 bg-[#F9FAFB] p-2.5 rounded-2xl border border-gray-200/80">
                     <div>
