@@ -2,6 +2,9 @@ const ONESIGNAL_APP_ID = "93cb91c7-7f6c-4f75-a66b-40a5fb5375f9";
 const ONESIGNAL_REST_KEY = import.meta.env.VITE_ONESIGNAL_REST_KEY || "";
 const APP_LAUNCH_URL = typeof window !== 'undefined' ? window.location.origin : 'https://silly-cendol-6613d3.netlify.app';
 
+// Standard venue staff aliases to ensure delivery even if segment sync lags
+const VENUE_STAFF_ALIASES = ["Ross", "Josh", "Matt", "Luca", "Grant", "Duty Manager"];
+
 export async function sendPushNotification(title, message, targetManager = null, customData = {}) {
   try {
     if (!ONESIGNAL_REST_KEY) {
@@ -18,22 +21,24 @@ export async function sendPushNotification(title, message, targetManager = null,
 
     const payload = {
       app_id: ONESIGNAL_APP_ID,
-      headings: { en: title },
-      contents: { en: message },
+      headings: { en: String(title || "West Side Tavern") },
+      contents: { en: String(message || "New operations update.") },
       url: targetUrl,
       data: customData,
     };
 
     if (targetManager) {
-      // 1. Direct 1-to-1 alert (Comment / Reaction)
+      // 1. Direct targeted user (Comment / Reaction)
       const cleanTarget = String(targetManager).split("(")[0].trim();
       payload.include_aliases = { external_id: [cleanTarget] };
       payload.include_external_user_ids = [cleanTarget];
       payload.target_channel = "push";
     } else {
-      // 2. Broadcast alert (New Handover, Delivery Check-In, Petty Cash, Orders)
-      // We pass 'Total Subscriptions' which is the default active segment in OneSignal
-      payload.included_segments = ["Total Subscriptions"];
+      // 2. Broadcast alerts (Deliveries, New Diaries, Petty Cash, Orders)
+      // Broadcast to both standard active segments and direct staff aliases
+      payload.included_segments = ["Total Subscriptions", "Subscribed Users"];
+      payload.include_aliases = { external_id: VENUE_STAFF_ALIASES };
+      payload.target_channel = "push";
     }
 
     const res = await fetch("https://onesignal.com/api/v1/notifications", {

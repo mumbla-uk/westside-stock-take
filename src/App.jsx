@@ -7,13 +7,13 @@ import Settings from './Settings';
 import PreShiftCard from './PreShiftCard';
 import OpsChatDrawer from './OpsChatDrawer';
 import OpsFloatingTrigger from './OpsFloatingTrigger';
-import { 
-  BookOpen, 
-  Coins, 
-  Truck, 
-  ClipboardList, 
-  LogOut, 
-  Delete, 
+import {
+  BookOpen,
+  Coins,
+  Truck,
+  ClipboardList,
+  LogOut,
+  Delete,
   Bell,
   SlidersHorizontal,
   ChevronRight,
@@ -25,25 +25,22 @@ import { sendPushNotification } from './lib/notifications';
 
 function AppLogo({ className = "w-8 h-8", fallbackTextClass = "font-serif text-2xl font-bold tracking-tighter" }) {
   const [imgError, setImgError] = useState(false);
-
   if (!imgError) {
     return (
-      <img 
-        src="/img/icon.png" 
-        alt="West Side Tavern" 
-        className={`${className} object-contain`} 
+      <img
+        src="/img/icon.png"
+        alt="West Side Tavern"
+        className={`${className} object-contain`}
         onError={() => setImgError(true)}
       />
     );
   }
-
   return <span className={fallbackTextClass}>WST</span>;
 }
 
 export default function App() {
   const [activeModule, setActiveModule] = useState('hub');
   const [deepLinkData, setDeepLinkData] = useState(null);
-
   const [currentUser, setCurrentUser] = useState(() => {
     try {
       const cached = localStorage.getItem('wst_auth_user');
@@ -57,14 +54,11 @@ export default function App() {
   const [authError, setAuthError] = useState(false);
   const pinRef = useRef('');
   const isCheckingRef = useRef(false);
-
   const [pushEnabled, setPushEnabled] = useState(false);
   const [showFirstOpenPushModal, setShowFirstOpenPushModal] = useState(false);
-
   const [showNotifications, setShowNotifications] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [latestHandover, setLatestHandover] = useState(null);
-
   const [notificationsList, setNotificationsList] = useState([
     { id: 1, title: 'Shift Handover Submitted', time: '1h ago', desc: 'Closing figures entered by Duty Manager', unread: true, module: 'handover' },
     { id: 2, title: 'Stock Delivery Logged', time: '3h ago', desc: 'Tennents intake verified with photo d/n', unread: false, module: 'goods' },
@@ -96,7 +90,6 @@ export default function App() {
           .eq('venue_id', DEFAULT_VENUE_ID)
           .order('created_at', { ascending: false })
           .limit(1);
-
         if (!error && data && data.length > 0) {
           setLatestHandover(data[0]);
         }
@@ -112,7 +105,6 @@ export default function App() {
       const params = new URLSearchParams(window.location.search);
       const mod = params.get('module');
       const entryId = params.get('entryId');
-
       if (mod) {
         setActiveModule(mod);
         setDeepLinkData({ module: mod, entryId: entryId || '' });
@@ -123,34 +115,69 @@ export default function App() {
     }
   }, []);
 
+  // Sync user with OneSignal on authentication
   useEffect(() => {
     if (!currentUser || !window.OneSignalDeferred) return;
-
     const hasPrompted = localStorage.getItem('wst_push_prompted');
+
     window.OneSignalDeferred.push(async function(OneSignal) {
+      const cleanName = currentUser.name.trim();
       if (typeof OneSignal.login === 'function') {
-        await OneSignal.login(currentUser.name.trim());
+        await OneSignal.login(cleanName);
+      }
+      if (OneSignal.User?.addAlias) {
+        await OneSignal.User.addAlias("external_id", cleanName);
       }
       if (OneSignal.User?.addTag) {
         await OneSignal.User.addTag("role", currentUser.role);
       }
-
       const isOptedIn = await OneSignal.User?.PushSubscription?.optedIn;
       setPushEnabled(Boolean(isOptedIn));
-
       if (!isOptedIn && !hasPrompted) {
         setShowFirstOpenPushModal(true);
       }
     });
   }, [currentUser]);
 
-  const triggerPushNotification = async ({ title, message, targetManager = null }) => {
-    sendPushNotification(title, message, targetManager, { module: activeModule });
+  // Robust dispatcher supporting both object and positional args
+  const triggerPushNotification = async (arg1, arg2, arg3) => {
+    if (typeof arg1 === 'object' && arg1 !== null) {
+      const { title, message, targetManager = null } = arg1;
+      await sendPushNotification(title, message, targetManager, { module: activeModule });
+    } else {
+      await sendPushNotification(arg1, arg2, arg3, { module: activeModule });
+    }
+  };
+
+  const handleEnablePushFromModal = async () => {
+    localStorage.setItem('wst_push_prompted', 'true');
+    setShowFirstOpenPushModal(false);
+    if (!window.OneSignalDeferred) return;
+
+    window.OneSignalDeferred.push(async function(OneSignal) {
+      try {
+        await OneSignal.User.PushSubscription.optIn();
+        if (currentUser) {
+          const cleanName = currentUser.name.trim();
+          if (typeof OneSignal.login === 'function') {
+            await OneSignal.login(cleanName);
+          }
+          if (OneSignal.User?.addAlias) {
+            await OneSignal.User.addAlias("external_id", cleanName);
+          }
+          if (OneSignal.User?.addTag) {
+            await OneSignal.User.addTag("role", currentUser.role);
+          }
+        }
+        setPushEnabled(true);
+      } catch (err) {
+        console.warn("Push permission error or denied:", err);
+      }
+    });
   };
 
   const verifyPin = async (enteredPin) => {
     isCheckingRef.current = true;
-
     if (enteredPin === '1234') {
       const fallbackUser = { name: 'Ross', role: 'General Manager' };
       setCurrentUser(fallbackUser);
@@ -161,13 +188,11 @@ export default function App() {
       isCheckingRef.current = false;
       return;
     }
-
     try {
       const { data, error } = await supabase.rpc('verify_staff_pin', {
         entered_pin: enteredPin,
         target_venue: DEFAULT_VENUE_ID
       });
-
       if (!error && data && data.length > 0) {
         const verifiedUser = data[0];
         setCurrentUser(verifiedUser);
@@ -181,7 +206,6 @@ export default function App() {
     } catch (err) {
       console.warn("RPC auth check failed, verifying fallback cache:", err);
     }
-
     setAuthError(true);
     setTimeout(() => {
       pinRef.current = '';
@@ -194,11 +218,9 @@ export default function App() {
   const handleKeypadPress = (val) => {
     if (isCheckingRef.current || authError) return;
     if (pinRef.current.length >= 4) return;
-
     const nextPin = pinRef.current + String(val);
     pinRef.current = nextPin;
     setPinDigits(nextPin);
-
     if (nextPin.length === 4) {
       verifyPin(nextPin);
     }
@@ -239,12 +261,10 @@ export default function App() {
             <p className="text-xs text-gray-400 font-serif italic mt-0.5">Manager Operations Portal</p>
           </div>
         </div>
-
         <div className="py-2 text-center space-y-3">
           <p className="text-[11px] font-bold uppercase tracking-widest text-gray-400">
             Enter 4-Digit Passcode
           </p>
-          
           <div className={`flex justify-center items-center space-x-4 ${authError ? 'animate-bounce' : ''}`}>
             {[0, 1, 2, 3].map((idx) => {
               const isFilled = pinDigits.length > idx;
@@ -252,7 +272,7 @@ export default function App() {
                 <div
                   key={idx}
                   className={`w-3.5 h-3.5 rounded-full transition-all duration-150 ${
-                    authError 
+                    authError
                       ? 'bg-red-500 scale-110'
                       : isFilled
                       ? 'bg-black scale-110'
@@ -262,14 +282,12 @@ export default function App() {
               );
             })}
           </div>
-
           <div className="h-4">
             {authError && (
               <p className="text-[11px] text-red-600 font-bold">Incorrect PIN. Try again.</p>
             )}
           </div>
         </div>
-
         <div className="w-full max-w-xs mx-auto pb-4">
           <div className="grid grid-cols-3 gap-y-3 gap-x-6 text-center">
             {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((num) => (
@@ -282,7 +300,6 @@ export default function App() {
                 {num}
               </button>
             ))}
-
             <button
               type="button"
               onClick={() => {
@@ -295,7 +312,6 @@ export default function App() {
             >
               Clear
             </button>
-
             <button
               type="button"
               onClick={() => handleKeypadPress('0')}
@@ -303,7 +319,6 @@ export default function App() {
             >
               0
             </button>
-
             <button
               type="button"
               onClick={handleBackspace}
@@ -335,7 +350,6 @@ export default function App() {
       </div>
     );
   }
-
   if (activeModule === 'petty') {
     return (
       <div {...swipeHandlers} className="h-screen w-full">
@@ -348,7 +362,6 @@ export default function App() {
       </div>
     );
   }
-
   if (activeModule === 'goods') {
     return (
       <div {...swipeHandlers} className="h-screen w-full">
@@ -361,7 +374,6 @@ export default function App() {
       </div>
     );
   }
-
   if (activeModule === 'orders') {
     return (
       <div {...swipeHandlers} className="h-screen w-full">
@@ -374,7 +386,6 @@ export default function App() {
       </div>
     );
   }
-
   if (activeModule === 'settings') {
     return (
       <div {...swipeHandlers} className="h-screen w-full">
@@ -391,15 +402,12 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen w-full max-w-md mx-auto bg-[#101b34] text-gray-900 font-sans antialiased border-x border-gray-100 overflow-hidden relative select-none">
-      
-      {/* 1. TOP NAV BAR (White Background) */}
       <header className="flex items-center justify-between px-6 pt-[max(1.2rem,env(safe-area-inset-top))] pb-3 flex-shrink-0 bg-white z-30">
         <div className="flex items-center">
           <AppLogo className="w-8 h-8 rounded-lg" fallbackTextClass="font-serif text-2xl font-bold tracking-tight text-neutral-900" />
         </div>
-
         <div className="relative">
-          <button 
+          <button
             onClick={() => setShowNotifications(prev => !prev)}
             className="w-10 h-10 rounded-full flex items-center justify-center text-gray-700 hover:bg-gray-100 active:scale-95 transition relative"
             aria-label="Notifications"
@@ -409,7 +417,6 @@ export default function App() {
               <span className="absolute top-2 right-2 w-2 h-2 rounded-full bg-red-500 ring-2 ring-white animate-pulse" />
             )}
           </button>
-
           {showNotifications && (
             <div className="absolute right-0 mt-2 w-80 bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl border border-gray-100 p-3 z-50 animate-in fade-in slide-in-from-top-2 duration-150">
               <div className="flex items-center justify-between pb-2 border-b border-gray-100 px-1">
@@ -418,7 +425,7 @@ export default function App() {
               </div>
               <div className="divide-y divide-gray-50 max-h-64 overflow-y-auto mt-1">
                 {notificationsList.map((item) => (
-                  <div 
+                  <div
                     key={item.id}
                     onClick={() => {
                       setShowNotifications(false);
@@ -437,7 +444,7 @@ export default function App() {
                   </div>
                 ))}
               </div>
-              <button 
+              <button
                 onClick={() => {
                   setNotificationsList(list => list.map(n => ({ ...n, unread: false })));
                   setShowNotifications(false);
@@ -451,7 +458,6 @@ export default function App() {
         </div>
       </header>
 
-      {/* 2. GREETING (White Background) */}
       <div className="bg-white px-6 pt-1 pb-4 space-y-0.5 flex-shrink-0">
         <h1 className="text-3xl font-extrabold tracking-tight text-neutral-900">
           {getGreeting()}, {currentUser?.name?.split(' ')[0] || 'Ross'}
@@ -461,34 +467,27 @@ export default function App() {
         </p>
       </div>
 
-      {/* 3. SCROLLABLE CONTENT BODY */}
-      <div 
+      <div
         onClick={() => showNotifications && setShowNotifications(false)}
         className="flex-1 overflow-y-auto no-scrollbar"
       >
-        {/* UPPER NAVY CONTAINER: Hosts the TavernAssistant & Input Bar */}
         <div className="bg-[#101b34] px-6 pt-5 pb-6">
           <PreShiftCard onOpenChat={() => setChatOpen(true)} />
         </div>
 
-        {/* LOWER WHITE CARD LAYER: Starts at Tools with rounded-t-[36px] */}
         <div className="bg-white rounded-t-[36px] px-6 pt-6 pb-24 space-y-6 shadow-md -mt-2">
-          
-          {/* TOOLS */}
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-black tracking-tight text-neutral-900">Tools</h2>
-              <button 
+              <button
                 onClick={() => setActiveModule('settings')}
                 className="text-xs font-semibold text-neutral-400 hover:text-neutral-900 transition"
               >
                 See All
               </button>
             </div>
-
             <div className="flex items-start justify-between gap-3 overflow-x-auto no-scrollbar py-1">
-              {/* Tool 1: Diary */}
-              <div 
+              <div
                 onClick={() => setActiveModule('handover')}
                 className="flex flex-col items-center space-y-2 cursor-pointer flex-shrink-0 group active:scale-95 transition"
               >
@@ -500,8 +499,7 @@ export default function App() {
                 </span>
               </div>
 
-              {/* Tool 2: Stock & Deliveries */}
-              <div 
+              <div
                 onClick={() => setActiveModule('goods')}
                 className="flex flex-col items-center space-y-2 cursor-pointer flex-shrink-0 group active:scale-95 transition"
               >
@@ -513,8 +511,7 @@ export default function App() {
                 </span>
               </div>
 
-              {/* Tool 3: Cash Up */}
-              <div 
+              <div
                 onClick={() => setActiveModule('petty')}
                 className="flex flex-col items-center space-y-2 cursor-pointer flex-shrink-0 group active:scale-95 transition"
               >
@@ -526,8 +523,7 @@ export default function App() {
                 </span>
               </div>
 
-              {/* Tool 4: Orders */}
-              <div 
+              <div
                 onClick={() => setActiveModule('orders')}
                 className="flex flex-col items-center space-y-2 cursor-pointer flex-shrink-0 group active:scale-95 transition"
               >
@@ -539,8 +535,7 @@ export default function App() {
                 </span>
               </div>
 
-              {/* Tool 5: Settings */}
-              <div 
+              <div
                 onClick={() => setActiveModule('settings')}
                 className="flex flex-col items-center space-y-2 cursor-pointer flex-shrink-0 group active:scale-95 transition"
               >
@@ -554,13 +549,10 @@ export default function App() {
             </div>
           </div>
 
-          {/* QUICK LINKS */}
           <div className="space-y-3">
             <h2 className="text-lg font-black tracking-tight text-neutral-900">Quick Links</h2>
-
             <div className="flex gap-4 overflow-x-auto no-scrollbar pb-2">
-              {/* Card 1: Handover */}
-              <div 
+              <div
                 onClick={() => setActiveModule('handover')}
                 className="w-[220px] h-[190px] rounded-3xl bg-[#FFF0F2] border border-[#FFD9DF] p-5 flex flex-col justify-between flex-shrink-0 cursor-pointer active:scale-[0.98] transition hover:shadow-sm"
               >
@@ -572,7 +564,6 @@ export default function App() {
                     Most Recent Handover
                   </h3>
                 </div>
-
                 <div className="space-y-1">
                   {latestHandover ? (
                     <>
@@ -593,8 +584,7 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Card 2: Petty Cash */}
-              <div 
+              <div
                 onClick={() => setActiveModule('petty')}
                 className="w-[220px] h-[190px] rounded-3xl bg-white border border-neutral-200/90 p-5 flex flex-col justify-between flex-shrink-0 cursor-pointer active:scale-[0.98] transition hover:shadow-sm"
               >
@@ -606,7 +596,6 @@ export default function App() {
                     Add Petty Cash Report
                   </h3>
                 </div>
-
                 <div className="space-y-1">
                   <p className="text-xs text-neutral-500">
                     Standard float: <strong className="text-neutral-900">£1,200.00</strong>
@@ -618,8 +607,7 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Card 3: Speed Stocktake */}
-              <div 
+              <div
                 onClick={() => setActiveModule('orders')}
                 className="w-[220px] h-[190px] rounded-3xl bg-[#F4F5F7] border border-neutral-200 p-5 flex flex-col justify-between flex-shrink-0 cursor-pointer active:scale-[0.98] transition hover:shadow-sm"
               >
@@ -631,7 +619,6 @@ export default function App() {
                     Start Speed Stocktake
                   </h3>
                 </div>
-
                 <div className="space-y-1">
                   <p className="text-xs text-neutral-500">
                     Tactile bottles &amp; par-level ordering lists.
@@ -647,7 +634,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* 4. BOTTOM PROFILE FOOTER */}
       <footer className="absolute bottom-0 inset-x-0 bg-white/90 backdrop-blur-md border-t border-gray-100 px-6 py-3 flex items-center justify-between pb-[max(0.8rem,env(safe-area-inset-bottom))] z-20">
         <div className="flex items-center space-x-2">
           <div className="w-2 h-2 rounded-full bg-emerald-500 ring-2 ring-emerald-100" />
@@ -658,8 +644,7 @@ export default function App() {
             ({currentUser?.role})
           </span>
         </div>
-
-        <button 
+        <button
           onClick={handleLogout}
           className="flex items-center space-x-1.5 text-xs font-semibold text-gray-500 hover:text-red-600 transition p-1"
           title="Log Out"
@@ -669,7 +654,10 @@ export default function App() {
         </button>
       </footer>
 
-{/* First-Open Push Permission Modal */}
+      <OpsFloatingTrigger onTrigger={() => setChatOpen(true)} />
+      <OpsChatDrawer isOpen={chatOpen} onClose={() => setChatOpen(false)} />
+
+      {/* iOS Push Notification Opt-in Modal */}
       {showFirstOpenPushModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white w-full max-w-xs rounded-3xl overflow-hidden shadow-2xl border border-gray-200 p-5 space-y-3.5 animate-in fade-in zoom-in-95 duration-200">
@@ -679,13 +667,13 @@ export default function App() {
             <div className="text-center space-y-1">
               <h2 className="text-base font-black text-gray-900 tracking-tight">Enable Operations Alerts</h2>
               <p className="text-xs text-gray-500 leading-snug">
-                Receive instant alerts for shift handovers, team comments, deliveries, and safe float updates.
+                Receive instant alerts for shift handovers, deliveries, safe floats, and team notes.
               </p>
             </div>
             <div className="space-y-2 pt-1">
               <button
                 type="button"
-                onClick={handleEnablePush}
+                onClick={handleEnablePushFromModal}
                 className="w-full py-2.5 bg-black hover:bg-neutral-800 text-white rounded-xl text-xs font-bold transition shadow-sm active:scale-95"
               >
                 Allow Notifications
@@ -704,10 +692,6 @@ export default function App() {
           </div>
         </div>
       )}
-
-      {/* 5. FLOATING AI TRIGGER & CHAT DRAWER */}
-      <OpsFloatingTrigger onTrigger={() => setChatOpen(true)} />
-      <OpsChatDrawer isOpen={chatOpen} onClose={() => setChatOpen(false)} />
     </div>
   );
 }
