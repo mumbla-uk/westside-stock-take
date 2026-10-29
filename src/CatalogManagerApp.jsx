@@ -8,8 +8,7 @@ import {
   X,
   Package,
   RefreshCw,
-  SlidersHorizontal,
-  Sliders
+  SlidersHorizontal
 } from 'lucide-react';
 import { useTwoFingerSwipe } from './useTwoFingerSwipe';
 import { supabase, DEFAULT_VENUE_ID } from './lib/db';
@@ -23,6 +22,13 @@ const CATEGORIES = [
   { id: 'prep', label: 'Syrups & Prep' },
   { id: 'minerals', label: 'Minerals & Softs' },
 ];
+
+function getBufferDescription(rate) {
+  const r = Number(rate) || 5;
+  if (r <= 3) return `Order Early: Triggers when 0.${r} is poured (Keeps stock high)`;
+  if (r === 5) return `Balanced Default: Triggers once 0.5+ of working unit is poured`;
+  return `Order Late: Triggers only when 0.${r} of unit is gone (Keeps stock lean)`;
+}
 
 export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }) {
   const [items, setItems] = useState([]);
@@ -51,11 +57,7 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
         .order('name');
 
       if (error) throw error;
-      if (Array.isArray(data)) {
-        setItems(data);
-      } else {
-        setItems([]);
-      }
+      setItems(Array.isArray(data) ? data : []);
     } catch (err) {
       console.warn("Could not sync master catalog:", err);
       setStatusMsg({ type: 'error', text: 'Error connecting to database items.' });
@@ -97,12 +99,22 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
       units_per_order_case: 6,
       cost_price_ex_vat: 0.00,
       last_cost_ex_vat: 0.00,
-      vat_rate: 20.0,
       par: 1,
-      buffer_rate: 5, // Default 5 = 50% / 0.5 threshold
+      buffer_rate: 5,
+      menu_prices: {},
       isNew: true
     };
     setEditingItem(newItem);
+  };
+
+  const handlePriceFieldChange = (key, val) => {
+    setEditingItem(prev => ({
+      ...prev,
+      menu_prices: {
+        ...(prev.menu_prices || {}),
+        [key]: val === '' ? '' : Number(val)
+      }
+    }));
   };
 
   const handleSaveItem = async (e) => {
@@ -126,9 +138,9 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
       units_per_order_case: Number(editingItem.units_per_order_case) || 1,
       cost_price_ex_vat: Number(editingItem.cost_price_ex_vat) || 0.00,
       last_cost_ex_vat: Number(editingItem.last_cost_ex_vat || editingItem.cost_price_ex_vat) || 0.00,
-      vat_rate: Number(editingItem.vat_rate) || 20.0,
       par: Number(editingItem.par) || 1,
       buffer_rate: Number(editingItem.buffer_rate ?? 5),
+      menu_prices: editingItem.menu_prices || {},
       updated_at: new Date().toISOString()
     };
 
@@ -163,12 +175,13 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
     }
   };
 
+  const activeCategoryType = (editingItem?.category || 'spirits').toLowerCase();
+
   return (
     <div
       {...swipeHandlers}
       className="flex flex-col h-[100dvh] w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 overflow-hidden relative select-none"
     >
-      {/* Top Header */}
       <header className="flex items-center justify-between px-5 pt-[max(1.5rem,env(safe-area-inset-top))] pb-3 border-b border-gray-100 flex-shrink-0 bg-white z-20 shadow-xs">
         <div className="flex items-center space-x-2">
           {onBackToHub && (
@@ -181,16 +194,12 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
           </div>
           <div>
             <h1 className="font-extrabold text-base tracking-tight text-gray-900 leading-tight">Master Catalog</h1>
-            <span className="text-[10px] text-gray-400 font-mono block">Inventory, Costs &amp; Units</span>
+            <span className="text-[10px] text-gray-400 font-mono block">Inventory, Costs &amp; Menu Pricing</span>
           </div>
         </div>
 
         <div className="flex items-center space-x-1.5">
-          <button
-            onClick={fetchMasterCatalog}
-            className="p-1.5 text-gray-500 hover:text-black rounded-lg transition"
-            title="Refresh"
-          >
+          <button onClick={fetchMasterCatalog} className="p-1.5 text-gray-500 hover:text-black rounded-lg transition" title="Refresh">
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
           </button>
           <button
@@ -203,7 +212,7 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
         </div>
       </header>
 
-      {/* Filter & Search Bar */}
+      {/* Filter / Search Bar */}
       <div className="p-4 border-b border-gray-100 bg-gray-50/70 space-y-2 flex-shrink-0">
         <div className="relative">
           <input
@@ -222,7 +231,6 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
           )}
         </div>
 
-        {/* Categories Pills */}
         <div className="flex items-center space-x-1 overflow-x-auto scrollbar-none pb-0.5">
           {CATEGORIES.map(cat => (
             <button
@@ -248,7 +256,7 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
         </div>
       )}
 
-      {/* Items Ledger */}
+      {/* Items List */}
       <div className="flex-1 overflow-y-auto px-5 divide-y divide-gray-100 pb-24 touch-pan-y overscroll-contain">
         {loading ? (
           <p className="text-center py-16 text-xs text-gray-400 italic">Syncing inventory attributes...</p>
@@ -261,7 +269,7 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
           filteredItems.map(item => (
             <div
               key={item.id}
-              onClick={() => setEditingItem({ ...item })}
+              onClick={() => setEditingItem({ ...item, menu_prices: item.menu_prices || {} })}
               className="py-3 flex items-center justify-between cursor-pointer hover:bg-gray-50/80 transition rounded-lg px-1 group"
             >
               <div className="space-y-0.5 pr-2">
@@ -299,7 +307,7 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
         )}
       </div>
 
-      {/* EDIT DRAWER */}
+      {/* Edit Drawer */}
       {editingItem && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200">
           <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl overflow-hidden shadow-2xl border border-gray-200 flex flex-col max-h-[92vh] animate-in slide-in-from-bottom duration-200">
@@ -322,7 +330,7 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
             </div>
 
             <form onSubmit={handleSaveItem} className="p-5 overflow-y-auto space-y-4 text-xs touch-pan-y overscroll-contain">
-              {/* Section 1 */}
+              {/* Section 1: Identification */}
               <div className="space-y-2">
                 <span className="font-bold uppercase tracking-wider text-[10px] text-gray-400 block">
                   1. Identification &amp; Category
@@ -345,7 +353,7 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
                       required
                       value={editingItem.name}
                       onChange={(e) => setEditingItem({ ...editingItem, name: e.target.value })}
-                      placeholder="e.g. Tanqueray London Dry Gin"
+                      placeholder="e.g. Tennent's Lager"
                       className="w-full bg-[#EDEDED] py-1.5 px-2.5 rounded-xl text-xs font-bold text-gray-900 focus:outline-none"
                     />
                   </div>
@@ -392,7 +400,7 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
                 </div>
               </div>
 
-              {/* Section 2 */}
+              {/* Section 2: Units */}
               <div className="space-y-2 pt-1 border-t border-gray-100">
                 <span className="font-bold uppercase tracking-wider text-[10px] text-gray-400 block">
                   2. Stocktake &amp; Ordering Units
@@ -438,7 +446,7 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
                       type="text"
                       value={editingItem.order_unit || 'case'}
                       onChange={(e) => setEditingItem({ ...editingItem, order_unit: e.target.value })}
-                      placeholder="case / 24pk / keg"
+                      placeholder="case / keg"
                       className="w-full bg-white border border-gray-300 py-1 px-2 rounded-lg text-xs"
                     />
                   </div>
@@ -455,21 +463,21 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
                 </div>
               </div>
 
-              {/* Section 3 */}
+              {/* Section 3: Costs, Buffer & Par Target */}
               <div className="space-y-2 pt-1 border-t border-gray-100">
                 <span className="font-bold uppercase tracking-wider text-[10px] text-gray-400 block">
-                  3. Pricing &amp; Par Target
+                  3. Wholesale Costs &amp; Reorder Buffer
                 </span>
 
                 <div className="grid grid-cols-3 gap-2">
                   <div>
-                    <label className="text-[9px] font-bold text-gray-500 uppercase block mb-0.5">Wholesale Cost (Ex)</label>
+                    <label className="text-[9px] font-bold text-gray-500 uppercase block mb-0.5">Cost Ex VAT</label>
                     <div className="relative">
                       <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 text-xs">£</span>
                       <input
                         type="number"
                         step="0.01"
-                        value={editingItem.cost_price_ex_vat ?? editingItem.cost_price ?? 0}
+                        value={editingItem.cost_price_ex_vat ?? 0}
                         onChange={(e) => setEditingItem({ ...editingItem, cost_price_ex_vat: e.target.value })}
                         className="w-full bg-[#EDEDED] py-1.5 pl-5 pr-2 rounded-xl font-mono text-xs font-bold text-gray-900 focus:outline-none"
                       />
@@ -502,14 +510,14 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
                   </div>
                 </div>
 
-                {/* Buffer Rate Selector */}
-                <div className="space-y-1.5 pt-2 border-t border-gray-100">
+                {/* Buffer Slider with Human-Friendly Explanation */}
+                <div className="space-y-1.5 pt-2 bg-gray-50 p-3 rounded-2xl border border-gray-200/60">
                   <div className="flex items-center justify-between">
-                    <label className="text-[10px] font-bold text-gray-700 uppercase tracking-wider block">
-                      Reorder Buffer Rate: <span className="font-mono text-black font-extrabold">{editingItem.buffer_rate ?? 5} / 10</span>
+                    <label className="text-[10px] font-bold text-gray-800 uppercase tracking-wider block">
+                      Reorder Buffer: <span className="font-mono text-black font-black">{editingItem.buffer_rate ?? 5} / 10</span>
                     </label>
-                    <span className="text-[10px] font-mono text-gray-500 font-bold">
-                      {((editingItem.buffer_rate ?? 5) * 10)}% (0.{editingItem.buffer_rate ?? 5} unit)
+                    <span className="text-[10px] font-mono font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded">
+                      Triggers at 0.{editingItem.buffer_rate ?? 5} deficit
                     </span>
                   </div>
 
@@ -523,15 +531,153 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
                     className="w-full accent-black cursor-pointer"
                   />
 
-                  <div className="flex justify-between text-[8px] font-mono text-gray-400">
-                    <span>1 (Order Early / 10%)</span>
-                    <span>5 (Default / 50%)</span>
-                    <span>10 (Order Late / 100%)</span>
-                  </div>
+                  <p className="text-[10px] text-gray-500 font-sans leading-tight italic">
+                    {getBufferDescription(editingItem.buffer_rate ?? 5)}
+                  </p>
                 </div>
               </div>
 
-              {/* Actions */}
+              {/* Section 4: Dynamic Menu Pour Prices */}
+              <div className="space-y-2 pt-1 border-t border-gray-100">
+                <span className="font-bold uppercase tracking-wider text-[10px] text-gray-400 block">
+                  4. Menu Dispense Prices (£ Inc VAT)
+                </span>
+
+                {/* Category-aware dispense fields */}
+                {activeCategoryType === 'draught' && (
+                  <div className="grid grid-cols-2 gap-2 bg-[#F9FAFB] p-2.5 rounded-2xl border border-gray-200/80">
+                    <div>
+                      <label className="text-[9px] font-bold text-gray-600 block mb-0.5">Pint (568ml)</label>
+                      <div className="relative">
+                        <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 font-mono">£</span>
+                        <input
+                          type="number"
+                          step="0.05"
+                          placeholder="5.80"
+                          value={editingItem.menu_prices?.pint ?? ''}
+                          onChange={(e) => handlePriceFieldChange('pint', e.target.value)}
+                          className="w-full bg-white border border-gray-300 py-1 pl-6 pr-2 rounded-lg font-mono font-bold text-xs"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-[9px] font-bold text-gray-600 block mb-0.5">Half Pint (284ml)</label>
+                      <div className="relative">
+                        <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 font-mono">£</span>
+                        <input
+                          type="number"
+                          step="0.05"
+                          placeholder="3.00"
+                          value={editingItem.menu_prices?.half ?? ''}
+                          onChange={(e) => handlePriceFieldChange('half', e.target.value)}
+                          className="w-full bg-white border border-gray-300 py-1 pl-6 pr-2 rounded-lg font-mono font-bold text-xs"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {activeCategoryType === 'spirits' && (
+                  <div className="grid grid-cols-2 gap-2 bg-[#F9FAFB] p-2.5 rounded-2xl border border-gray-200/80">
+                    <div>
+                      <label className="text-[9px] font-bold text-gray-600 block mb-0.5">Single (25ml)</label>
+                      <div className="relative">
+                        <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 font-mono">£</span>
+                        <input
+                          type="number"
+                          step="0.05"
+                          placeholder="4.50"
+                          value={editingItem.menu_prices?.single ?? ''}
+                          onChange={(e) => handlePriceFieldChange('single', e.target.value)}
+                          className="w-full bg-white border border-gray-300 py-1 pl-6 pr-2 rounded-lg font-mono font-bold text-xs"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-[9px] font-bold text-gray-600 block mb-0.5">Double (50ml)</label>
+                      <div className="relative">
+                        <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 font-mono">£</span>
+                        <input
+                          type="number"
+                          step="0.05"
+                          placeholder="8.00"
+                          value={editingItem.menu_prices?.double ?? ''}
+                          onChange={(e) => handlePriceFieldChange('double', e.target.value)}
+                          className="w-full bg-white border border-gray-300 py-1 pl-6 pr-2 rounded-lg font-mono font-bold text-xs"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {activeCategoryType === 'wine' && (
+                  <div className="grid grid-cols-4 gap-1.5 bg-[#F9FAFB] p-2.5 rounded-2xl border border-gray-200/80">
+                    <div>
+                      <label className="text-[8px] font-bold text-gray-600 block mb-0.5">125ml</label>
+                      <input
+                        type="number"
+                        step="0.05"
+                        placeholder="5.50"
+                        value={editingItem.menu_prices?.['125ml'] ?? ''}
+                        onChange={(e) => handlePriceFieldChange('125ml', e.target.value)}
+                        className="w-full bg-white border border-gray-300 py-1 px-1.5 rounded-lg font-mono font-bold text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[8px] font-bold text-gray-600 block mb-0.5">175ml</label>
+                      <input
+                        type="number"
+                        step="0.05"
+                        placeholder="7.50"
+                        value={editingItem.menu_prices?.['175ml'] ?? ''}
+                        onChange={(e) => handlePriceFieldChange('175ml', e.target.value)}
+                        className="w-full bg-white border border-gray-300 py-1 px-1.5 rounded-lg font-mono font-bold text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[8px] font-bold text-gray-600 block mb-0.5">250ml</label>
+                      <input
+                        type="number"
+                        step="0.05"
+                        placeholder="10.00"
+                        value={editingItem.menu_prices?.['250ml'] ?? ''}
+                        onChange={(e) => handlePriceFieldChange('250ml', e.target.value)}
+                        className="w-full bg-white border border-gray-300 py-1 px-1.5 rounded-lg font-mono font-bold text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[8px] font-bold text-gray-600 block mb-0.5">Bottle</label>
+                      <input
+                        type="number"
+                        step="0.05"
+                        placeholder="28.00"
+                        value={editingItem.menu_prices?.bottle ?? ''}
+                        onChange={(e) => handlePriceFieldChange('bottle', e.target.value)}
+                        className="w-full bg-white border border-gray-300 py-1 px-1.5 rounded-lg font-mono font-bold text-xs"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {(activeCategoryType === 'packaged_beer' || activeCategoryType === 'minerals' || activeCategoryType === 'prep') && (
+                  <div className="bg-[#F9FAFB] p-2.5 rounded-2xl border border-gray-200/80">
+                    <label className="text-[9px] font-bold text-gray-600 block mb-0.5">Unit Selling Price (£ Inc VAT)</label>
+                    <div className="relative max-w-[160px]">
+                      <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 font-mono">£</span>
+                      <input
+                        type="number"
+                        step="0.05"
+                        placeholder="4.50"
+                        value={editingItem.menu_prices?.unit ?? ''}
+                        onChange={(e) => handlePriceFieldChange('unit', e.target.value)}
+                        className="w-full bg-white border border-gray-300 py-1 pl-6 pr-2 rounded-lg font-mono font-bold text-xs"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Action Buttons */}
               <div className="pt-2 flex items-center space-x-2">
                 {!editingItem.isNew && (
                   <button
@@ -549,7 +695,7 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
                   className="flex-1 py-3 bg-black hover:bg-neutral-800 disabled:opacity-40 text-white rounded-2xl text-xs font-bold transition flex items-center justify-center space-x-1.5 shadow-md"
                 >
                   <Save className="w-4 h-4 text-emerald-400" />
-                  <span>{savingItem ? 'Saving to Database...' : 'Save Product Attributes'}</span>
+                  <span>{savingItem ? 'Saving to Database...' : 'Save Product & Menu Prices'}</span>
                 </button>
               </div>
             </form>
@@ -557,7 +703,6 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
         </div>
       )}
 
-      {/* Floating Bottom Nav */}
       <nav className="fixed bottom-2 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-[390px] z-30 rounded-2xl bg-[#111111]/95 backdrop-blur-md text-white py-2 px-3 flex justify-around items-center text-xs font-semibold shadow-2xl border border-white/10 select-none pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))]">
         <button
           onClick={onBackToHub}

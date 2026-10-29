@@ -2,8 +2,6 @@ import React, { useState, useEffect, useMemo } from 'react';
 import {
   ArrowLeft,
   Search,
-  Trash2,
-  AlertTriangle,
   Beer,
   Wine,
   GlassWater,
@@ -11,10 +9,7 @@ import {
   FlaskConical,
   CheckCircle2,
   RefreshCw,
-  Plus,
-  X,
-  History,
-  TrendingDown
+  X
 } from 'lucide-react';
 import { useTwoFingerSwipe } from './useTwoFingerSwipe';
 import { supabase, DEFAULT_VENUE_ID } from './lib/db';
@@ -45,12 +40,12 @@ const CATEGORIES = [
 ];
 
 const REASONS = [
-  { id: 'line_clean', label: 'Line Clean / Cellar Flush', desc: 'Routine weekly flush' },
-  { id: 'foaming', label: 'Foaming / Bad Head / Dregs', desc: 'Gas pressure or fob loss' },
-  { id: 'breakage', label: 'Breakage / Dropped', desc: 'Bar slip or dropped glass' },
-  { id: 'return', label: 'Customer Return / Off Pint', desc: 'Corked wine or turned beer' },
-  { id: 'prep_batch', label: 'Cocktail / Batch Prep', desc: 'Cordial, infusion or shrub cook' },
-  { id: 'spoilage', label: 'Out of Date / Spoiled', desc: 'Product expired or soured' },
+  { id: 'line_clean', label: 'Line Clean / Cellar Flush' },
+  { id: 'foaming', label: 'Foaming / Bad Head / Dregs' },
+  { id: 'breakage', label: 'Breakage / Dropped' },
+  { id: 'return', label: 'Customer Return / Off Drink' },
+  { id: 'prep_batch', label: 'Cocktail / Batch Prep' },
+  { id: 'spoilage', label: 'Out of Date / Spoiled' },
 ];
 
 export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout }) {
@@ -59,9 +54,7 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
   const [catalogItems, setCatalogItems] = useState([]);
   const [loadingCatalog, setLoadingCatalog] = useState(false);
   
-  // Active Form State
   const [selectedItem, setSelectedItem] = useState(null);
-  const [selectedUnit, setSelectedUnit] = useState('');
   const [selectedPreset, setSelectedPreset] = useState(null);
   const [customQtyInput, setCustomQtyInput] = useState('');
   const [selectedReason, setSelectedReason] = useState(REASONS[1].label);
@@ -69,7 +62,6 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
   const [submitting, setSubmitting] = useState(false);
   const [statusMsg, setStatusMsg] = useState(null);
 
-  // Wastage History Ledger
   const [recentLogs, setRecentLogs] = useState([]);
   const [loadingLogs, setLoadingLogs] = useState(false);
 
@@ -79,7 +71,6 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
     }
   });
 
-  // 1. Fetch Catalog Inventory with Base Units
   const fetchInventory = async () => {
     setLoadingCatalog(true);
     try {
@@ -91,7 +82,6 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
       
       if (error) throw error;
       if (data) {
-        // Normalize schema contracts
         const mapped = data.map(item => {
           const cat = (item.category || '').toLowerCase();
           const isDraught = cat.includes('draught') || (item.unit && item.unit.toLowerCase().includes('keg'));
@@ -102,22 +92,22 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
           const category = isDraught ? 'draught' : isSpirit ? 'spirits' : isWine ? 'wine' : isPackage ? 'packaged_beer' : 'prep';
           const baseUom = (isDraught || isSpirit || isWine || category === 'prep') ? 'ml' : 'each';
           
-          let packageSizeBase = 700; // default 700ml bottle
-          if (isDraught) packageSizeBase = 50000; // 50L keg default
-          if (isWine) packageSizeBase = 750; // 750ml wine
+          let packageSizeBase = Number(item.package_size_base) || 700;
+          if (isDraught && !item.package_size_base) packageSizeBase = 50000;
+          if (isWine && !item.package_size_base) packageSizeBase = 750;
           if (baseUom === 'each') packageSizeBase = 1;
 
-          const unitsPerCase = isDraught ? 1 : isPackage ? 24 : 6;
-          const costPerOrderUnit = item.cost_price || 35.00;
+          const unitsPerCase = Number(item.units_per_order_case) || (isDraught ? 1 : isPackage ? 24 : 6);
+          const costPerOrderUnit = Number(item.last_cost_ex_vat || item.cost_price_ex_vat || item.cost_price || 35.00);
 
           return {
             id: item.id,
             name: item.name,
             category,
             base_uom: baseUom,
-            package_size_base: item.package_size_base || packageSizeBase,
-            units_per_order_case: item.units_per_order_case || unitsPerCase,
-            cost_per_order_unit: Number(item.cost_per_order_unit || costPerOrderUnit),
+            package_size_base: packageSizeBase,
+            units_per_order_case: unitsPerCase,
+            cost_per_order_unit: costPerOrderUnit,
             current_stock_base: Number(item.current_stock_base ?? (item.count ? item.count * packageSizeBase : 0))
           };
         });
@@ -130,7 +120,6 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
     }
   };
 
-  // 2. Fetch Recent Wastage Logs
   const fetchWastageLogs = async () => {
     setLoadingLogs(true);
     try {
@@ -155,7 +144,6 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
     fetchWastageLogs();
   }, []);
 
-  // Filter Catalog
   const filteredCatalog = useMemo(() => {
     return catalogItems.filter(item => {
       const matchesCat = activeCategory === 'all' || item.category === activeCategory;
@@ -165,25 +153,23 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
     });
   }, [catalogItems, activeCategory, searchQuery]);
 
-  // Handle Item Selection and Initialize Default Presets
   const handleSelectItem = (item) => {
     setSelectedItem(item);
     setCustomQtyInput('');
     setSelectedPreset(null);
     if (item.category === 'draught') {
-      setSelectedPreset({ label: 'Pint', baseAmount: 568, unit: 'pints', qty: 1 });
+      setSelectedPreset({ label: 'Pint (568ml)', baseAmount: 568, unit: 'pints', qty: 1 });
     } else if (item.category === 'spirits') {
-      setSelectedPreset({ label: 'Single (25ml)', baseAmount: 25, unit: 'measures', qty: 1 });
+      setSelectedPreset({ label: 'Single Measure (25ml)', baseAmount: 25, unit: 'single', qty: 1 });
     } else if (item.category === 'wine') {
-      setSelectedPreset({ label: 'Large (250ml)', baseAmount: 250, unit: 'glasses', qty: 1 });
+      setSelectedPreset({ label: 'Medium Glass (175ml)', baseAmount: 175, unit: 'glass', qty: 1 });
     } else if (item.category === 'packaged_beer') {
       setSelectedPreset({ label: '1 Can / Bottle', baseAmount: 1, unit: 'each', qty: 1 });
     } else {
-      setSelectedPreset({ label: '100ml', baseAmount: 100, unit: 'ml', qty: 100 });
+      setSelectedPreset({ label: '50ml Pour', baseAmount: 50, unit: 'ml', qty: 50 });
     }
   };
 
-  // Calculate live deducted base units & total £ cost impact
   const wastageMetrics = useMemo(() => {
     if (!selectedItem) return { totalBaseUnits: 0, costImpact: 0, displayVolume: '' };
 
@@ -196,10 +182,9 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
       displayVolume = `${parsed} ${selectedItem.base_uom}`;
     } else if (selectedPreset) {
       totalBaseUnits = selectedPreset.baseAmount;
-      displayVolume = `${selectedPreset.label}`;
+      displayVolume = selectedPreset.label;
     }
 
-    // Cost formula: (Deducted Base Units / Total Base Units in Whole Case/Keg) * Case Cost
     const totalBaseUnitsInCase = selectedItem.package_size_base * selectedItem.units_per_order_case;
     const costImpact = totalBaseUnitsInCase > 0 
       ? (totalBaseUnits / totalBaseUnitsInCase) * selectedItem.cost_per_order_unit
@@ -212,7 +197,6 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
     };
   }, [selectedItem, selectedPreset, customQtyInput]);
 
-  // Submit Wastage Entry
   const handleSubmitWastage = async (e) => {
     e.preventDefault();
     if (!selectedItem || wastageMetrics.totalBaseUnits <= 0) return;
@@ -223,35 +207,36 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
 
     const payload = {
       venue_id: DEFAULT_VENUE_ID,
-      item_id: selectedItem.id,
+      item_id: String(selectedItem.id),
       item_name: selectedItem.name,
       category: selectedItem.category,
       logged_qty: customQtyInput ? parseFloat(customQtyInput) : selectedPreset?.qty || 1,
       unit_used: customQtyInput ? selectedItem.base_uom : selectedPreset?.unit || selectedItem.base_uom,
-      total_base_deducted: wastageMetrics.totalBaseUnits,
+      total_base_deducted: Number(wastageMetrics.totalBaseUnits),
       cost_impact: Number(wastageMetrics.costImpact.toFixed(2)),
       reason: selectedReason,
-      notes: customNotes.trim(),
+      notes: customNotes ? customNotes.trim() : '',
       staff_name: staffName,
       created_at: new Date().toISOString()
     };
 
     try {
-      // 1. Insert into wastage_log
-      const { error: logErr } = await supabase.from('wastage_log').insert(payload);
-      if (logErr) throw logErr;
+      const { error: logErr } = await supabase
+        .from('wastage_log')
+        .insert([payload]);
 
-      // 2. Decrement inventory item atomically
+      if (logErr) throw new Error(logErr.message || 'Database rejected wastage insert');
+
+      // Decrement stock in catalog
       const nextStock = Math.max(0, (selectedItem.current_stock_base || 0) - wastageMetrics.totalBaseUnits);
       await supabase
         .from('catalog_items')
         .update({
           current_stock_base: nextStock,
-          count: selectedItem.package_size_base > 0 ? (nextStock / selectedItem.package_size_base).toFixed(2) : 0
+          count: selectedItem.package_size_base > 0 ? Number((nextStock / selectedItem.package_size_base).toFixed(2)) : 0
         })
         .eq('id', selectedItem.id);
 
-      // 3. Dispatch push notification for major losses (> £15)
       if (wastageMetrics.costImpact >= 15.00) {
         sendPushNotification(
           `High Spillage Logged: ${selectedItem.name}`,
@@ -263,10 +248,9 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
 
       setStatusMsg({
         type: 'success',
-        text: `Logged ${wastageMetrics.displayVolume} ${selectedItem.name} (£${wastageMetrics.costImpact.toFixed(2)})`
+        text: `Deducted ${wastageMetrics.displayVolume} ${selectedItem.name} (£${wastageMetrics.costImpact.toFixed(2)})`
       });
 
-      // Reset
       setSelectedItem(null);
       setCustomQtyInput('');
       setCustomNotes('');
@@ -274,13 +258,12 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
       await fetchInventory();
     } catch (err) {
       console.error("Wastage submission error:", err);
-      setStatusMsg({ type: 'error', text: 'Error recording wastage to database.' });
+      setStatusMsg({ type: 'error', text: err.message || 'Error recording wastage to database.' });
     } finally {
       setSubmitting(false);
     }
   };
 
-  // Top Metrics
   const dailySummary = useMemo(() => {
     const todayStr = new Date().toISOString().slice(0, 10);
     const todayLogs = recentLogs.filter(l => (l.created_at || '').slice(0, 10) === todayStr);
@@ -314,7 +297,6 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
       {...swipeHandlers}
       className="flex flex-col h-[100dvh] w-full max-w-md mx-auto bg-[#0E1015] text-neutral-100 font-sans antialiased border-x border-neutral-800 overflow-hidden relative select-none"
     >
-      {/* Top Header */}
       <header className="flex items-center justify-between px-5 pt-[max(1.2rem,env(safe-area-inset-top))] pb-3 border-b border-white/10 flex-shrink-0 bg-[#14171F] z-20 shadow-md">
         <div className="flex items-center space-x-2">
           {onBackToHub && (
@@ -324,19 +306,17 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
           )}
           <AppLogo className="w-6 h-6 invert" fallbackTextClass="font-serif text-2xl font-bold tracking-tighter text-white" />
           <div>
-            <h1 className="font-black text-sm tracking-tight text-white leading-tight">Spillage & Wastage</h1>
-            <span className="text-[10px] text-neutral-400 font-mono block">Cost Impact & Loss Audit</span>
+            <h1 className="font-black text-sm tracking-tight text-white leading-tight">Spillage &amp; Wastage</h1>
+            <span className="text-[10px] text-neutral-400 font-mono block">Direct Stock Loss Deductions</span>
           </div>
         </div>
 
-        <div className="flex items-center space-x-2">
-          <button onClick={() => { fetchInventory(); fetchWastageLogs(); }} className="p-1.5 text-neutral-400 hover:text-white rounded-lg transition" title="Refresh">
-            <RefreshCw className={`w-3.5 h-3.5 ${loadingCatalog || loadingLogs ? 'animate-spin text-emerald-400' : ''}`} />
-          </button>
-        </div>
+        <button onClick={() => { fetchInventory(); fetchWastageLogs(); }} className="p-1.5 text-neutral-400 hover:text-white rounded-lg transition" title="Refresh">
+          <RefreshCw className={`w-3.5 h-3.5 ${loadingCatalog || loadingLogs ? 'animate-spin text-emerald-400' : ''}`} />
+        </button>
       </header>
 
-      {/* Top Loss KPI Cards */}
+      {/* Loss KPI Cards */}
       <div className="grid grid-cols-3 gap-2 px-5 py-2.5 bg-[#14171F] border-b border-white/5 flex-shrink-0 text-left">
         <div className="bg-white/5 p-2.5 rounded-2xl border border-white/5 space-y-0.5">
           <span className="text-[9px] font-mono uppercase text-neutral-400 font-bold block">Today's Loss</span>
@@ -353,7 +333,7 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
         </div>
 
         <div className="bg-white/5 p-2.5 rounded-2xl border border-white/5 space-y-0.5">
-          <span className="text-[9px] font-mono uppercase text-neutral-400 font-bold block">Top Category</span>
+          <span className="text-[9px] font-mono uppercase text-neutral-400 font-bold block">Top Waste</span>
           <span className="text-xs font-black text-white truncate block pt-0.5">
             {dailySummary.topCategory}
           </span>
@@ -361,8 +341,8 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
       </div>
 
       {statusMsg && (
-        <div className={`mx-5 my-2 p-2 rounded-xl text-xs font-semibold flex-shrink-0 ${
-          statusMsg.type === 'success' ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-800' : 'bg-rose-950/80 text-rose-300 border border-rose-800'
+        <div className={`mx-5 my-2 p-2.5 rounded-xl text-xs font-semibold flex-shrink-0 ${
+          statusMsg.type === 'success' ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-800' : 'bg-rose-950/90 text-rose-200 border border-rose-700'
         }`}>
           {statusMsg.text}
         </div>
@@ -370,11 +350,10 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
 
       {/* Main Body */}
       <div className="flex-1 overflow-y-auto px-5 py-3 space-y-4 pb-28 touch-pan-y overscroll-contain">
-        
-        {/* Step 1: Category Filter Pills */}
+        {/* Category Pills */}
         <div className="space-y-1.5">
           <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-neutral-400">
-            1. Select Item Category
+            1. Select Category
           </span>
           <div className="flex items-center space-x-1.5 overflow-x-auto scrollbar-none pb-0.5">
             {CATEGORIES.map(c => {
@@ -398,14 +377,14 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
           </div>
         </div>
 
-        {/* Step 2: Item Search & Quick-Select Dropdown */}
+        {/* Item Search */}
         <div className="space-y-1.5">
           <div className="relative">
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search SKU or tap below (e.g. Tennent's, Negroni batch)..."
+              placeholder="Search SKU or product..."
               className="w-full bg-[#181B24] border border-white/10 py-2 pl-3 pr-8 rounded-xl text-xs text-white placeholder-neutral-500 focus:outline-none focus:border-white/30"
             />
             {searchQuery ? (
@@ -417,7 +396,6 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
             )}
           </div>
 
-          {/* Quick-Pick SKU Grid */}
           <div className="grid grid-cols-2 gap-1.5 max-h-36 overflow-y-auto border border-white/5 rounded-2xl p-1 bg-black/20">
             {filteredCatalog.slice(0, 10).map(item => {
               const isSelected = selectedItem?.id === item.id;
@@ -434,7 +412,7 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
                 >
                   <span className="font-bold text-xs truncate block">{item.name}</span>
                   <span className="text-[9px] font-mono text-neutral-400 block mt-0.5">
-                    {item.category.toUpperCase()} • £{(item.cost_per_order_unit / item.units_per_order_case).toFixed(2)}/unit
+                    {item.category.toUpperCase()} • {item.package_size_base}{item.base_uom}
                   </span>
                 </button>
               );
@@ -442,17 +420,17 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
           </div>
         </div>
 
-        {/* Step 3: Context-Aware Presets & Live Loss Visualizer */}
+        {/* Deduction Form */}
         {selectedItem && (
           <form onSubmit={handleSubmitWastage} className="bg-[#14171F] border border-white/10 rounded-3xl p-4 space-y-3.5 shadow-xl animate-in fade-in duration-150">
             <div className="flex items-start justify-between border-b border-white/10 pb-2.5">
               <div>
                 <span className="text-[9px] font-mono font-bold uppercase text-emerald-400 block tracking-wider">
-                  Target Product Selected
+                  Product Selected
                 </span>
                 <h3 className="text-sm font-black text-white">{selectedItem.name}</h3>
                 <span className="text-[10px] text-neutral-400 font-mono">
-                  Base UOM: {selectedItem.base_uom} | Pkg: {selectedItem.package_size_base}{selectedItem.base_uom}
+                  Container: {selectedItem.package_size_base}{selectedItem.base_uom} • Base Cost: £{(selectedItem.cost_per_order_unit / selectedItem.units_per_order_case).toFixed(2)}
                 </span>
               </div>
               <button
@@ -464,10 +442,10 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
               </button>
             </div>
 
-            {/* Presets by Category */}
+            {/* Presets by Specific Bar Dispense Measures */}
             <div className="space-y-1.5">
               <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-neutral-400">
-                Wastage Volume / Measures
+                Wastage Volume
               </span>
 
               <div className="grid grid-cols-2 gap-1.5">
@@ -493,12 +471,12 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
                     </button>
                     <button
                       type="button"
-                      onClick={() => { setSelectedPreset({ label: 'Full 50L Keg', baseAmount: 50000, unit: 'keg', qty: 1.0 }); setCustomQtyInput(''); }}
+                      onClick={() => { setSelectedPreset({ label: `Full ${selectedItem.package_size_base / 1000}L Keg`, baseAmount: selectedItem.package_size_base, unit: 'keg', qty: 1.0 }); setCustomQtyInput(''); }}
                       className={`py-2 px-3 rounded-xl text-xs font-bold border transition ${
-                        selectedPreset?.baseAmount === 50000 && !customQtyInput ? 'bg-white text-black border-white' : 'bg-white/5 border-white/5 text-neutral-300'
+                        selectedPreset?.baseAmount === selectedItem.package_size_base && !customQtyInput ? 'bg-white text-black border-white' : 'bg-white/5 border-white/5 text-neutral-300'
                       }`}
                     >
-                      Full 50L Keg
+                      Full Keg
                     </button>
                   </>
                 )}
@@ -525,12 +503,12 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
                     </button>
                     <button
                       type="button"
-                      onClick={() => { setSelectedPreset({ label: 'Full 700ml Bottle', baseAmount: 700, unit: 'bottle', qty: 1 }); setCustomQtyInput(''); }}
+                      onClick={() => { setSelectedPreset({ label: `Full Bottle (${selectedItem.package_size_base}ml)`, baseAmount: selectedItem.package_size_base, unit: 'bottle', qty: 1 }); setCustomQtyInput(''); }}
                       className={`py-2 px-3 rounded-xl text-xs font-bold border transition ${
-                        selectedPreset?.baseAmount === 700 && !customQtyInput ? 'bg-white text-black border-white' : 'bg-white/5 border-white/5 text-neutral-300'
+                        selectedPreset?.baseAmount === selectedItem.package_size_base && !customQtyInput ? 'bg-white text-black border-white' : 'bg-white/5 border-white/5 text-neutral-300'
                       }`}
                     >
-                      Full Bottle (700ml)
+                      Full Bottle
                     </button>
                   </>
                 )}
@@ -548,12 +526,12 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
                     </button>
                     <button
                       type="button"
-                      onClick={() => { setSelectedPreset({ label: 'Medium Glass (175ml)', baseAmount: 175, unit: 'glasses', qty: 1 }); setCustomQtyInput(''); }}
+                      onClick={() => { setSelectedPreset({ label: 'Standard Glass (175ml)', baseAmount: 175, unit: 'glasses', qty: 1 }); setCustomQtyInput(''); }}
                       className={`py-2 px-3 rounded-xl text-xs font-bold border transition ${
                         selectedPreset?.baseAmount === 175 && !customQtyInput ? 'bg-white text-black border-white' : 'bg-white/5 border-white/5 text-neutral-300'
                       }`}
                     >
-                      Medium (175ml)
+                      Standard (175ml)
                     </button>
                     <button
                       type="button"
@@ -589,17 +567,16 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
                     </button>
                     <button
                       type="button"
-                      onClick={() => { setSelectedPreset({ label: 'Full Case (24)', baseAmount: 24, unit: 'case', qty: 24 }); setCustomQtyInput(''); }}
+                      onClick={() => { setSelectedPreset({ label: `Full Case (${selectedItem.units_per_order_case})`, baseAmount: selectedItem.units_per_order_case, unit: 'case', qty: selectedItem.units_per_order_case }); setCustomQtyInput(''); }}
                       className={`py-2 px-3 rounded-xl text-xs font-bold border transition ${
-                        selectedPreset?.baseAmount === 24 && !customQtyInput ? 'bg-white text-black border-white' : 'bg-white/5 border-white/5 text-neutral-300'
+                        selectedPreset?.baseAmount === selectedItem.units_per_order_case && !customQtyInput ? 'bg-white text-black border-white' : 'bg-white/5 border-white/5 text-neutral-300'
                       }`}
                     >
-                      Full Case (24)
+                      Full Case
                     </button>
                   </>
                 )}
 
-                {/* Custom Entry Option */}
                 <div className="relative">
                   <input
                     type="number"
@@ -616,7 +593,7 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
               </div>
             </div>
 
-            {/* Step 4: Reason Tag Selector */}
+            {/* Reason Tags */}
             <div className="space-y-1.5">
               <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-neutral-400">
                 Reason for Spillage / Loss
@@ -639,10 +616,10 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
               </div>
             </div>
 
-            {/* Step 5: Live Real-Time Impact Readout */}
+            {/* Impact Readout */}
             <div className="bg-black/50 border border-white/10 rounded-2xl p-3 flex items-center justify-between">
               <div className="space-y-0.5">
-                <span className="text-[9px] font-mono text-neutral-400 uppercase tracking-wider block">Live Cost Deduction</span>
+                <span className="text-[9px] font-mono text-neutral-400 uppercase tracking-wider block">Stock Impact</span>
                 <span className="text-xs text-neutral-200 block font-medium">
                   Deducting {wastageMetrics.totalBaseUnits} {selectedItem.base_uom}
                 </span>
@@ -661,19 +638,19 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
               className="w-full py-3 bg-[#E5484D] hover:bg-[#d93d42] active:scale-[0.98] disabled:opacity-40 text-white rounded-2xl text-xs font-black transition flex items-center justify-center space-x-1.5 shadow-lg shadow-rose-950/20"
             >
               <CheckCircle2 className="w-4 h-4 text-white" />
-              <span>{submitting ? 'Recording Loss...' : 'Confirm & Deduct Stock'}</span>
+              <span>{submitting ? 'Deducting Stock...' : 'Confirm & Log Spillage'}</span>
             </button>
           </form>
         )}
 
-        {/* Step 6: Rolling Activity Ledger */}
+        {/* Rolling Activity Ledger */}
         <div className="space-y-2 pt-2">
           <div className="flex items-center justify-between px-1">
             <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-neutral-400">
               Recent Spillage Activity
             </span>
             <span className="text-[10px] font-mono text-neutral-500">
-              {recentLogs.length} total logged
+              {recentLogs.length} logged
             </span>
           </div>
 
@@ -705,7 +682,6 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
         </div>
       </div>
 
-      {/* Floating Bottom Nav */}
       <nav className="fixed bottom-2 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-[390px] z-30 rounded-2xl bg-[#111111]/95 backdrop-blur-md text-white py-2 px-3 flex justify-around items-center text-xs font-semibold shadow-2xl border border-white/10 select-none pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))]">
         <button
           onClick={onBackToHub}
