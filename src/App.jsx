@@ -7,6 +7,7 @@ import Settings from './Settings';
 import PreShiftCard from './PreShiftCard';
 import OpsChatDrawer from './OpsChatDrawer';
 import OpsFloatingTrigger from './OpsFloatingTrigger';
+import NotificationCenterApp from './NotificationCenterApp';
 import {
   BookOpen,
   Coins,
@@ -17,7 +18,8 @@ import {
   Bell,
   SlidersHorizontal,
   ChevronRight,
-  PlusCircle
+  PlusCircle,
+  FolderOpen
 } from 'lucide-react';
 import { useTwoFingerSwipe } from './useTwoFingerSwipe';
 import { supabase, DEFAULT_VENUE_ID } from './lib/db';
@@ -59,11 +61,17 @@ export default function App() {
   const [showNotifications, setShowNotifications] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [latestHandover, setLatestHandover] = useState(null);
-  const [notificationsList, setNotificationsList] = useState([
-    { id: 1, title: 'Shift Handover Submitted', time: '1h ago', desc: 'Closing figures entered by Duty Manager', unread: true, module: 'handover' },
-    { id: 2, title: 'Stock Delivery Logged', time: '3h ago', desc: 'Tennents intake verified with photo d/n', unread: false, module: 'goods' },
-    { id: 3, title: 'Petty Cash Float', time: 'Yesterday', desc: 'Weekly reconcile on track (£1,200 float)', unread: false, module: 'petty' }
-  ]);
+
+  // Dynamic Live Activity Feed from Supabase
+  const [activityFeed, setActivityFeed] = useState([]);
+  const [readNotifIds, setReadNotifIds] = useState(() => {
+    try {
+      const cached = localStorage.getItem('wst_read_activity_ids');
+      return cached ? JSON.parse(cached) : [];
+    } catch {
+      return [];
+    }
+  });
 
   const swipeHandlers = useTwoFingerSwipe({
     disabled: activeModule === 'hub' || showFirstOpenPushModal || chatOpen,
@@ -80,26 +88,86 @@ export default function App() {
     return 'Good Evening';
   };
 
-  useEffect(() => {
-    if (!currentUser) return;
-    async function fetchRecentHandover() {
-      try {
-        const { data, error } = await supabase
+  // Query live database records for handovers, deliveries, and orders
+  const fetchLiveActivity = async () => {
+    try {
+      const [handoverRes, goodsRes, orderRes] = await Promise.all([
+        supabase
           .from('handovers')
-          .select('id, date_str, manager_name, takings, close_time, entry_type, general_notes')
+          .select('id, date_str, manager_name, entry_type, general_notes, created_at')
           .eq('venue_id', DEFAULT_VENUE_ID)
           .order('created_at', { ascending: false })
-          .limit(1);
-        if (!error && data && data.length > 0) {
-          setLatestHandover(data[0]);
-        }
-      } catch (err) {
-        console.warn("Could not retrieve latest handover preview:", err);
+          .limit(10),
+        supabase
+          .from('goods_received')
+          .select('id, supplier, invoice_ref, delivery_date, items, created_at')
+          .eq('venue_id', DEFAULT_VENUE_ID)
+          .order('created_at', { ascending: false })
+          .limit(10),
+        supabase
+          .from('supplier_orders')
+          .select('id, supplier_name, order_date, manager_name, is_placed, created_at')
+          .eq('venue_id', DEFAULT_VENUE_ID)
+          .order('created_at', { ascending: false })
+          .limit(10)
+      ]);
+
+      const items = [];
+
+      (handoverRes.data || []).forEach(h => {
+        items.push({
+          id: `h-${h.id}`,
+          entryId: h.id,
+          module: 'handover',
+          title: h.entry_type === 'Day Note' ? 'Day Note Logged' : 'Shift Handover Submitted',
+          desc: `${h.manager_name}: "${(h.general_notes || 'Closing figures logged').slice(0, 50)}..."`,
+          timestamp: new Date(h.created_at || Date.now()).getTime(),
+          timeStr: h.date_str || 'Today'
+        });
+      });
+
+      (goodsRes.data || []).forEach(g => {
+        const count = Array.isArray(g.items) ? g.items.length : 0;
+        items.push({
+          id: `g-${g.id}`,
+          entryId: g.id,
+          module: 'goods',
+          title: `Delivery Logged: ${g.supplier}`,
+          desc: `${count} items checked in (${g.invoice_ref ? 'Ref: ' + g.invoice_ref : g.delivery_date})`,
+          timestamp: new Date(g.created_at || Date.now()).getTime(),
+          timeStr: g.delivery_date || 'Today'
+        });
+      });
+
+      (orderRes.data || []).forEach(o => {
+        items.push({
+          id: `o-${o.id}`,
+          entryId: o.id,
+          module: 'orders',
+          title: o.is_placed ? `Order Placed: ${o.supplier_name}` : `Order Drafted: ${o.supplier_name}`,
+          desc: `${o.manager_name} recorded orders for ${o.supplier_name}`,
+          timestamp: new Date(o.created_at || Date.now()).getTime(),
+          timeStr: o.order_date || 'Today'
+        });
+      });
+
+      items.sort((a, b) => b.timestamp - a.timestamp);
+      setActivityFeed(items);
+      if (handoverRes.data && handoverRes.data.length > 0) {
+        setLatestHandover(handoverRes.data[0]);
       }
+    } catch (err) {
+      console.warn("Could not sync live activity feed:", err);
     }
-    fetchRecentHandover();
+  };
+
+  useEffect(() => {
+    if (currentUser) {
+      fetchLiveActivity();
+    }
   }, [currentUser, activeModule]);
 
+  // Deep linking parser for module routing
   useEffect(() => {
     try {
       const params = new URLSearchParams(window.location.search);
@@ -115,7 +183,7 @@ export default function App() {
     }
   }, []);
 
-  // Sync user with OneSignal on authentication
+  // OneSignal registration
   useEffect(() => {
     if (!currentUser || !window.OneSignalDeferred) return;
     const hasPrompted = localStorage.getItem('wst_push_prompted');
@@ -139,7 +207,7 @@ export default function App() {
     });
   }, [currentUser]);
 
-  // Robust dispatcher supporting both object and positional args
+  // Notification dispatcher accepting object or positional parameters
   const triggerPushNotification = async (arg1, arg2, arg3) => {
     if (typeof arg1 === 'object' && arg1 !== null) {
       const { title, message, targetManager = null } = arg1;
@@ -147,6 +215,21 @@ export default function App() {
     } else {
       await sendPushNotification(arg1, arg2, arg3, { module: activeModule });
     }
+  };
+
+  const handleMarkAsRead = (id) => {
+    if (!readNotifIds.includes(id)) {
+      const updated = [...readNotifIds, id];
+      setReadNotifIds(updated);
+      localStorage.setItem('wst_read_activity_ids', JSON.stringify(updated));
+    }
+  };
+
+  const handleMarkAllAsRead = () => {
+    const allIds = activityFeed.map(n => n.id);
+    const updated = Array.from(new Set([...readNotifIds, ...allIds]));
+    setReadNotifIds(updated);
+    localStorage.setItem('wst_read_activity_ids', JSON.stringify(updated));
   };
 
   const handleEnablePushFromModal = async () => {
@@ -333,6 +416,23 @@ export default function App() {
     );
   }
 
+  // Full Activity & Notification Centre view
+  if (activeModule === 'notifications') {
+    return (
+      <NotificationCenterApp
+        notifications={activityFeed}
+        readIds={readNotifIds}
+        onMarkAsRead={handleMarkAsRead}
+        onMarkAllAsRead={handleMarkAllAsRead}
+        onNavigate={(mod, entryId) => {
+          if (entryId) setDeepLinkData({ module: mod, entryId });
+          setActiveModule(mod);
+        }}
+        onBackToHub={() => setActiveModule('hub')}
+      />
+    );
+  }
+
   if (activeModule === 'handover') {
     return (
       <div {...swipeHandlers} className="h-screen w-full">
@@ -398,7 +498,8 @@ export default function App() {
     );
   }
 
-  const unreadCount = notificationsList.filter(n => n.unread).length;
+  const unreadCount = activityFeed.filter(n => !readNotifIds.includes(n.id)).length;
+  const recentThree = activityFeed.slice(0, 3);
 
   return (
     <div className="flex flex-col h-screen w-full max-w-md mx-auto bg-[#101b34] text-gray-900 font-sans antialiased border-x border-gray-100 overflow-hidden relative select-none">
@@ -417,42 +518,67 @@ export default function App() {
               <span className="absolute top-2 right-2 w-2 h-2 rounded-full bg-red-500 ring-2 ring-white animate-pulse" />
             )}
           </button>
+
+          {/* Quick Dropdown: Last 3 Notifications + See All Button */}
           {showNotifications && (
             <div className="absolute right-0 mt-2 w-80 bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl border border-gray-100 p-3 z-50 animate-in fade-in slide-in-from-top-2 duration-150">
               <div className="flex items-center justify-between pb-2 border-b border-gray-100 px-1">
-                <span className="font-bold text-xs uppercase tracking-wider text-gray-500">Notifications</span>
-                <span className="text-[10px] text-gray-400 font-mono">{unreadCount} new</span>
+                <span className="font-bold text-xs uppercase tracking-wider text-gray-500">Activity</span>
+                <span className="text-[10px] text-gray-400 font-mono">{unreadCount} unread</span>
               </div>
               <div className="divide-y divide-gray-50 max-h-64 overflow-y-auto mt-1">
-                {notificationsList.map((item) => (
-                  <div
-                    key={item.id}
-                    onClick={() => {
-                      setShowNotifications(false);
-                      if (item.module) setActiveModule(item.module);
-                    }}
-                    className="py-2.5 px-2 hover:bg-gray-50 rounded-xl cursor-pointer transition flex flex-col space-y-0.5"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-gray-900 flex items-center gap-1.5">
-                        {item.unread && <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />}
-                        {item.title}
-                      </span>
-                      <span className="text-[10px] text-gray-400">{item.time}</span>
-                    </div>
-                    <p className="text-[11px] text-gray-500 line-clamp-1">{item.desc}</p>
-                  </div>
-                ))}
+                {recentThree.length === 0 ? (
+                  <p className="p-3 text-center text-xs text-gray-400 italic">No recent activity</p>
+                ) : (
+                  recentThree.map((item) => {
+                    const isUnread = !readNotifIds.includes(item.id);
+                    return (
+                      <div
+                        key={item.id}
+                        onClick={() => {
+                          handleMarkAsRead(item.id);
+                          setShowNotifications(false);
+                          if (item.entryId) setDeepLinkData({ module: item.module, entryId: item.entryId });
+                          setActiveModule(item.module);
+                        }}
+                        className={`py-2.5 px-2 hover:bg-gray-50 rounded-xl cursor-pointer transition flex flex-col space-y-0.5 ${
+                          isUnread ? 'bg-blue-50/40' : ''
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-gray-900 flex items-center gap-1.5">
+                            {isUnread && <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />}
+                            {item.title}
+                          </span>
+                          <span className="text-[10px] text-gray-400">{item.timeStr}</span>
+                        </div>
+                        <p className="text-[11px] text-gray-500 line-clamp-1">{item.desc}</p>
+                      </div>
+                    );
+                  })
+                )}
               </div>
-              <button
-                onClick={() => {
-                  setNotificationsList(list => list.map(n => ({ ...n, unread: false })));
-                  setShowNotifications(false);
-                }}
-                className="w-full mt-2 py-1.5 text-center text-[11px] font-semibold text-gray-500 hover:text-black bg-gray-50 rounded-lg transition"
-              >
-                Mark all as read
-              </button>
+
+              <div className="grid grid-cols-2 gap-2 mt-2 pt-1 border-t border-gray-100">
+                <button
+                  onClick={() => {
+                    handleMarkAllAsRead();
+                    setShowNotifications(false);
+                  }}
+                  className="py-1.5 text-center text-[10px] font-semibold text-gray-500 hover:text-black bg-gray-50 rounded-lg transition"
+                >
+                  Mark all read
+                </button>
+                <button
+                  onClick={() => {
+                    setShowNotifications(false);
+                    setActiveModule('notifications');
+                  }}
+                  className="py-1.5 text-center text-[10px] font-bold text-black bg-gray-100 hover:bg-gray-200 rounded-lg transition"
+                >
+                  See All Activity
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -536,14 +662,14 @@ export default function App() {
               </div>
 
               <div
-                onClick={() => setActiveModule('settings')}
+                onClick={() => setActiveModule('notifications')}
                 className="flex flex-col items-center space-y-2 cursor-pointer flex-shrink-0 group active:scale-95 transition"
               >
                 <div className="w-[66px] h-[66px] rounded-2xl bg-neutral-100 shadow-sm flex items-center justify-center text-neutral-700">
-                  <SlidersHorizontal className="w-6 h-6 stroke-[2]" />
+                  <FolderOpen className="w-6 h-6 stroke-[2]" />
                 </div>
                 <span className="text-xs font-bold text-neutral-900 text-center tracking-tight leading-tight">
-                  Settings
+                  Activity
                 </span>
               </div>
             </div>
