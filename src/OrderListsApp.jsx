@@ -1,14 +1,14 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { 
-  ArrowLeft, 
-  Search, 
-  Plus, 
-  Minus, 
-  RefreshCw, 
-  X, 
-  Copy, 
-  Check, 
-  ClipboardList, 
+import React, { useState, useEffect, useMemo } from 'react';
+import {
+  ArrowLeft,
+  Search,
+  Plus,
+  Minus,
+  RefreshCw,
+  X,
+  Copy,
+  Check,
+  ClipboardList,
   ExternalLink,
   CheckCircle2,
   ListTodo,
@@ -22,22 +22,20 @@ import {
 import { useTwoFingerSwipe } from './useTwoFingerSwipe';
 import { supabase, localDb, DEFAULT_VENUE_ID } from './lib/db';
 import { sendPushNotification } from './lib/notifications';
-import StocktakeMode from './StocktakeMode';
+import SpeedCount from './SpeedCount';
 
 function AppLogo({ className = "w-6 h-6", fallbackTextClass = "font-serif text-xl font-bold tracking-tighter" }) {
   const [imgError, setImgError] = useState(false);
-
   if (!imgError) {
     return (
-      <img 
-        src="/img/icon.png" 
-        alt="West Side Tavern" 
-        className={`${className} object-contain`} 
+      <img
+        src="/img/icon.png"
+        alt="West Side Tavern"
+        className={`${className} object-contain`}
         onError={() => setImgError(true)}
       />
     );
   }
-
   return <span className={fallbackTextClass}>T</span>;
 }
 
@@ -47,10 +45,8 @@ function getFormattedDates() {
   const day = now.getDay();
   const diff = now.getDate() - day + (day === 0 ? -6 : 1);
   const monday = new Date(now.setDate(diff));
-
   const dayOfMonth = monday.getDate();
   const monthName = monday.toLocaleDateString('en-GB', { month: 'long' });
-  
   const getOrdinalSuffix = (d) => {
     if (d > 3 && d < 21) return 'th';
     switch (d % 10) {
@@ -60,7 +56,6 @@ function getFormattedDates() {
       default: return "th";
     }
   };
-
   const weekBeginningStr = `${dayOfMonth}${getOrdinalSuffix(dayOfMonth)} ${monthName}`;
   const fullDateStr = `${dayName} ${dayOfMonth}${getOrdinalSuffix(dayOfMonth)} ${monthName}`;
   return { dayName, weekBeginningStr, fullDateStr };
@@ -69,38 +64,31 @@ function getFormattedDates() {
 function calculateOrderQty(parLevel, currentStock) {
   const par = Number(parLevel) || 0;
   const count = Number(currentStock) || 0;
-  
   if (count <= 0.25) {
     return Math.max(1, Math.ceil(par - count));
   }
-  
   return Math.max(0, Math.ceil(par - count));
 }
 
 export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
   const [activeTab, setActiveTab] = useState('Stocktake');
   const [searchQuery, setSearchQuery] = useState('');
-  
   const [selectedSuppliers, setSelectedSuppliers] = useState([]);
   const [selectedAreas, setSelectedAreas] = useState([]);
   const [view, setView] = useState('main');
-
   const [detailedMode, setDetailedMode] = useState(false);
-  const [fullScreenMode, setFullScreenMode] = useState(false);
+  const [speedCountOpen, setSpeedCountOpen] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [hasUnsyncedCounts, setHasUnsyncedCounts] = useState(false);
-
   const [orderMode, setOrderMode] = useState(false);
   const [checkedItemIds, setCheckedItemIds] = useState(new Set());
   const [placedSuppliers, setPlacedSuppliers] = useState(new Set());
   const [lastOrderedMap, setLastOrderedMap] = useState({});
-
   const [archiveModalOpen, setArchiveModalOpen] = useState(false);
   const [archiveTab, setArchiveTab] = useState('stocktakes');
   const [archiveStocktakes, setArchiveStocktakes] = useState([]);
   const [archiveOrders, setArchiveOrders] = useState([]);
   const [loadingArchive, setLoadingArchive] = useState(false);
-  
   const [selectedRecordDetail, setSelectedRecordDetail] = useState(null);
   const [loadingRecordDetail, setLoadingRecordDetail] = useState(false);
 
@@ -132,6 +120,7 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
       return new Set();
     }
   });
+
   const [saving, setSaving] = useState(false);
   const [savingToDrive, setSavingToDrive] = useState(false);
   const [statusMsg, setStatusMsg] = useState(null);
@@ -161,7 +150,7 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
   }, [counts, modifiedIds]);
 
   const swipeHandlers = useTwoFingerSwipe({
-    disabled: view === 'settings' || archiveModalOpen || Boolean(selectedRecordDetail) || fullScreenMode,
+    disabled: view === 'settings' || archiveModalOpen || Boolean(selectedRecordDetail) || speedCountOpen,
     onSwipeLeft: () => {
       if (activeTab === 'Stocktake') setActiveTab('Orders');
     },
@@ -184,14 +173,11 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
           .select('*')
           .eq('venue_id', DEFAULT_VENUE_ID)
           .order('name');
-
         if (error) throw error;
-
         if (data && data.length > 0) {
           setProducts(data);
           localStorage.setItem('wst_catalog_cache', JSON.stringify(data));
           await localDb.cached_catalog.bulkPut(data);
-
           setCounts(prevCounts => {
             const next = { ...prevCounts };
             data.forEach(p => {
@@ -245,7 +231,6 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
           date: s.logged_at ? new Date(s.logged_at).toLocaleString('en-GB') : s.date_str
         })));
       }
-
       if (orderRes.data) {
         setArchiveOrders(orderRes.data.map(o => ({
           id: o.id,
@@ -270,7 +255,6 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
           .select('*')
           .eq('id', file.id)
           .single();
-
         if (error) throw error;
         setSelectedRecordDetail({
           title: file.name,
@@ -287,7 +271,6 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
           .select('*')
           .eq('id', file.id)
           .single();
-
         if (error) throw error;
         setSelectedRecordDetail({
           title: file.name,
@@ -318,21 +301,17 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
     setCounts(prev => {
       const rawCurrent = prev[id] ?? 0;
       const nextVal = Math.max(0, Math.round((rawCurrent + delta) * 10) / 10);
-      
       const prod = products.find(p => p.id === id);
       const par = prod ? (prod.par ?? 0) : 0;
-
       setOrderOverrides(orderPrev => ({
         ...orderPrev,
         [id]: calculateOrderQty(par, nextVal)
       }));
-
       localDb.pending_stock_counts.put({
         id,
         count: nextVal,
         updatedAt: new Date().toISOString()
       });
-
       return { ...prev, [id]: nextVal };
     });
   };
@@ -372,9 +351,9 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
     );
 
     if (!navigator.onLine) {
-      setStatusMsg({ 
-        type: 'info', 
-        text: 'Offline: Counts saved safely to phone disk. Will sync when Wi-Fi connects.' 
+      setStatusMsg({
+        type: 'info',
+        text: 'Offline: Counts saved safely to phone disk. Will sync on reconnection.'
       });
       setSaving(false);
       return;
@@ -396,7 +375,6 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
       const { error: upsertErr } = await supabase
         .from('catalog_items')
         .upsert(updates, { onConflict: 'id' });
-
       if (upsertErr) throw upsertErr;
 
       const { error: snapErr } = await supabase
@@ -407,7 +385,6 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
           manager_name: managerName,
           items: countList
         });
-
       if (snapErr) throw snapErr;
 
       await localDb.pending_stock_counts.clear();
@@ -496,7 +473,6 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
     setSavingToDrive(true);
     const managerName = currentUser?.name || 'Duty Manager';
     const orderDate = new Date().toISOString().slice(0, 10);
-
     try {
       const orderPayload = {
         venue_id: DEFAULT_VENUE_ID,
@@ -525,7 +501,6 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
           ...prev,
           [supplierName]: { dateStr: orderDate, isPlaced: true }
         }));
-
         sendPushNotification(
           `Order Placed: ${supplierName}`,
           `${managerName} placed the order (${items.length} lines)`,
@@ -534,9 +509,9 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
         );
       }
 
-      setStatusMsg({ 
-        type: 'success', 
-        text: isPlaced ? `${supplierName} marked placed!` : `${supplierName} order saved!` 
+      setStatusMsg({
+        type: 'success',
+        text: isPlaced ? `${supplierName} marked placed!` : `${supplierName} order saved!`
       });
     } catch (err) {
       console.error("Order save error:", err);
@@ -549,11 +524,9 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
   const handleSaveAllOrders = async (isPlaced = false) => {
     const suppliers = Object.keys(ordersBySupplier);
     if (suppliers.length === 0) return;
-
     setSavingToDrive(true);
     const managerName = currentUser?.name || 'Duty Manager';
     const orderDate = new Date().toISOString().slice(0, 10);
-
     try {
       const inserts = suppliers.map(sup => ({
         venue_id: DEFAULT_VENUE_ID,
@@ -586,9 +559,9 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
         );
       }
 
-      setStatusMsg({ 
-        type: 'success', 
-        text: isPlaced ? "All orders placed & team notified!" : "All orders saved!" 
+      setStatusMsg({
+        type: 'success',
+        text: isPlaced ? "All orders placed & team notified!" : "All orders saved!"
       });
     } catch (err) {
       console.error("Save all error:", err);
@@ -599,10 +572,11 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
   };
 
   return (
-    <div 
+    <div
       {...swipeHandlers}
-      className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 overflow-x-hidden relative"
+      className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 overflow-x-hidden relative select-none"
     >
+      {/* Top Header */}
       <header className="flex items-center justify-between px-5 pt-[max(1.5rem,env(safe-area-inset-top))] pb-2 border-b border-gray-100 flex-shrink-0 bg-white z-20">
         <div className="flex items-center space-x-2">
           {onBackToHub && (
@@ -612,7 +586,6 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
           )}
           <AppLogo className="w-6 h-6" fallbackTextClass="font-serif text-2xl font-bold tracking-tighter" />
           <span className="font-semibold text-base tracking-tight">West Side Tavern</span>
-          
           {!isOnline ? (
             <span className="flex items-center space-x-1 text-[9px] font-bold text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded-full">
               <WifiOff className="w-2.5 h-2.5" />
@@ -631,7 +604,7 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
           ) : (
             <button onClick={onLogout} className="text-gray-900 hover:text-black">Logout</button>
           )}
-          <button 
+          <button
             onClick={() => setView(view === 'settings' ? 'main' : 'settings')}
             className={`transition ${view === 'settings' ? 'font-bold underline' : 'text-gray-900 hover:text-black'}`}
           >
@@ -640,6 +613,7 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
         </div>
       </header>
 
+      {/* Main Stocktake View */}
       {view === 'settings' ? (
         <div className="flex-1 flex flex-col px-5 pt-4 pb-20 overflow-y-auto space-y-4">
           <div className="flex items-center justify-between pb-3 border-b border-gray-100">
@@ -651,7 +625,6 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
               <X className="w-4 h-4" />
             </button>
           </div>
-
           <div className="space-y-4 text-[11px]">
             <div className="p-3 bg-gray-50 border border-gray-200 rounded-xl space-y-2">
               <div>
@@ -676,7 +649,6 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
                 Clear Local Session Cache
               </button>
             </div>
-
             <button onClick={() => setView('main')} className="w-full py-2.5 bg-[#C2F19D] text-xs font-semibold rounded-lg text-gray-900 hover:bg-[#b2e88a] transition">
               Back to Stocktake
             </button>
@@ -692,7 +664,6 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
                   {modifiedIds.size} counted
                 </span>
               </div>
-
               <div className="flex items-center space-x-2">
                 <button
                   type="button"
@@ -705,13 +676,12 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
                 >
                   <FolderOpen className="w-3.5 h-3.5 text-gray-700" />
                 </button>
-
                 <button
                   type="button"
                   onClick={() => setOrderMode(!orderMode)}
                   className={`flex items-center space-x-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold border transition ${
-                    orderMode 
-                      ? 'bg-black text-white border-black shadow-sm' 
+                    orderMode
+                      ? 'bg-black text-white border-black shadow-sm'
                       : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50'
                   }`}
                 >
@@ -720,12 +690,10 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
                 </button>
               </div>
             </div>
-
             <div className="flex items-center justify-between pt-0.5">
               <span className="text-[10px] text-gray-400 font-mono">
                 {Object.keys(ordersBySupplier).length} Suppliers active
               </span>
-
               <div className="flex items-center space-x-1.5">
                 <button
                   onClick={handleCopyAll}
@@ -735,7 +703,6 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
                 >
                   {copyFeedback === 'ALL' ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />}
                 </button>
-                
                 <button
                   disabled={savingToDrive || Object.keys(ordersBySupplier).length === 0}
                   onClick={() => handleSaveAllOrders(false)}
@@ -743,7 +710,6 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
                 >
                   Save All
                 </button>
-
                 {orderMode && (
                   <button
                     disabled={savingToDrive || Object.keys(ordersBySupplier).length === 0}
@@ -756,14 +722,12 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
                 )}
               </div>
             </div>
-
             {statusMsg && (
               <div className={`p-2 rounded-xl text-[11px] font-semibold mt-2 ${statusMsg.type === 'success' ? 'bg-green-50 text-green-800 border border-green-200' : statusMsg.type === 'info' ? 'bg-blue-50 text-blue-800 border border-blue-200' : 'bg-red-50 text-red-800 border border-red-200'}`}>
                 {statusMsg.text}
               </div>
             )}
           </div>
-
           <div className="flex-1 overflow-y-auto px-5 py-3 space-y-4">
             {modifiedIds.size === 0 ? (
               <div className="text-center py-16 text-gray-400">
@@ -782,7 +746,6 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
                 const totalUnits = items.reduce((sum, item) => sum + item.orderQty, 0);
                 const isSupplierPlaced = placedSuppliers.has(supplier);
                 const lastOrderInfo = lastOrderedMap[supplier];
-
                 return (
                   <div key={supplier} className={`border rounded-2xl overflow-hidden bg-white shadow-sm transition-all ${isSupplierPlaced ? 'border-emerald-300 bg-emerald-50/10' : 'border-gray-200'}`}>
                     <div className="bg-[#F8F8F8] px-3.5 py-2 flex items-center justify-between border-b border-gray-200">
@@ -790,10 +753,9 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
                         <span className="text-xs font-black text-gray-900 uppercase tracking-wide">{supplier}</span>
                         <span className="text-[10px] text-gray-500 font-mono font-bold">({totalUnits} units)</span>
                       </div>
-                      
                       <div className="flex items-center space-x-1">
-                        <button 
-                          onClick={() => handleCopySupplier(supplier, items)} 
+                        <button
+                          onClick={() => handleCopySupplier(supplier, items)}
                           className="p-1 bg-white border border-gray-200 rounded-md text-gray-800 hover:bg-gray-50 transition"
                           title={`Copy ${supplier} order`}
                         >
@@ -808,13 +770,12 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
                         </button>
                       </div>
                     </div>
-
                     <div className="divide-y divide-gray-100">
                       {items.map(item => {
                         const isChecked = checkedItemIds.has(item.id);
                         return (
-                          <div 
-                            key={item.id} 
+                          <div
+                            key={item.id}
                             onClick={() => { if (orderMode) toggleCheckItem(item.id); }}
                             className={`grid grid-cols-12 items-center px-3.5 py-2 text-xs transition-colors ${
                               orderMode ? 'cursor-pointer hover:bg-gray-50' : ''
@@ -841,8 +802,8 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
                             <div className="col-span-5 flex items-center justify-end space-x-1">
                               {!orderMode ? (
                                 <>
-                                  <button 
-                                    onClick={() => updateOrderAmount(item.id, -1)} 
+                                  <button
+                                    onClick={() => updateOrderAmount(item.id, -1)}
                                     className="p-1 text-gray-700 hover:bg-gray-100 rounded transition"
                                   >
                                     <Minus className="w-3 h-3" />
@@ -850,8 +811,8 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
                                   <span className="w-8 py-0.5 bg-[#EDEDED] text-center font-mono font-bold text-gray-900 rounded text-xs">
                                     {item.orderQty}
                                   </span>
-                                  <button 
-                                    onClick={() => updateOrderAmount(item.id, 1)} 
+                                  <button
+                                    onClick={() => updateOrderAmount(item.id, 1)}
                                     className="p-1 text-gray-700 hover:bg-gray-100 rounded transition"
                                   >
                                     <Plus className="w-3 h-3" />
@@ -867,12 +828,10 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
                         );
                       })}
                     </div>
-
                     <div className="px-3.5 py-2 bg-gray-50/80 border-t border-gray-100 flex items-center justify-between text-[10px]">
                       <span className="text-gray-400 font-mono italic">
                         {lastOrderInfo?.dateStr ? `Last ordered: ${lastOrderInfo.dateStr}` : 'Last ordered: No prior record'}
                       </span>
-
                       {orderMode && (
                         <button
                           disabled={savingToDrive || isSupplierPlaced}
@@ -895,26 +854,28 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
           </div>
         </div>
       ) : (
+        /* Stocktake Tab */
         <div className="flex-1 flex flex-col overflow-hidden pb-20">
-          <div className="px-5 pt-3 pb-1 flex justify-between items-end flex-shrink-0">
+          {/* Header Row: Title + Archive + Refresh */}
+          <div className="px-5 pt-3 pb-1 flex justify-between items-baseline flex-shrink-0">
             <div>
               <p className="text-gray-500 italic text-[11px] font-serif">Stocktake</p>
-              <h1 className="text-base font-bold tracking-tight text-gray-900 mt-0.5 leading-snug">
+              <h1 className="text-base font-extrabold tracking-tight text-gray-900 mt-0.5 leading-snug">
                 Week beginning {weekBeginningStr}
               </h1>
             </div>
             <div className="flex items-center space-x-1.5">
-              <button 
+              <button
                 onClick={() => {
                   setArchiveModalOpen(true);
                   fetchFolderArchives();
                 }}
-                className="p-1 text-gray-700 hover:text-black rounded-lg bg-gray-50 border border-gray-200"
+                className="p-1.5 text-gray-700 hover:text-black rounded-lg bg-gray-50 border border-gray-200"
                 title="View Archives"
               >
                 <FolderOpen className="w-3.5 h-3.5" />
               </button>
-              <button onClick={fetchCatalogData} className="p-1 text-gray-500 hover:text-black rounded-lg bg-gray-50 border border-gray-100" title="Sync with Database">
+              <button onClick={fetchCatalogData} className="p-1.5 text-gray-500 hover:text-black rounded-lg bg-gray-50 border border-gray-100" title="Sync with Database">
                 <RefreshCw className={`w-3.5 h-3.5 ${saving ? 'animate-spin' : ''}`} />
               </button>
             </div>
@@ -928,55 +889,60 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
             </div>
           )}
 
-          <div className="flex items-center justify-between px-5 py-1.5 flex-shrink-0">
+          {/* CLEANED UP STATUS & CONTROLS SUB-BAR (No Crowding, No Width Jumps) */}
+          <div className="flex items-center justify-between px-5 py-2 flex-shrink-0 bg-white">
+            {/* Left: Day Badge & Count Counter */}
             <div className="flex items-center space-x-2">
-              <span className="bg-[#F3F3F3] font-bold px-2.5 py-1 rounded-lg text-[10px] text-gray-800 tracking-wide uppercase">{dayName}</span>
-              {modifiedIds.size > 0 && <span className="text-[10px] text-gray-500 font-medium italic">{modifiedIds.size} counted</span>}
+              <span className="bg-[#F3F3F3] font-black px-2.5 py-1 rounded-lg text-[10px] text-gray-800 tracking-wider uppercase">
+                {dayName}
+              </span>
+              <span className="text-[10px] text-gray-500 font-mono font-semibold">
+                {modifiedIds.size} counted
+              </span>
             </div>
-            
-            <div className="flex items-center space-x-1.5">
-              {/* Fullscreen Speed Count Launcher */}
-              <button
-                type="button"
-                onClick={() => setFullScreenMode(true)}
-                className="flex items-center space-x-1 px-2.5 py-1 bg-black text-white hover:bg-neutral-800 rounded-lg text-[10px] font-bold transition shadow-sm"
-                title="Open Fullscreen Keypad Count Mode"
-              >
-                <Maximize2 className="w-3 h-3 text-emerald-400" />
-                <span>Speed Count</span>
-              </button>
 
+            {/* Right: Fixed-Width Mode Toggle, Clear & Save */}
+            <div className="flex items-center space-x-1.5">
+              {/* Fixed-Width Toggle Button (w-[76px]) Prevents Layout Shifting */}
               <button
                 type="button"
                 onClick={() => setDetailedMode(!detailedMode)}
-                className={`flex items-center space-x-1 px-2 py-1 rounded-lg text-[10px] font-bold border transition ${
-                  detailedMode 
-                    ? 'bg-black text-white border-black shadow-sm' 
+                className={`w-[78px] py-1 rounded-lg text-[10px] font-bold border transition text-center flex items-center justify-center space-x-1 ${
+                  detailedMode
+                    ? 'bg-black text-white border-black shadow-xs'
                     : 'bg-[#EDEDED] text-gray-700 border-transparent hover:bg-gray-200'
                 }`}
-                title="Toggle 0.1 decimal counting precision"
+                title="Toggle Decimal Precision"
               >
-                <SlidersHorizontal className="w-3 h-3 text-emerald-400" />
+                <SlidersHorizontal className="w-2.5 h-2.5 text-emerald-400" />
                 <span>{detailedMode ? '0.1 Mode' : 'Standard'}</span>
               </button>
 
-              <button 
-                onClick={() => { 
-                  setCounts({}); 
-                  setModifiedIds(new Set()); 
+              <button
+                type="button"
+                onClick={() => {
+                  setCounts({});
+                  setModifiedIds(new Set());
                   localStorage.removeItem('wst_active_counts');
                   localStorage.removeItem('wst_modified_ids');
-                }} 
-                className="px-2 py-1 bg-[#F3F3F3] hover:bg-gray-200 rounded-lg text-xs font-medium text-gray-800 transition"
+                }}
+                className="px-2 py-1 text-gray-400 hover:text-black rounded-lg text-[10px] font-bold transition"
+                title="Clear current counts"
               >
                 Clear
               </button>
-              <button onClick={handleSaveToSheet} disabled={saving} className="flex items-center space-x-1 px-2.5 py-1 bg-[#C2F19D] hover:bg-[#b2e88a] rounded-lg text-xs font-bold text-gray-900 transition">
+
+              <button
+                onClick={handleSaveToSheet}
+                disabled={saving}
+                className="flex items-center space-x-1 px-3 py-1 bg-[#C2F19D] hover:bg-[#b2e88a] rounded-lg text-xs font-black text-gray-900 transition shadow-xs flex-shrink-0"
+              >
                 <span>{saving ? 'Saving...' : 'Save Stocktake'}</span>
               </button>
             </div>
           </div>
 
+          {/* Search & Filter Pills */}
           <div className="px-5 py-1 flex-shrink-0 space-y-1.5">
             <div className="relative">
               <input
@@ -1040,7 +1006,8 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
             )}
           </div>
 
-          <div className="grid grid-cols-12 px-5 py-1 border-b border-gray-100 text-[11px] font-bold text-gray-900 mt-1 flex-shrink-0">
+          {/* Table Headers */}
+          <div className="grid grid-cols-12 px-5 py-1.5 border-b border-gray-100 text-[11px] font-bold text-gray-900 mt-1 flex-shrink-0">
             <span className={detailedMode ? "col-span-4" : "col-span-5"}>Stock Item</span>
             <span className={detailedMode ? "col-span-2 text-center" : "col-span-2 text-center"}>Order</span>
             <span className={detailedMode ? "col-span-2 text-center" : "col-span-2 text-center"}>Par</span>
@@ -1049,6 +1016,7 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
             </span>
           </div>
 
+          {/* Table Body */}
           <div className="flex-1 overflow-y-auto px-5 divide-y divide-gray-100">
             {filteredProducts.length === 0 ? (
               <p className="text-center py-8 text-xs text-gray-500">No matching products found.</p>
@@ -1057,7 +1025,6 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
                 const currentCount = counts[product.id] ?? 0;
                 const orderAmt = orderOverrides[product.id] ?? calculateOrderQty(product.par ?? 0, currentCount);
                 const isModified = modifiedIds.has(product.id);
-
                 return (
                   <div key={product.id} className={`grid grid-cols-12 items-center py-2 text-xs transition-colors ${isModified ? 'bg-[#FAFCF8] border-l-2 border-black pl-2 -ml-2 pr-1' : ''}`}>
                     <div className={`${detailedMode ? "col-span-4" : "col-span-5"} pr-1`}>
@@ -1069,49 +1036,44 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
                         <span className="text-[9px] text-gray-400 italic">({product.unit})</span>
                       </div>
                     </div>
-
                     <div className={`col-span-2 text-center text-xs ${isModified && orderAmt > 0 ? 'font-black text-black' : 'font-normal text-gray-400'}`}>
                       {orderAmt}
                     </div>
-
                     <div className="col-span-2 text-center text-gray-700 font-medium text-xs">
                       {product.par}
                     </div>
-
                     <div className={`${detailedMode ? "col-span-4" : "col-span-3"} flex items-center justify-end space-x-1`}>
                       {detailedMode ? (
                         <div className="flex items-center space-x-1">
                           <div className="flex flex-col space-y-0.5">
-                            <button 
-                              onClick={() => updateCount(product.id, 1)} 
+                            <button
+                              onClick={() => updateCount(product.id, 1)}
                               className="px-1 py-0.5 bg-gray-100 hover:bg-gray-200 text-[9px] font-bold rounded"
                               title="+1 Whole Unit"
                             >
                               +1
                             </button>
-                            <button 
-                              onClick={() => updateCount(product.id, -1)} 
+                            <button
+                              onClick={() => updateCount(product.id, -1)}
                               className="px-1 py-0.5 bg-gray-100 hover:bg-gray-200 text-[9px] font-bold rounded"
                               title="-1 Whole Unit"
                             >
                               -1
                             </button>
                           </div>
-
                           <span className={`w-9 py-1 text-center rounded text-xs transition-colors font-mono font-bold ${isModified ? 'bg-[#D9EECD] text-black' : 'bg-[#EDEDED] text-gray-700'}`}>
                             {Number(currentCount).toFixed(1)}
                           </span>
-
                           <div className="flex flex-col space-y-0.5">
-                            <button 
-                              onClick={() => updateCount(product.id, 0.1)} 
+                            <button
+                              onClick={() => updateCount(product.id, 0.1)}
                               className="px-1 py-0.5 bg-gray-100 hover:bg-gray-200 text-[8px] font-bold rounded"
                               title="+0.1 Tenth"
                             >
                               +.1
                             </button>
-                            <button 
-                              onClick={() => updateCount(product.id, -0.1)} 
+                            <button
+                              onClick={() => updateCount(product.id, -0.1)}
                               className="px-1 py-0.5 bg-gray-100 hover:bg-gray-200 text-[8px] font-bold rounded"
                               title="-0.1 Tenth"
                             >
@@ -1141,6 +1103,21 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
         </div>
       )}
 
+      {/* Floating Action Button for Speed Count Mode */}
+      {activeTab === 'Stocktake' && view === 'main' && (
+        <div className="fixed bottom-16 right-5 z-30">
+          <button
+            onClick={() => setSpeedCountOpen(true)}
+            className="w-13 h-13 rounded-full bg-black hover:bg-neutral-800 text-white shadow-xl flex items-center justify-center transition active:scale-95 border border-white/10"
+            title="Open Fullscreen Speed Count Keypad"
+            aria-label="Speed Count"
+          >
+            <Maximize2 className="w-5 h-5 text-emerald-400 stroke-[2.2]" />
+          </button>
+        </div>
+      )}
+
+      {/* Archive Inspection Modal */}
       {archiveModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white w-full max-w-sm rounded-3xl overflow-hidden shadow-2xl border border-gray-200 flex flex-col max-h-[80vh] animate-in fade-in zoom-in-95 duration-150">
@@ -1149,14 +1126,13 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
                 <span className="text-[9px] font-mono uppercase font-bold text-gray-400">Database Archive</span>
                 <h2 className="text-sm font-black text-gray-900 leading-tight mt-0.5">Compiled Records</h2>
               </div>
-              <button 
+              <button
                 onClick={() => setArchiveModalOpen(false)}
                 className="p-1 text-gray-400 hover:text-black bg-white rounded-full border border-gray-200 shadow-sm"
               >
                 <X className="w-3.5 h-3.5" />
               </button>
             </div>
-
             <div className="px-5 pt-3 pb-2 border-b border-gray-100 flex space-x-2">
               <button
                 onClick={() => setArchiveTab('stocktakes')}
@@ -1177,7 +1153,6 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
                 <span>Order Lists</span>
               </button>
             </div>
-
             <div className="flex-1 overflow-y-auto px-5 py-3 divide-y divide-gray-100 text-xs">
               {loadingArchive ? (
                 <p className="text-center py-8 text-gray-400 italic">Reading records from database...</p>
@@ -1186,8 +1161,8 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
                   <p className="text-center py-8 text-gray-400 italic">No compiled stocktakes found.</p>
                 ) : (
                   archiveStocktakes.map(file => (
-                    <div 
-                      key={file.id} 
+                    <div
+                      key={file.id}
                       onClick={() => handleOpenRecordDetail(file)}
                       className="py-2.5 flex items-center justify-between hover:bg-gray-50 cursor-pointer rounded-lg px-1 transition"
                     >
@@ -1204,8 +1179,8 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
                   <p className="text-center py-8 text-gray-400 italic">No compiled orders found.</p>
                 ) : (
                   archiveOrders.map(file => (
-                    <div 
-                      key={file.id} 
+                    <div
+                      key={file.id}
                       onClick={() => handleOpenRecordDetail(file)}
                       className="py-2.5 flex items-center justify-between hover:bg-gray-50 cursor-pointer rounded-lg px-1 transition"
                     >
@@ -1223,6 +1198,7 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
         </div>
       )}
 
+      {/* Record Inspector Drawer */}
       {selectedRecordDetail && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white w-full max-w-sm rounded-3xl overflow-hidden shadow-2xl border border-gray-200 flex flex-col max-h-[85vh] animate-in fade-in zoom-in-95 duration-150">
@@ -1231,14 +1207,13 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
                 <span className="text-[9px] font-mono uppercase font-bold text-gray-400">Record Inspection</span>
                 <h2 className="text-sm font-black text-gray-900 leading-tight mt-0.5">{selectedRecordDetail.title}</h2>
               </div>
-              <button 
+              <button
                 onClick={() => setSelectedRecordDetail(null)}
                 className="p-1 text-gray-400 hover:text-black bg-white rounded-full border border-gray-200 shadow-sm"
               >
                 <X className="w-3.5 h-3.5" />
               </button>
             </div>
-
             <div className="flex-1 overflow-y-auto px-5 py-3 space-y-3 text-xs">
               {loadingRecordDetail ? (
                 <p className="text-center py-12 text-gray-400 italic">Loading record contents...</p>
@@ -1254,13 +1229,11 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
                       ))}
                     </div>
                   )}
-
                   <div className="border border-gray-200 rounded-xl overflow-hidden divide-y divide-gray-100 bg-white">
                     <div className="grid grid-cols-12 bg-gray-50 px-3 py-1.5 text-[9px] font-bold text-gray-400 uppercase">
                       <span className="col-span-8">Product / Item</span>
                       <span className="col-span-4 text-right">Qty / Par</span>
                     </div>
-
                     {(selectedRecordDetail.items || []).map((it, idx) => (
                       <div key={idx} className="grid grid-cols-12 items-center px-3 py-2 text-[11px]">
                         <div className="col-span-8 pr-1">
@@ -1282,24 +1255,24 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
       )}
 
       {/* Floating Bottom Nav */}
-      <nav className="fixed bottom-2 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-[390px] z-30 rounded-2xl bg-[#111111]/95 backdrop-blur-md text-white py-2 px-3 flex justify-around items-center text-xs font-semibold shadow-2xl border border-white/10 select-none pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))]">
-        <button 
-          onClick={() => { setView('main'); setActiveTab('Stocktake'); }} 
+      <nav className="fixed bottom-2 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-[390px] z-20 rounded-2xl bg-[#111111]/95 backdrop-blur-md text-white py-2 px-3 flex justify-around items-center text-xs font-semibold shadow-2xl border border-white/10 select-none pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))]">
+        <button
+          onClick={() => { setView('main'); setActiveTab('Stocktake'); }}
           className={`flex-1 py-1 text-center rounded-xl transition ${activeTab === 'Stocktake' && view === 'main' ? 'text-white bg-white/15 font-bold shadow-inner' : 'text-gray-400 hover:text-white'}`}
         >
           Stocktake
         </button>
-        <button 
-          onClick={() => { setView('main'); setActiveTab('Orders'); }} 
+        <button
+          onClick={() => { setView('main'); setActiveTab('Orders'); }}
           className={`flex-1 py-1 text-center rounded-xl transition ${activeTab === 'Orders' && view === 'main' ? 'text-white bg-white/15 font-bold shadow-inner' : 'text-gray-400 hover:text-white'}`}
         >
           Orders
         </button>
       </nav>
 
-      {/* Fullscreen Keypad Speed Count Overlay */}
-      {fullScreenMode && (
-        <StocktakeMode
+      {/* Dedicated SpeedCount Component */}
+      {speedCountOpen && (
+        <SpeedCount
           products={filteredProducts.length > 0 ? filteredProducts : products}
           counts={counts}
           initialArea={selectedAreas[0] || null}
@@ -1312,7 +1285,7 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
               updatedAt: new Date().toISOString()
             });
           }}
-          onClose={() => setFullScreenMode(false)}
+          onClose={() => setSpeedCountOpen(false)}
         />
       )}
     </div>
