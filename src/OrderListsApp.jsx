@@ -21,6 +21,7 @@ import {
   MapPin,
   Sparkles
 } from 'lucide-react';
+import { calculateSmartOrder } from './lib/orderMath';
 import { useTwoFingerSwipe } from './useTwoFingerSwipe';
 import { supabase, localDb, DEFAULT_VENUE_ID } from './lib/db';
 import { sendPushNotification } from './lib/notifications';
@@ -61,15 +62,6 @@ function getFormattedDates() {
   const weekBeginningStr = `${dayOfMonth}${getOrdinalSuffix(dayOfMonth)} ${monthName}`;
   const fullDateStr = `${dayName} ${dayOfMonth}${getOrdinalSuffix(dayOfMonth)} ${monthName}`;
   return { dayName, weekBeginningStr, fullDateStr };
-}
-
-function calculateOrderQty(parLevel, currentStock) {
-  const par = Number(parLevel) || 0;
-  const count = Number(currentStock) || 0;
-  if (count <= 0.25) {
-    return Math.max(1, Math.ceil(par - count));
-  }
-  return Math.max(0, Math.ceil(par - count));
 }
 
 export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
@@ -297,14 +289,17 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
 
     const itemsToSave = filteredProducts.map(p => {
       const countedVal = counts[p.id] ?? 0;
-      const parVal = p.par || 0;
+      const smart = calculateSmartOrder(p, countedVal);
       return {
         id: p.id,
         name: p.name,
+        category: p.category || 'spirits',
         count: countedVal,
-        unit: p.unit || 'unit',
-        par: parVal,
-        orderQty: calculateOrderQty(parVal, countedVal),
+        unit: p.count_unit || p.unit || 'unit',
+        par: p.par || 0,
+        orderQty: smart.orderQty,
+        orderDisplay: smart.displayStr,
+        orderUnit: smart.orderUnit,
         supplier: p.supplier || 'General',
         area: p.area || 'Main Bar'
       };
@@ -363,14 +358,17 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
     setSpeedCountOpen(false);
     const scopeItems = (activeCountScope.list || products).map(p => {
       const countedVal = counts[p.id] ?? 0;
-      const parVal = p.par || 0;
+      const smart = calculateSmartOrder(p, countedVal);
       return {
         id: p.id,
         name: p.name,
+        category: p.category || 'spirits',
         count: countedVal,
-        unit: p.unit || 'unit',
-        par: parVal,
-        orderQty: calculateOrderQty(parVal, countedVal),
+        unit: p.count_unit || p.unit || 'unit',
+        par: p.par || 0,
+        orderQty: smart.orderQty,
+        orderDisplay: smart.displayStr,
+        orderUnit: smart.orderUnit,
         supplier: p.supplier || 'General',
         area: p.area || 'Main Bar'
       };
@@ -391,7 +389,7 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
     setCheckedItemIds(new Set());
     const initialOverrides = {};
     (session.items || []).forEach(it => {
-      initialOverrides[it.id] = it.orderQty ?? calculateOrderQty(it.par, it.count);
+      initialOverrides[it.id] = it.orderQty ?? calculateSmartOrder(it, it.count).orderQty;
     });
     setSessionOrderOverrides(initialOverrides);
   };
@@ -417,7 +415,7 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
     (session.items || []).forEach(it => {
       const qty = sessionOrderOverrides[it.id] ?? it.orderQty;
       if (qty > 0) {
-        text += `• [${it.id}] ${it.name} (${it.unit}) x ${qty}\n`;
+        text += `• [${it.id}] ${it.name} x ${qty} ${it.orderUnit || it.unit}\n`;
       }
     });
     navigator.clipboard.writeText(text);
@@ -484,7 +482,7 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
       {...swipeHandlers}
       className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 overflow-x-hidden relative select-none"
     >
-      {/* Single Consolidated Top Header */}
+      {/* Header */}
       <header className="flex items-center justify-between px-5 pt-[max(1.5rem,env(safe-area-inset-top))] pb-2 border-b border-gray-100 flex-shrink-0 bg-white z-20">
         <div className="flex items-center space-x-2">
           {onBackToHub && (
@@ -530,7 +528,7 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
               </button>
             </div>
             <p className="text-[10px] text-gray-400 mt-0.5">
-              Select a saved count session to review deficits, adjust quantities, and place orders.
+              Review scoped count sessions with automated packaging rules applied.
             </p>
           </div>
 
@@ -554,7 +552,7 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
             ) : (
               savedSessions.map(session => {
                 const isOrdered = session.status === 'ordered';
-                const itemsBelowPar = (session.items || []).filter(it => (it.orderQty ?? calculateOrderQty(it.par, it.count)) > 0);
+                const itemsBelowPar = (session.items || []).filter(it => (it.orderQty ?? calculateSmartOrder(it, it.count).orderQty) > 0);
                 const scopeLabel = session.scope_name || 'Full Venue';
                 const dateDisplay = session.date_str || new Date(session.logged_at).toLocaleDateString('en-GB');
 
@@ -765,7 +763,7 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
             ) : (
               filteredProducts.map(product => {
                 const currentCount = counts[product.id] ?? 0;
-                const orderAmt = calculateOrderQty(product.par ?? 0, currentCount);
+                const smart = calculateSmartOrder(product, currentCount);
                 const isModified = modifiedIds.has(product.id);
                 return (
                   <div key={product.id} className={`grid grid-cols-12 items-center py-2 text-xs transition-colors ${isModified ? 'bg-[#FAFCF8] border-l-2 border-black pl-2 -ml-2 pr-1' : ''}`}>
@@ -775,12 +773,15 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
                       </span>
                       <div className="flex items-center space-x-1 mt-0.5">
                         <span className="font-mono text-[8px] bg-gray-100 text-gray-500 px-1 rounded">{product.id}</span>
-                        <span className="text-[9px] text-gray-400 italic">({product.unit})</span>
+                        <span className="text-[9px] text-gray-400 italic">({product.count_unit || product.unit || 'unit'})</span>
                       </div>
                     </div>
-                    <div className={`col-span-2 text-center text-xs ${isModified && orderAmt > 0 ? 'font-black text-black' : 'font-normal text-gray-400'}`}>
-                      {orderAmt}
+
+                    {/* Category-Smart Order Suggestion */}
+                    <div className={`col-span-2 text-center text-xs ${isModified && smart.orderQty > 0 ? 'font-black text-black' : 'font-normal text-gray-400'}`}>
+                      {smart.displayStr}
                     </div>
+
                     <div className="col-span-2 text-center text-gray-700 font-medium text-xs">
                       {product.par}
                     </div>
@@ -845,7 +846,7 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
         </div>
       )}
 
-      {/* Redesigned Floating Speed Count Action Button */}
+      {/* Floating Speed Count Action Button */}
       {activeTab === 'Stocktake' && (
         <div className="fixed bottom-20 right-5 z-30 select-none">
           <button
@@ -880,7 +881,6 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
             </div>
 
             <div className="p-5 overflow-y-auto space-y-4 text-xs">
-              {/* Option 1: Major Audit */}
               <div 
                 onClick={() => handleLaunchSpeedCountScope('full', 'Full Venue Audit', products)}
                 className="border-2 border-black bg-neutral-900 text-white rounded-2xl p-4 cursor-pointer transition active:scale-[0.98] shadow-sm flex items-center justify-between group"
@@ -897,7 +897,6 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
                 <ChevronRight className="w-4 h-4 text-gray-400 group-hover:translate-x-0.5 transition-transform" />
               </div>
 
-              {/* Option 2: By Supplier */}
               <div className="space-y-1.5">
                 <div className="flex items-center space-x-1 text-gray-500 font-bold text-[10px] uppercase tracking-wider">
                   <Building2 className="w-3.5 h-3.5 text-gray-700" />
@@ -925,7 +924,6 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
                 </div>
               </div>
 
-              {/* Option 3: By Area */}
               <div className="space-y-1.5 pt-1">
                 <div className="flex items-center space-x-1 text-gray-500 font-bold text-[10px] uppercase tracking-wider">
                   <MapPin className="w-3.5 h-3.5 text-emerald-600" />
@@ -1028,7 +1026,7 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
                           {item.name}
                         </span>
                         <span className="text-[9px] text-gray-400 font-mono">
-                          {item.id} • Count: {item.count} • Par: {item.par} ({item.unit})
+                          {item.id} • Count: {item.count} • Par: {item.par}
                         </span>
                       </div>
                     </div>
@@ -1043,8 +1041,8 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
                           >
                             <Minus className="w-3 h-3" />
                           </button>
-                          <span className="w-8 py-0.5 bg-[#EDEDED] text-center font-mono font-bold text-gray-900 rounded text-xs">
-                            {orderQty}
+                          <span className="w-12 py-0.5 bg-[#EDEDED] text-center font-mono font-bold text-gray-900 rounded text-xs truncate px-1">
+                            {orderQty} {item.orderUnit || item.unit}
                           </span>
                           <button
                             type="button"
@@ -1056,7 +1054,7 @@ export default function OrderListsApp({ currentUser, onBackToHub, onLogout }) {
                         </>
                       ) : (
                         <span className="font-mono text-xs font-bold px-2 py-0.5 bg-gray-100 rounded text-gray-800">
-                          {orderQty} {item.unit}
+                          {orderQty} {item.orderUnit || item.unit}
                         </span>
                       )}
                     </div>

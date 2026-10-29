@@ -6,10 +6,8 @@ import {
   Trash2,
   Save,
   X,
-  Sliders,
   Package,
-  RefreshCw,
-  SlidersHorizontal
+  RefreshCw
 } from 'lucide-react';
 import { useTwoFingerSwipe } from './useTwoFingerSwipe';
 import { supabase, DEFAULT_VENUE_ID } from './lib/db';
@@ -520,7 +518,7 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
       )}
 
       {/* Floating Bottom Nav */}
-      <nav className="fixed bottom-2 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-[390px] z-30 rounded-2xl bg-[#111111]/95 backdrop-blur-md text-white py-2 px-3 flex justify-around items-center text-xs font-semibold shadow-2xl border border-white/10 select-none pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))]">
+      <nav className="fixed bottom-2 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-[390px] z-20 rounded-2xl bg-[#111111]/95 backdrop-blur-md text-white py-2 px-3 flex justify-around items-center text-xs font-semibold shadow-2xl border border-white/10 select-none pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))]">
         <button
           onClick={onBackToHub}
           className="flex-1 py-1 text-center rounded-xl transition text-neutral-400 hover:text-white"
