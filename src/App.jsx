@@ -4,6 +4,7 @@ import PettyCashApp from './PettyCashApp';
 import GoodsReceivedApp from './GoodsReceivedApp';
 import OrderListsApp from './OrderListsApp';
 import SpillageAndWastage from './SpillageAndWastage';
+import CatalogManagerApp from './CatalogManagerApp';
 import Settings from './Settings';
 import PreShiftCard from './PreShiftCard';
 import OpsChatDrawer from './OpsChatDrawer';
@@ -21,7 +22,8 @@ import {
   ChevronRight,
   PlusCircle,
   FolderOpen,
-  TrendingDown
+  TrendingDown,
+  Sliders
 } from 'lucide-react';
 import { useTwoFingerSwipe } from './useTwoFingerSwipe';
 import { supabase, DEFAULT_VENUE_ID } from './lib/db';
@@ -187,7 +189,7 @@ export default function App() {
     }
   }, [currentUser, activeModule]);
 
-  // Deep linking parser for module routing
+  // Deep linking parser
   useEffect(() => {
     try {
       const params = new URLSearchParams(window.location.search);
@@ -227,7 +229,6 @@ export default function App() {
     });
   }, [currentUser]);
 
-  // Notification dispatcher accepting object or positional parameters
   const triggerPushNotification = async (arg1, arg2, arg3) => {
     if (typeof arg1 === 'object' && arg1 !== null) {
       const { title, message, targetManager = null } = arg1;
@@ -522,6 +523,18 @@ export default function App() {
     );
   }
 
+  if (activeModule === 'catalog') {
+    return (
+      <div {...swipeHandlers} className="h-screen w-full">
+        <CatalogManagerApp
+          currentUser={currentUser}
+          onBackToHub={() => setActiveModule('hub')}
+          onLogout={handleLogout}
+        />
+      </div>
+    );
+  }
+
   if (activeModule === 'settings') {
     return (
       <div {...swipeHandlers} className="h-screen w-full">
@@ -676,18 +689,6 @@ export default function App() {
               </div>
 
               <div
-                onClick={() => setActiveModule('petty')}
-                className="flex flex-col items-center space-y-2 cursor-pointer flex-shrink-0 group active:scale-95 transition"
-              >
-                <div className="w-[66px] h-[66px] rounded-2xl bg-[#7EE9B6] shadow-sm flex items-center justify-center text-neutral-900">
-                  <Coins className="w-7 h-7 stroke-[2.2]" />
-                </div>
-                <span className="text-xs font-bold text-neutral-900 text-center tracking-tight leading-tight">
-                  Cash Up
-                </span>
-              </div>
-
-              <div
                 onClick={() => setActiveModule('orders')}
                 className="flex flex-col items-center space-y-2 cursor-pointer flex-shrink-0 group active:scale-95 transition"
               >
@@ -709,6 +710,31 @@ export default function App() {
                 </div>
                 <span className="text-xs font-bold text-neutral-900 text-center tracking-tight leading-tight max-w-[70px]">
                   Spillage &amp; Waste
+                </span>
+              </div>
+
+              <div
+                onClick={() => setActiveModule('petty')}
+                className="flex flex-col items-center space-y-2 cursor-pointer flex-shrink-0 group active:scale-95 transition"
+              >
+                <div className="w-[66px] h-[66px] rounded-2xl bg-[#7EE9B6] shadow-sm flex items-center justify-center text-neutral-900">
+                  <Coins className="w-7 h-7 stroke-[2.2]" />
+                </div>
+                <span className="text-xs font-bold text-neutral-900 text-center tracking-tight leading-tight">
+                  Cash Up
+                </span>
+              </div>
+
+              {/* Master Catalog Tool Tile */}
+              <div
+                onClick={() => setActiveModule('catalog')}
+                className="flex flex-col items-center space-y-2 cursor-pointer flex-shrink-0 group active:scale-95 transition"
+              >
+                <div className="w-[66px] h-[66px] rounded-2xl bg-[#D6E4FF] shadow-sm flex items-center justify-center text-neutral-900">
+                  <Sliders className="w-7 h-7 stroke-[2.2]" />
+                </div>
+                <span className="text-xs font-bold text-neutral-900 text-center tracking-tight leading-tight max-w-[70px]">
+                  Master Catalog
                 </span>
               </div>
 
@@ -774,29 +800,6 @@ export default function App() {
               </div>
 
               <div
-                onClick={() => setActiveModule('petty')}
-                className="w-[220px] h-[190px] rounded-3xl bg-white border border-neutral-200/90 p-5 flex flex-col justify-between flex-shrink-0 cursor-pointer active:scale-[0.98] transition hover:shadow-sm"
-              >
-                <div>
-                  <span className="text-[10px] font-black tracking-widest uppercase text-emerald-600 block mb-1">
-                    Safe &amp; Till
-                  </span>
-                  <h3 className="text-base font-extrabold text-neutral-900 leading-snug">
-                    Add Petty Cash Report
-                  </h3>
-                </div>
-                <div className="space-y-1">
-                  <p className="text-xs text-neutral-500">
-                    Standard float: <strong className="text-neutral-900">£1,200.00</strong>
-                  </p>
-                  <div className="pt-3 flex items-center text-xs font-bold text-neutral-900 gap-1">
-                    <PlusCircle className="w-4 h-4 text-neutral-900" />
-                    <span>Log Expense / Denoms</span>
-                  </div>
-                </div>
-              </div>
-
-              <div
                 onClick={() => setActiveModule('orders')}
                 className="w-[220px] h-[190px] rounded-3xl bg-[#F4F5F7] border border-neutral-200 p-5 flex flex-col justify-between flex-shrink-0 cursor-pointer active:scale-[0.98] transition hover:shadow-sm"
               >
@@ -838,6 +841,29 @@ export default function App() {
                   <div className="pt-3 flex items-center text-xs font-bold text-neutral-900 gap-1">
                     <TrendingDown className="w-4 h-4 text-rose-600" />
                     <span>Deduct stock</span>
+                  </div>
+                </div>
+              </div>
+
+              <div
+                onClick={() => setActiveModule('petty')}
+                className="w-[220px] h-[190px] rounded-3xl bg-white border border-neutral-200/90 p-5 flex flex-col justify-between flex-shrink-0 cursor-pointer active:scale-[0.98] transition hover:shadow-sm"
+              >
+                <div>
+                  <span className="text-[10px] font-black tracking-widest uppercase text-emerald-600 block mb-1">
+                    Safe &amp; Till
+                  </span>
+                  <h3 className="text-base font-extrabold text-neutral-900 leading-snug">
+                    Add Petty Cash Report
+                  </h3>
+                </div>
+                <div className="space-y-1">
+                  <p className="text-xs text-neutral-500">
+                    Standard float: <strong className="text-neutral-900">£1,200.00</strong>
+                  </p>
+                  <div className="pt-3 flex items-center text-xs font-bold text-neutral-900 gap-1">
+                    <PlusCircle className="w-4 h-4 text-neutral-900" />
+                    <span>Log Expense / Denoms</span>
                   </div>
                 </div>
               </div>

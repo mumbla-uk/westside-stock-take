@@ -73,7 +73,7 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
         if (navigator.onLine) {
           const { data } = await supabase
             .from('catalog_items')
-            .select('id, name, unit, supplier')
+            .select('*')
             .eq('venue_id', DEFAULT_VENUE_ID);
           if (data && data.length > 0) {
             setProducts(data);
@@ -102,10 +102,21 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
   const handleSelectProduct = (prod) => {
     setSelectedProduct(prod);
     setCustomName(prod.name);
-    setCustomUnit(prod.unit || 'unit');
+    setCustomUnit(prod.order_unit || prod.unit || 'unit');
     setItemSearch(prod.name);
     if (!invoiceSupplier && prod.supplier) {
       setInvoiceSupplier(prod.supplier);
+    }
+    // Auto-fill cost from catalog if available
+    if (prod.cost_price_ex_vat) {
+      const cEx = Number(prod.cost_price_ex_vat);
+      setUnitEx(cEx.toFixed(2));
+      setUnitInc((cEx * 1.20).toFixed(2));
+      if (qtyDelivered) {
+        const qty = parseFloat(qtyDelivered) || 1;
+        setTotalEx((cEx * qty).toFixed(2));
+        setTotalInc((cEx * qty * 1.20).toFixed(2));
+      }
     }
   };
 
@@ -171,7 +182,7 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
       sku: selectedProduct ? selectedProduct.id : 'CUSTOM',
       name: finalName,
       supplier: invoiceSupplier || (selectedProduct ? selectedProduct.supplier : 'General'),
-      unit: customUnit || (selectedProduct ? selectedProduct.unit : 'unit'),
+      unit: customUnit || (selectedProduct ? (selectedProduct.order_unit || selectedProduct.unit) : 'unit'),
       qty: parseFloat(qtyDelivered) || 1,
       unitEx: parseFloat(unitEx) || 0,
       unitInc: parseFloat(unitInc) || 0,
@@ -189,6 +200,7 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
     setTotalInc('');
   };
 
+  // Submit delivery report & automatically propagate unit costs to master catalog
   const handleSubmitInvoiceReport = async () => {
     if (receivedItems.length === 0) return;
     setSubmittingReport(true);
@@ -197,6 +209,7 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
     const sup = invoiceSupplier.trim() || 'Supplier';
 
     try {
+      // 1. Insert into goods_received ledger[cite: 9]
       const { error } = await supabase.from('goods_received').insert({
         venue_id: DEFAULT_VENUE_ID,
         supplier: sup,
@@ -208,6 +221,20 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
 
       if (error) throw error;
 
+      // 2. Automatically sync unit prices back to catalog_items for live GP & cost calculations
+      for (const item of receivedItems) {
+        if (item.unitEx > 0 && item.id && !item.id.startsWith('CUSTOM-')) {
+          await supabase
+            .from('catalog_items')
+            .update({
+              last_cost_ex_vat: Number(item.unitEx),
+              cost_price_ex_vat: Number(item.unitEx),
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', item.id);
+        }
+      }
+
       sendPushNotification(
         `Delivery Logged: ${sup}`,
         `${receivedItems.length} items checked in (${invoiceRef ? "Ref: " + invoiceRef : deliveryDate})`,
@@ -215,7 +242,7 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
         { module: 'goods' }
       );
 
-      setStatusMsg({ type: 'success', text: `Delivery report for ${sup} saved!` });
+      setStatusMsg({ type: 'success', text: `Delivery for ${sup} saved & master costs updated!` });
       setReceivedItems([]);
       setInvoiceRef('');
       setInvoiceNotes('');
@@ -251,7 +278,7 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
   return (
     <div 
       {...swipeHandlers}
-      className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 overflow-x-hidden relative"
+      className="flex flex-col h-[100dvh] w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 overflow-hidden relative select-none"
     >
       <header className="flex items-center justify-between px-5 pt-[max(1.5rem,env(safe-area-inset-top))] pb-2 border-b border-gray-100 flex-shrink-0 bg-white z-20">
         <div className="flex items-center space-x-2">
@@ -272,8 +299,8 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
         </div>
       </header>
 
-      <div className="flex-1 flex flex-col overflow-y-auto px-5 py-3 space-y-3.5 pb-20">
-        <div className="border-b border-gray-100 pb-2.5">
+      <div className="flex-1 min-h-0 flex flex-col overflow-y-auto px-5 py-3 space-y-3.5 pb-28 touch-pan-y overscroll-contain">
+        <div className="border-b border-gray-100 pb-2.5 flex-shrink-0">
           <div className="flex justify-between items-start">
             <div>
               <p className="text-gray-500 italic text-[11px] font-serif">Delivery Check-In</p>
@@ -331,7 +358,7 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
           </div>
         </div>
 
-        <form onSubmit={handleAddReceivedItem} className="bg-gray-50 border border-gray-200 rounded-xl p-3 space-y-2.5 text-xs">
+        <form onSubmit={handleAddReceivedItem} className="bg-gray-50 border border-gray-200 rounded-2xl p-3 space-y-2.5 text-xs flex-shrink-0">
           <span className="block font-bold text-gray-900 uppercase tracking-wider text-[10px]">Add Invoice Line Item</span>
           
           <div className="relative">
@@ -344,7 +371,7 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
                 setCustomName(e.target.value); 
               }}
               placeholder="Search catalog or type custom item..."
-              className="w-full bg-white border border-gray-300 py-1.5 pl-2.5 pr-7 rounded-lg text-xs italic focus:outline-none"
+              className="w-full bg-white border border-gray-300 py-1.5 pl-2.5 pr-7 rounded-xl text-xs italic focus:outline-none"
             />
             {itemSearch && (
               <button 
@@ -356,7 +383,7 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
               </button>
             )}
             {productSearchResults.length > 0 && !selectedProduct && (
-              <div className="absolute z-30 left-0 right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg divide-y divide-gray-100 max-h-40 overflow-y-auto">
+              <div className="absolute z-30 left-0 right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg divide-y divide-gray-100 max-h-40 overflow-y-auto">
                 {productSearchResults.map(prod => (
                   <button 
                     key={prod.id} 
@@ -389,7 +416,7 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
               />
             </div>
             <div>
-              <label className="block text-[9px] font-bold text-gray-500 mb-0.5">Unit</label>
+              <label className="block text-[9px] font-bold text-gray-500 mb-0.5">Unit Format</label>
               <input 
                 type="text" 
                 placeholder="case / keg" 
@@ -402,14 +429,14 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
 
           <div className="grid grid-cols-2 gap-2 pt-0.5">
             <div>
-              <label className="block text-[9px] font-bold text-gray-500 mb-0.5">Total (Inc VAT £)</label>
+              <label className="block text-[9px] font-bold text-gray-500 mb-0.5">Unit (Ex VAT £)</label>
               <input 
                 type="number" 
                 step="0.01" 
                 placeholder="0.00" 
-                value={totalInc} 
-                onChange={(e) => handlePriceChange('totalInc', e.target.value)} 
-                className="w-full bg-white border border-gray-300 py-1 px-2 rounded-lg text-xs font-bold text-black focus:outline-none" 
+                value={unitEx} 
+                onChange={(e) => handlePriceChange('unitEx', e.target.value)} 
+                className="w-full bg-white border border-gray-300 py-1 px-2 rounded-lg text-xs font-bold text-gray-900 focus:outline-none" 
               />
             </div>
             <div>
@@ -435,14 +462,14 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
               />
             </div>
             <div>
-              <label className="block text-[9px] font-bold text-gray-500 mb-0.5">Unit (Ex VAT £)</label>
+              <label className="block text-[9px] font-bold text-gray-500 mb-0.5">Total (Inc VAT £)</label>
               <input 
                 type="number" 
                 step="0.01" 
                 placeholder="0.00" 
-                value={unitEx} 
-                onChange={(e) => handlePriceChange('unitEx', e.target.value)} 
-                className="w-full bg-white border border-gray-300 py-1 px-2 rounded-lg text-xs text-gray-700 focus:outline-none" 
+                value={totalInc} 
+                onChange={(e) => handlePriceChange('totalInc', e.target.value)} 
+                className="w-full bg-white border border-gray-300 py-1 px-2 rounded-lg text-xs font-bold text-black focus:outline-none" 
               />
             </div>
           </div>
@@ -450,14 +477,14 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
           <button 
             type="submit" 
             disabled={!qtyDelivered || (!selectedProduct && !customName.trim())} 
-            className="w-full py-1.5 bg-black text-white hover:bg-neutral-800 disabled:opacity-40 rounded-lg text-xs font-bold transition flex items-center justify-center space-x-1"
+            className="w-full py-2 bg-black text-white hover:bg-neutral-800 disabled:opacity-40 rounded-xl text-xs font-bold transition flex items-center justify-center space-x-1"
           >
             <Plus className="w-3.5 h-3.5" />
             <span>Add to Delivery Queue</span>
           </button>
         </form>
 
-        <div className="space-y-1.5">
+        <div className="space-y-1.5 flex-shrink-0">
           <div className="flex justify-between items-center px-1">
             <span className="text-[10px] font-bold uppercase text-gray-400">
               Delivery Queue ({receivedItems.length} items)
@@ -474,11 +501,11 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
           </div>
 
           {receivedItems.length === 0 ? (
-            <div className="border border-dashed border-gray-200 rounded-xl py-5 text-center text-xs text-gray-400">
+            <div className="border border-dashed border-gray-200 rounded-2xl py-5 text-center text-xs text-gray-400">
               No items added to delivery yet.
             </div>
           ) : (
-            <div className="border border-gray-200 rounded-xl overflow-hidden divide-y divide-gray-100 bg-white">
+            <div className="border border-gray-200 rounded-2xl overflow-hidden divide-y divide-gray-100 bg-white shadow-xs">
               {receivedItems.map((item, idx) => (
                 <div key={idx} className="p-2.5 flex items-center justify-between text-xs">
                   <div>
@@ -504,18 +531,18 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
           )}
         </div>
 
-        <div className="space-y-1">
+        <div className="space-y-1 flex-shrink-0">
           <label className="block text-[10px] font-bold text-gray-700">Delivery Notes & Discrepancies</label>
           <textarea 
             rows={2} 
             placeholder="Driver signature, damaged items, bottle shortages..." 
             value={invoiceNotes} 
             onChange={(e) => setInvoiceNotes(e.target.value)} 
-            className="w-full bg-[#EDEDED] p-2 rounded-xl text-xs focus:outline-none resize-none leading-relaxed" 
+            className="w-full bg-[#EDEDED] p-2.5 rounded-2xl text-xs focus:outline-none resize-none leading-relaxed" 
           />
         </div>
 
-        <div className="grid grid-cols-2 gap-2 pt-0.5 pb-2">
+        <div className="grid grid-cols-2 gap-2 pt-0.5 pb-2 flex-shrink-0">
           <button 
             type="button" 
             disabled={receivedItems.length === 0} 
@@ -529,7 +556,7 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
             type="button" 
             disabled={receivedItems.length === 0 || submittingReport} 
             onClick={handleSubmitInvoiceReport} 
-            className="py-2.5 bg-[#C2F19D] hover:bg-[#b2e88a] disabled:opacity-40 rounded-xl text-xs font-black text-gray-900 transition flex items-center justify-center space-x-1.5"
+            className="py-2.5 bg-[#C2F19D] hover:bg-[#b2e88a] disabled:opacity-40 rounded-xl text-xs font-black text-gray-900 transition flex items-center justify-center space-x-1.5 shadow-xs"
           >
             <Send className="w-3.5 h-3.5" />
             <span>{submittingReport ? 'Saving...' : 'Submit Report'}</span>
