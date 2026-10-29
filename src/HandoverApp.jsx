@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { useTwoFingerSwipe } from './useTwoFingerSwipe';
 import { supabase, DEFAULT_VENUE_ID } from './lib/db';
-import { sendPushNotification } from './lib/notifications';
+import { sendPushNotification } from './lib/notifications'; 
 
 const AVAILABLE_REACTIONS = [
   { emoji: '❤️', label: 'Love' },
@@ -519,7 +519,7 @@ export default function HandoverApp({
   return (
     <div 
       {...swipeHandlers}
-      className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 overflow-x-hidden relative"
+      className="flex flex-col h-[100dvh] w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 overflow-hidden relative"
     >
       <header className="flex items-center justify-between px-5 pt-[max(1.5rem,env(safe-area-inset-top))] pb-2 border-b border-gray-100 flex-shrink-0 bg-white z-20">
         <div className="flex items-center space-x-2">
@@ -597,7 +597,7 @@ export default function HandoverApp({
       )}
 
       {currentTab === 'history' ? (
-        <div className="flex-1 flex flex-col overflow-hidden pb-20">
+        <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
           <div className="px-5 pt-3 pb-2 border-b border-gray-100 flex-shrink-0 space-y-2">
             <div className="flex justify-between items-baseline">
               <div>
@@ -633,7 +633,7 @@ export default function HandoverApp({
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto px-5 py-3 space-y-3">
+          <div className="flex-1 min-h-0 overflow-y-auto px-5 py-3 space-y-3 pb-32 touch-pan-y overscroll-contain">
             {loadingHistory ? (
               <p className="text-center py-12 text-xs text-gray-400 italic">Connecting to archive...</p>
             ) : historyList.length === 0 ? (
@@ -857,8 +857,9 @@ export default function HandoverApp({
           )}
         </div>
       ) : (
-        <div className="flex-1 flex flex-col overflow-y-auto px-5 py-3 space-y-4 pb-20">
-          <div className="border-b border-gray-100 pb-3 space-y-2.5">
+        /* FIXED: Added min-h-0, touch-pan-y, overscroll-contain, and safe pb-36 padding */
+        <div className="flex-1 min-h-0 flex flex-col overflow-y-auto px-5 py-3 space-y-4 pb-36 touch-pan-y overscroll-contain">
+          <div className="border-b border-gray-100 pb-3 space-y-2.5 flex-shrink-0">
             <div>
               <p className="text-gray-500 italic text-[11px] font-serif">Shift Wrap-Up</p>
               <h1 className="text-lg font-black tracking-tight text-gray-900">{formatDisplayDate(shiftDate)}</h1>
@@ -901,7 +902,7 @@ export default function HandoverApp({
             </div>
           </div>
 
-          <div className="space-y-1">
+          <div className="space-y-1 flex-shrink-0">
             <div className="flex justify-between items-baseline">
               <label className="block text-[11px] font-extrabold text-gray-900">General Notes</label>
               <span className={`text-[9px] font-mono ${generalNotes.length >= 1200 ? 'text-red-500 font-bold' : 'text-gray-400'}`}>
@@ -919,7 +920,7 @@ export default function HandoverApp({
             </div>
           </div>
 
-          <div className="space-y-2 bg-gray-50 border border-gray-200 rounded-xl p-3">
+          <div className="space-y-2 bg-gray-50 border border-gray-200 rounded-xl p-3 flex-shrink-0">
             <div className="flex justify-between items-center">
               <span className="block font-bold text-gray-900 uppercase tracking-wider text-[10px]">86 List (Stock SKU Lookup)</span>
               <span className="text-[9px] text-gray-400 font-mono">{catalog.length} SKUs ready</span>
@@ -993,7 +994,7 @@ export default function HandoverApp({
             </div>
           </div>
 
-          <div className="space-y-1.5">
+          <div className="space-y-1.5 flex-shrink-0">
             <div className="flex justify-between items-center">
               <label className="block text-[11px] font-extrabold text-gray-900">Tomorrow / Handover Actions</label>
               {sheetDuties.length > 0 && (
@@ -1043,12 +1044,12 @@ export default function HandoverApp({
             </div>
           </div>
 
-          <div className="pt-1">
+          <div className="pt-2 pb-6 flex-shrink-0">
             <button 
               type="button" 
               onClick={handleSubmit} 
               disabled={isSubmitting} 
-              className="w-full py-2.5 bg-[#141414] text-white rounded-xl text-xs font-bold hover:bg-black transition disabled:opacity-50 flex items-center justify-center space-x-1.5 shadow-sm"
+              className="w-full py-3 bg-[#141414] text-white rounded-xl text-xs font-bold hover:bg-black transition active:scale-[0.98] disabled:opacity-50 flex items-center justify-center space-x-1.5 shadow-md"
             >
               <Send className="w-3.5 h-3.5" />
               <span>{isSubmitting ? 'Saving to Database...' : 'Submit Handover Report'}</span>
