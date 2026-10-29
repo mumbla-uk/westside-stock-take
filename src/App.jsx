@@ -3,6 +3,7 @@ import HandoverApp from './HandoverApp';
 import PettyCashApp from './PettyCashApp';
 import GoodsReceivedApp from './GoodsReceivedApp';
 import OrderListsApp from './OrderListsApp';
+import SpillageAndWastage from './SpillageAndWastage';
 import Settings from './Settings';
 import PreShiftCard from './PreShiftCard';
 import OpsChatDrawer from './OpsChatDrawer';
@@ -19,7 +20,8 @@ import {
   SlidersHorizontal,
   ChevronRight,
   PlusCircle,
-  FolderOpen
+  FolderOpen,
+  TrendingDown
 } from 'lucide-react';
 import { useTwoFingerSwipe } from './useTwoFingerSwipe';
 import { supabase, DEFAULT_VENUE_ID } from './lib/db';
@@ -88,10 +90,10 @@ export default function App() {
     return 'Good Evening';
   };
 
-  // Query live database records for handovers, deliveries, and orders
+  // Query live database records for handovers, deliveries, orders, and wastage
   const fetchLiveActivity = async () => {
     try {
-      const [handoverRes, goodsRes, orderRes] = await Promise.all([
+      const [handoverRes, goodsRes, orderRes, wastageRes] = await Promise.all([
         supabase
           .from('handovers')
           .select('id, date_str, manager_name, entry_type, general_notes, created_at')
@@ -107,6 +109,12 @@ export default function App() {
         supabase
           .from('supplier_orders')
           .select('id, supplier_name, order_date, manager_name, is_placed, created_at')
+          .eq('venue_id', DEFAULT_VENUE_ID)
+          .order('created_at', { ascending: false })
+          .limit(10),
+        supabase
+          .from('wastage_log')
+          .select('id, item_name, cost_impact, reason, staff_name, created_at')
           .eq('venue_id', DEFAULT_VENUE_ID)
           .order('created_at', { ascending: false })
           .limit(10)
@@ -148,6 +156,18 @@ export default function App() {
           desc: `${o.manager_name} recorded orders for ${o.supplier_name}`,
           timestamp: new Date(o.created_at || Date.now()).getTime(),
           timeStr: o.order_date || 'Today'
+        });
+      });
+
+      (wastageRes.data || []).forEach(w => {
+        items.push({
+          id: `w-${w.id}`,
+          entryId: w.id,
+          module: 'wastage',
+          title: `Wastage Logged: £${Number(w.cost_impact || 0).toFixed(2)}`,
+          desc: `${w.staff_name} logged ${w.item_name} (${w.reason})`,
+          timestamp: new Date(w.created_at || Date.now()).getTime(),
+          timeStr: 'Today'
         });
       });
 
@@ -450,6 +470,7 @@ export default function App() {
       </div>
     );
   }
+
   if (activeModule === 'petty') {
     return (
       <div {...swipeHandlers} className="h-screen w-full">
@@ -462,6 +483,7 @@ export default function App() {
       </div>
     );
   }
+
   if (activeModule === 'goods') {
     return (
       <div {...swipeHandlers} className="h-screen w-full">
@@ -474,6 +496,7 @@ export default function App() {
       </div>
     );
   }
+
   if (activeModule === 'orders') {
     return (
       <div {...swipeHandlers} className="h-screen w-full">
@@ -486,6 +509,19 @@ export default function App() {
       </div>
     );
   }
+
+  if (activeModule === 'wastage') {
+    return (
+      <div {...swipeHandlers} className="h-screen w-full">
+        <SpillageAndWastage
+          currentUser={currentUser}
+          onBackToHub={() => setActiveModule('hub')}
+          onLogout={handleLogout}
+        />
+      </div>
+    );
+  }
+
   if (activeModule === 'settings') {
     return (
       <div {...swipeHandlers} className="h-screen w-full">
@@ -612,7 +648,9 @@ export default function App() {
                 See All
               </button>
             </div>
-            <div className="flex items-start justify-between gap-3 overflow-x-auto no-scrollbar py-1">
+            
+            {/* Scrollable Tools Row */}
+            <div className="flex items-start justify-start gap-4 overflow-x-auto no-scrollbar py-1">
               <div
                 onClick={() => setActiveModule('handover')}
                 className="flex flex-col items-center space-y-2 cursor-pointer flex-shrink-0 group active:scale-95 transition"
@@ -661,6 +699,19 @@ export default function App() {
                 </span>
               </div>
 
+              {/* Spillage & Wastage Tool Tile */}
+              <div
+                onClick={() => setActiveModule('wastage')}
+                className="flex flex-col items-center space-y-2 cursor-pointer flex-shrink-0 group active:scale-95 transition"
+              >
+                <div className="w-[66px] h-[66px] rounded-2xl bg-[#FFA6A6] shadow-sm flex items-center justify-center text-neutral-900">
+                  <TrendingDown className="w-7 h-7 stroke-[2.2]" />
+                </div>
+                <span className="text-xs font-bold text-neutral-900 text-center tracking-tight leading-tight max-w-[70px]">
+                  Spillage &amp; Waste
+                </span>
+              </div>
+
               <div
                 onClick={() => setActiveModule('notifications')}
                 className="flex flex-col items-center space-y-2 cursor-pointer flex-shrink-0 group active:scale-95 transition"
@@ -670,6 +721,18 @@ export default function App() {
                 </div>
                 <span className="text-xs font-bold text-neutral-900 text-center tracking-tight leading-tight">
                   Activity
+                </span>
+              </div>
+
+              <div
+                onClick={() => setActiveModule('settings')}
+                className="flex flex-col items-center space-y-2 cursor-pointer flex-shrink-0 group active:scale-95 transition"
+              >
+                <div className="w-[66px] h-[66px] rounded-2xl bg-neutral-100 shadow-sm flex items-center justify-center text-neutral-700">
+                  <SlidersHorizontal className="w-6 h-6 stroke-[2]" />
+                </div>
+                <span className="text-xs font-bold text-neutral-900 text-center tracking-tight leading-tight">
+                  Settings
                 </span>
               </div>
             </div>
@@ -755,6 +818,29 @@ export default function App() {
                   </div>
                 </div>
               </div>
+
+              <div
+                onClick={() => setActiveModule('wastage')}
+                className="w-[220px] h-[190px] rounded-3xl bg-[#FFF5F5] border border-rose-200 p-5 flex flex-col justify-between flex-shrink-0 cursor-pointer active:scale-[0.98] transition hover:shadow-sm"
+              >
+                <div>
+                  <span className="text-[10px] font-black tracking-widest uppercase text-rose-500 block mb-1">
+                    Stock Loss
+                  </span>
+                  <h3 className="text-base font-extrabold text-neutral-900 leading-snug">
+                    Log Spillage / Waste
+                  </h3>
+                </div>
+                <div className="space-y-1">
+                  <p className="text-xs text-neutral-500">
+                    Pints, broken bottles &amp; line clean flush.
+                  </p>
+                  <div className="pt-3 flex items-center text-xs font-bold text-neutral-900 gap-1">
+                    <TrendingDown className="w-4 h-4 text-rose-600" />
+                    <span>Deduct stock</span>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -793,7 +879,7 @@ export default function App() {
             <div className="text-center space-y-1">
               <h2 className="text-base font-black text-gray-900 tracking-tight">Enable Operations Alerts</h2>
               <p className="text-xs text-gray-500 leading-snug">
-                Receive instant alerts for shift handovers, deliveries, safe floats, and team notes.
+                Receive instant alerts for shift handovers, deliveries, safe floats, spillages, and team notes.
               </p>
             </div>
             <div className="space-y-2 pt-1">
