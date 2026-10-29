@@ -13,7 +13,7 @@ export const BEVERAGE_CONTAINER_DEFAULTS = {
 
 /**
  * Calculates suggested order quantities based on category rules
- * Uses working-unit fractional threshold (Default 50% / 0.5)
+ * Uses product's buffer_rate scale (1–10, where each point = 10% / 0.1)
  *
  * @param {Object} item - Catalog item
  * @param {number} currentCount - Current counted units on shelf
@@ -33,8 +33,10 @@ export function calculateSmartOrder(item, currentCount = 0) {
   }
 
   const rawDeficit = par - count;
-  // Fractional reorder threshold (Default 50% / 0.5; allows custom override per item)
-  const threshold = Number(item.reorder_threshold ?? 0.5);
+
+  // Buffer Rate scale 1-10: 1 = 10% (0.1), 5 = 50% (0.5 default), 10 = 100% (1.0)
+  const bufferRate = Number(item.buffer_rate ?? 5);
+  const threshold = Math.min(1.0, Math.max(0.1, bufferRate / 10));
 
   // RULE 1: Packaged Beer, Cider, Softs & Wine (Ordered strictly in cases)
   if (
@@ -70,11 +72,7 @@ export function calculateSmartOrder(item, currentCount = 0) {
     };
   }
 
-  // RULE 2: Spirits, Liqueurs, Cordials & Prep (Counted & ordered in bottles)
-  // Working-Bottle 50% Rule:
-  // e.g. Par 3 btls, Count 2.5 btls -> Deficit 0.5 btls -> Order 0
-  // e.g. Count 2.4 btls -> Deficit 0.6 btls (> 0.5) -> Order 1 btl
-  // e.g. Count 1.4 btls -> Deficit 1.6 btls (1 whole + 0.6 partial) -> Order 2 btls
+  // RULE 2: Spirits, Liqueurs, Cordials & Prep (Ordered in bottles)
   if (category.includes('spirit') || category.includes('liqueur') || category.includes('prep')) {
     const wholeBottlesMissing = Math.floor(rawDeficit);
     const partialBottleDeficit = rawDeficit - wholeBottlesMissing;
@@ -116,7 +114,7 @@ export function calculateSmartOrder(item, currentCount = 0) {
     };
   }
 
-  // RULE 3: Draught Kegs (Working-keg threshold applied to keg fractions)
+  // RULE 3: Draught Kegs (Keg fractions threshold)
   if (category.includes('draught') || countUnit.includes('keg')) {
     const wholeKegsMissing = Math.floor(rawDeficit);
     const partialKegDeficit = rawDeficit - wholeKegsMissing;
@@ -140,7 +138,7 @@ export function calculateSmartOrder(item, currentCount = 0) {
     };
   }
 
-  // Generic fallback with 50% threshold
+  // Generic fallback
   const wholeUnitsMissing = Math.floor(rawDeficit);
   const partialUnitDeficit = rawDeficit - wholeUnitsMissing;
   const extraUnit = partialUnitDeficit > threshold ? 1 : 0;

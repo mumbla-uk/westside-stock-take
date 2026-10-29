@@ -7,7 +7,9 @@ import {
   Save,
   X,
   Package,
-  RefreshCw
+  RefreshCw,
+  SlidersHorizontal,
+  Sliders
 } from 'lucide-react';
 import { useTwoFingerSwipe } from './useTwoFingerSwipe';
 import { supabase, DEFAULT_VENUE_ID } from './lib/db';
@@ -97,6 +99,7 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
       last_cost_ex_vat: 0.00,
       vat_rate: 20.0,
       par: 1,
+      buffer_rate: 5, // Default 5 = 50% / 0.5 threshold
       isNew: true
     };
     setEditingItem(newItem);
@@ -125,6 +128,7 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
       last_cost_ex_vat: Number(editingItem.last_cost_ex_vat || editingItem.cost_price_ex_vat) || 0.00,
       vat_rate: Number(editingItem.vat_rate) || 20.0,
       par: Number(editingItem.par) || 1,
+      buffer_rate: Number(editingItem.buffer_rate ?? 5),
       updated_at: new Date().toISOString()
     };
 
@@ -275,6 +279,10 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
                   <span>{item.area || 'Main Bar'}</span>
                   <span>•</span>
                   <span className="font-bold text-gray-700">Par: {item.par ?? 1} {item.count_unit || item.unit || 'unit'}</span>
+                  <span>•</span>
+                  <span className="text-emerald-700 font-semibold bg-emerald-50 px-1 rounded">
+                    Buf: {item.buffer_rate ?? 5}/10
+                  </span>
                 </div>
               </div>
 
@@ -314,6 +322,7 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
             </div>
 
             <form onSubmit={handleSaveItem} className="p-5 overflow-y-auto space-y-4 text-xs touch-pan-y overscroll-contain">
+              {/* Section 1 */}
               <div className="space-y-2">
                 <span className="font-bold uppercase tracking-wider text-[10px] text-gray-400 block">
                   1. Identification &amp; Category
@@ -383,6 +392,7 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
                 </div>
               </div>
 
+              {/* Section 2 */}
               <div className="space-y-2 pt-1 border-t border-gray-100">
                 <span className="font-bold uppercase tracking-wider text-[10px] text-gray-400 block">
                   2. Stocktake &amp; Ordering Units
@@ -445,6 +455,7 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
                 </div>
               </div>
 
+              {/* Section 3 */}
               <div className="space-y-2 pt-1 border-t border-gray-100">
                 <span className="font-bold uppercase tracking-wider text-[10px] text-gray-400 block">
                   3. Pricing &amp; Par Target
@@ -490,8 +501,37 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
                     />
                   </div>
                 </div>
+
+                {/* Buffer Rate Selector */}
+                <div className="space-y-1.5 pt-2 border-t border-gray-100">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[10px] font-bold text-gray-700 uppercase tracking-wider block">
+                      Reorder Buffer Rate: <span className="font-mono text-black font-extrabold">{editingItem.buffer_rate ?? 5} / 10</span>
+                    </label>
+                    <span className="text-[10px] font-mono text-gray-500 font-bold">
+                      {((editingItem.buffer_rate ?? 5) * 10)}% (0.{editingItem.buffer_rate ?? 5} unit)
+                    </span>
+                  </div>
+
+                  <input
+                    type="range"
+                    min="1"
+                    max="10"
+                    step="1"
+                    value={editingItem.buffer_rate ?? 5}
+                    onChange={(e) => setEditingItem({ ...editingItem, buffer_rate: parseInt(e.target.value, 10) })}
+                    className="w-full accent-black cursor-pointer"
+                  />
+
+                  <div className="flex justify-between text-[8px] font-mono text-gray-400">
+                    <span>1 (Order Early / 10%)</span>
+                    <span>5 (Default / 50%)</span>
+                    <span>10 (Order Late / 100%)</span>
+                  </div>
+                </div>
               </div>
 
+              {/* Actions */}
               <div className="pt-2 flex items-center space-x-2">
                 {!editingItem.isNew && (
                   <button
@@ -518,7 +558,7 @@ export default function CatalogManagerApp({ currentUser, onBackToHub, onLogout }
       )}
 
       {/* Floating Bottom Nav */}
-      <nav className="fixed bottom-2 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-[390px] z-20 rounded-2xl bg-[#111111]/95 backdrop-blur-md text-white py-2 px-3 flex justify-around items-center text-xs font-semibold shadow-2xl border border-white/10 select-none pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))]">
+      <nav className="fixed bottom-2 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-[390px] z-30 rounded-2xl bg-[#111111]/95 backdrop-blur-md text-white py-2 px-3 flex justify-around items-center text-xs font-semibold shadow-2xl border border-white/10 select-none pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))]">
         <button
           onClick={onBackToHub}
           className="flex-1 py-1 text-center rounded-xl transition text-neutral-400 hover:text-white"
