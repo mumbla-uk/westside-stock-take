@@ -11,10 +11,10 @@ import {
   RefreshCw,
   X,
   Calendar,
-  SlidersHorizontal,
   ChevronLeft,
   ChevronRight,
-  TrendingDown
+  Sparkles,
+  Layers
 } from 'lucide-react';
 import { useTwoFingerSwipe } from './useTwoFingerSwipe';
 import { supabase, DEFAULT_VENUE_ID } from './lib/db';
@@ -53,7 +53,6 @@ const REASONS = [
   { id: 'spoilage', label: 'Out of Date / Spoiled' },
 ];
 
-// Generates the Monday date for any given date
 function getMonday(d) {
   const date = new Date(d);
   const day = date.getDay();
@@ -72,25 +71,36 @@ function getOrdinalSuffix(d) {
 }
 
 export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout }) {
-  // Navigation & Date State (Anchored to current Monday)
+  const [mode, setMode] = useState('single'); // 'single' | 'recipe'
   const [currentMonday, setCurrentMonday] = useState(() => getMonday(new Date()));
   const [selectedDateStr, setSelectedDateStr] = useState(() => new Date().toISOString().slice(0, 10));
 
+  // Catalog & Recipes
+  const [catalogItems, setCatalogItems] = useState([]);
+  const [recipes, setRecipes] = useState([]);
+  const [loadingData, setLoadingData] = useState(false);
+
+  // Active Selections
   const [activeCategory, setActiveCategory] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
-  const [catalogItems, setCatalogItems] = useState([]);
-  const [loadingCatalog, setLoadingCatalog] = useState(false);
   
+  // Single Item Selection
   const [selectedItem, setSelectedItem] = useState(null);
   const [selectedPreset, setSelectedPreset] = useState(null);
   const [customQtyInput, setCustomQtyInput] = useState('');
-  const [selectedReason, setSelectedReason] = useState(REASONS[1].label);
+
+  // Recipe Selection
+  const [selectedRecipe, setSelectedRecipe] = useState(null);
+  const [recipeServes, setRecipeServes] = useState(1);
+
+  // Common Submission Fields
+  const [selectedReason, setSelectedReason] = useState(REASONS[2].label);
   const [customNotes, setCustomNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [statusMsg, setStatusMsg] = useState(null);
 
+  // Activity Logs
   const [recentLogs, setRecentLogs] = useState([]);
-  const [loadingLogs, setLoadingLogs] = useState(false);
 
   const swipeHandlers = useTwoFingerSwipe({
     onSwipeRight: () => {
@@ -98,7 +108,6 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
     }
   });
 
-  // Calculate Monday–Sunday pill dates
   const weekDays = useMemo(() => {
     const days = [];
     const mon = new Date(currentMonday);
@@ -106,14 +115,13 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
       const d = new Date(mon);
       d.setDate(mon.getDate() + i);
       const iso = d.toISOString().slice(0, 10);
-      const shortName = d.toLocaleDateString('en-GB', { weekday: 'short' }); // Mon, Tue, etc.
+      const shortName = d.toLocaleDateString('en-GB', { weekday: 'short' });
       const dayNum = d.getDate();
       days.push({ iso, shortName, dayNum, fullDate: d });
     }
     return days;
   }, [currentMonday]);
 
-  // Formatted header: "Week beginning 26th October"
   const weekBeginningStr = useMemo(() => {
     const day = currentMonday.getDate();
     const month = currentMonday.toLocaleDateString('en-GB', { month: 'long' });
@@ -134,77 +142,82 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
     setSelectedDateStr(nextMon.toISOString().slice(0, 10));
   };
 
-  const fetchInventory = async () => {
-    setLoadingCatalog(true);
+  const fetchData = async () => {
+    setLoadingData(true);
     try {
-      const { data, error } = await supabase
+      // 1. Fetch catalog items
+      const { data: catData, error: catErr } = await supabase
         .from('catalog_items')
         .select('*')
         .eq('venue_id', DEFAULT_VENUE_ID)
         .order('name');
-      
-      if (error) throw error;
-      if (data) {
-        const mapped = data.map(item => {
-          const cat = (item.category || '').toLowerCase();
-          const isDraught = cat.includes('draught') || (item.unit && item.unit.toLowerCase().includes('keg'));
-          const isSpirit = cat.includes('spirit') || (item.unit && item.unit.toLowerCase().includes('bottle') && !cat.includes('wine'));
-          const isWine = cat.includes('wine');
-          const isPackage = cat.includes('beer') && !isDraught;
+      if (catErr) throw catErr;
 
-          const category = isDraught ? 'draught' : isSpirit ? 'spirits' : isWine ? 'wine' : isPackage ? 'packaged_beer' : 'prep';
-          const baseUom = (isDraught || isSpirit || isWine || category === 'prep') ? 'ml' : 'each';
-          
-          let packageSizeBase = Number(item.package_size_base) || 700;
-          if (isDraught && !item.package_size_base) packageSizeBase = 50000;
-          if (isWine && !item.package_size_base) packageSizeBase = 750;
-          if (baseUom === 'each') packageSizeBase = 1;
+      const mapped = (catData || []).map(item => {
+        const cat = (item.category || '').toLowerCase();
+        const isDraught = cat.includes('draught') || (item.unit && item.unit.toLowerCase().includes('keg'));
+        const isSpirit = cat.includes('spirit') || (item.unit && item.unit.toLowerCase().includes('bottle') && !cat.includes('wine'));
+        const isWine = cat.includes('wine');
+        const isPackage = cat.includes('beer') && !isDraught;
 
-          const unitsPerCase = Number(item.units_per_order_case) || (isDraught ? 1 : isPackage ? 24 : 6);
-          const rawCost = Number(item.last_cost_ex_vat || item.cost_price_ex_vat || item.cost_price || 0);
+        const category = isDraught ? 'draught' : isSpirit ? 'spirits' : isWine ? 'wine' : isPackage ? 'packaged_beer' : 'prep';
+        const baseUom = (isDraught || isSpirit || isWine || category === 'prep') ? 'ml' : 'each';
+        
+        let packageSizeBase = Number(item.package_size_base) || 700;
+        if (isDraught && !item.package_size_base) packageSizeBase = 50000;
+        if (isWine && !item.package_size_base) packageSizeBase = 750;
+        if (baseUom === 'each') packageSizeBase = 1;
 
-          return {
-            id: item.id,
-            name: item.name,
-            category,
-            base_uom: baseUom,
-            package_size_base: packageSizeBase,
-            units_per_order_case: unitsPerCase,
-            cost_price_ex_vat: rawCost,
-            current_stock_base: Number(item.current_stock_base ?? (item.count ? item.count * packageSizeBase : 0))
-          };
-        });
-        setCatalogItems(mapped);
-      }
-    } catch (err) {
-      console.warn("Could not load inventory for spillage app:", err);
-    } finally {
-      setLoadingCatalog(false);
-    }
-  };
+        const unitsPerCase = Number(item.units_per_order_case) || (isDraught ? 1 : isPackage ? 24 : 6);
+        const rawCost = Number(item.last_cost_ex_vat || item.cost_price_ex_vat || item.cost_price || 0);
 
-  const fetchWastageLogs = async () => {
-    setLoadingLogs(true);
-    try {
-      const { data, error } = await supabase
+        return {
+          id: item.id,
+          name: item.name,
+          category,
+          base_uom: baseUom,
+          package_size_base: packageSizeBase,
+          units_per_order_case: unitsPerCase,
+          cost_price_ex_vat: rawCost,
+          current_stock_base: Number(item.current_stock_base ?? (item.count ? item.count * packageSizeBase : 0))
+        };
+      });
+      setCatalogItems(mapped);
+
+      // 2. Fetch recipes & ingredients
+      const { data: recData } = await supabase
+        .from('recipes')
+        .select('*')
+        .eq('venue_id', DEFAULT_VENUE_ID)
+        .order('name');
+
+      const { data: ingData } = await supabase
+        .from('recipe_ingredients')
+        .select('*');
+
+      const fullRecipes = (recData || []).map(r => ({
+        ...r,
+        ingredients: (ingData || []).filter(i => i.recipe_id === r.id)
+      }));
+      setRecipes(fullRecipes);
+
+      // 3. Fetch logs
+      const { data: logData } = await supabase
         .from('wastage_log')
         .select('*')
         .order('created_at', { ascending: false })
         .limit(100);
 
-      if (!error && data) {
-        setRecentLogs(data);
-      }
+      setRecentLogs(logData || []);
     } catch (err) {
-      console.warn("Could not load wastage log:", err);
+      console.warn("Could not sync wastage data:", err);
     } finally {
-      setLoadingLogs(false);
+      setLoadingData(false);
     }
   };
 
   useEffect(() => {
-    fetchInventory();
-    fetchWastageLogs();
+    fetchData();
   }, []);
 
   const filteredCatalog = useMemo(() => {
@@ -215,6 +228,11 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
       return matchesCat && matchesSearch;
     });
   }, [catalogItems, activeCategory, searchQuery]);
+
+  const filteredRecipes = useMemo(() => {
+    const q = searchQuery.toLowerCase();
+    return recipes.filter(r => !q || r.name.toLowerCase().includes(q) || r.id.toLowerCase().includes(q));
+  }, [recipes, searchQuery]);
 
   const handleSelectItem = (item) => {
     setSelectedItem(item);
@@ -233,7 +251,8 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
     }
   };
 
-  const wastageMetrics = useMemo(() => {
+  // Single Item Cost Calculation
+  const singleMetrics = useMemo(() => {
     if (!selectedItem) return { totalBaseUnits: 0, costImpact: 0, displayVolume: '', unitCostEx: 0 };
 
     let totalBaseUnits = 0;
@@ -271,64 +290,128 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
     };
   }, [selectedItem, selectedPreset, customQtyInput]);
 
+  // Recipe Composite Cost Calculation
+  const recipeMetrics = useMemo(() => {
+    if (!selectedRecipe) return { totalCost: 0, breakdown: [] };
+
+    let totalCost = 0;
+    const breakdown = (selectedRecipe.ingredients || []).map(ing => {
+      const parent = catalogItems.find(p => p.id === ing.item_id);
+      const baseSize = Number(parent?.package_size_base) || 700;
+      const unitCost = Number(parent?.cost_price_ex_vat) || 0;
+      const totalDeduction = Number(ing.quantity) * Number(recipeServes);
+      const lineCost = baseSize > 0 ? (totalDeduction / baseSize) * unitCost : 0;
+      totalCost += lineCost;
+
+      return {
+        item_id: ing.item_id,
+        item_name: parent ? parent.name : ing.item_name,
+        deduction: totalDeduction,
+        unit: ing.unit || parent?.base_uom || 'ml',
+        cost: lineCost,
+        currentStock: parent ? parent.current_stock_base : 0,
+        packageSizeBase: baseSize
+      };
+    });
+
+    return {
+      totalCost: Math.round(totalCost * 100) / 100,
+      breakdown
+    };
+  }, [selectedRecipe, recipeServes, catalogItems]);
+
+  // Submit Handler: Works for both Single SKU and Multi-Ingredient Recipe BOM
   const handleSubmitWastage = async (e) => {
     e.preventDefault();
-    if (!selectedItem || wastageMetrics.totalBaseUnits <= 0) return;
-
     setSubmitting(true);
     setStatusMsg(null);
     const staffName = currentUser?.name || 'Duty Manager';
-
-    const payload = {
-      venue_id: DEFAULT_VENUE_ID,
-      item_id: String(selectedItem.id),
-      item_name: selectedItem.name,
-      category: selectedItem.category,
-      logged_qty: customQtyInput ? parseFloat(customQtyInput) : selectedPreset?.qty || 1,
-      unit_used: customQtyInput ? selectedItem.base_uom : selectedPreset?.unit || selectedItem.base_uom,
-      total_base_deducted: Number(wastageMetrics.totalBaseUnits),
-      cost_impact: Number(wastageMetrics.costImpact.toFixed(2)),
-      reason: selectedReason,
-      notes: customNotes ? customNotes.trim() : '',
-      staff_name: staffName,
-      created_at: new Date(`${selectedDateStr}T12:00:00Z`).toISOString()
-    };
+    const createdAt = new Date(`${selectedDateStr}T12:00:00Z`).toISOString();
 
     try {
-      const { error: logErr } = await supabase
-        .from('wastage_log')
-        .insert([payload]);
+      if (mode === 'single') {
+        if (!selectedItem || singleMetrics.totalBaseUnits <= 0) return;
 
-      if (logErr) throw new Error(logErr.message || 'Database rejected wastage insert');
+        const payload = {
+          venue_id: DEFAULT_VENUE_ID,
+          item_id: String(selectedItem.id),
+          item_name: selectedItem.name,
+          category: selectedItem.category,
+          logged_qty: customQtyInput ? parseFloat(customQtyInput) : selectedPreset?.qty || 1,
+          unit_used: customQtyInput ? selectedItem.base_uom : selectedPreset?.unit || selectedItem.base_uom,
+          total_base_deducted: Number(singleMetrics.totalBaseUnits),
+          cost_impact: Number(singleMetrics.costImpact.toFixed(2)),
+          reason: selectedReason,
+          notes: customNotes ? customNotes.trim() : '',
+          staff_name: staffName,
+          created_at: createdAt
+        };
 
-      const nextStock = Math.max(0, (selectedItem.current_stock_base || 0) - wastageMetrics.totalBaseUnits);
-      await supabase
-        .from('catalog_items')
-        .update({
-          current_stock_base: nextStock,
-          count: selectedItem.package_size_base > 0 ? Number((nextStock / selectedItem.package_size_base).toFixed(2)) : 0
-        })
-        .eq('id', selectedItem.id);
+        const { error: logErr } = await supabase.from('wastage_log').insert([payload]);
+        if (logErr) throw logErr;
 
-      if (wastageMetrics.costImpact >= 15.00) {
-        sendPushNotification(
-          `High Spillage Logged: ${selectedItem.name}`,
-          `${staffName} logged £${wastageMetrics.costImpact.toFixed(2)} waste (${selectedReason})`,
-          null,
-          { module: 'wastage' }
-        );
+        const nextStock = Math.max(0, (selectedItem.current_stock_base || 0) - singleMetrics.totalBaseUnits);
+        await supabase
+          .from('catalog_items')
+          .update({
+            current_stock_base: nextStock,
+            count: selectedItem.package_size_base > 0 ? Number((nextStock / selectedItem.package_size_base).toFixed(2)) : 0
+          })
+          .eq('id', selectedItem.id);
+
+        setStatusMsg({
+          type: 'success',
+          text: `Deducted ${singleMetrics.displayVolume} ${selectedItem.name} (£${singleMetrics.costImpact.toFixed(2)})`
+        });
+
+        setSelectedItem(null);
+        setCustomQtyInput('');
+      } else {
+        // Recipe / Cocktail Multi-Deduction
+        if (!selectedRecipe || recipeMetrics.breakdown.length === 0) return;
+
+        // 1. Insert header log into wastage_log
+        const payload = {
+          venue_id: DEFAULT_VENUE_ID,
+          item_id: String(selectedRecipe.id),
+          item_name: `${selectedRecipe.name} (Recipe x ${recipeServes})`,
+          category: 'prep',
+          logged_qty: Number(recipeServes),
+          unit_used: selectedRecipe.yield_unit || 'serve',
+          total_base_deducted: Number(recipeServes),
+          cost_impact: Number(recipeMetrics.totalCost),
+          reason: selectedReason,
+          notes: customNotes ? `${customNotes.trim()} [Recipe BOM]` : '[Recipe BOM]',
+          staff_name: staffName,
+          created_at: createdAt
+        };
+
+        const { error: logErr } = await supabase.from('wastage_log').insert([payload]);
+        if (logErr) throw logErr;
+
+        // 2. Loop through every parent ingredient and decrement live base stock
+        for (const line of recipeMetrics.breakdown) {
+          const nextStock = Math.max(0, line.currentStock - line.deduction);
+          await supabase
+            .from('catalog_items')
+            .update({
+              current_stock_base: nextStock,
+              count: line.packageSizeBase > 0 ? Number((nextStock / line.packageSizeBase).toFixed(2)) : 0
+            })
+            .eq('id', line.item_id);
+        }
+
+        setStatusMsg({
+          type: 'success',
+          text: `Logged ${recipeServes}x ${selectedRecipe.name} & deducted ${recipeMetrics.breakdown.length} ingredient stocks (£${recipeMetrics.totalCost.toFixed(2)})`
+        });
+
+        setSelectedRecipe(null);
+        setRecipeServes(1);
       }
 
-      setStatusMsg({
-        type: 'success',
-        text: `Deducted ${wastageMetrics.displayVolume} ${selectedItem.name} (£${wastageMetrics.costImpact.toFixed(2)})`
-      });
-
-      setSelectedItem(null);
-      setCustomQtyInput('');
       setCustomNotes('');
-      await fetchWastageLogs();
-      await fetchInventory();
+      await fetchData();
     } catch (err) {
       console.error("Wastage submission error:", err);
       setStatusMsg({ type: 'error', text: err.message || 'Error recording wastage to database.' });
@@ -337,7 +420,7 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
     }
   };
 
-  // Filter logs for the selected day vs current week
+  // Day logs & weekly totals
   const dayLogs = useMemo(() => {
     return recentLogs.filter(l => (l.created_at || '').slice(0, 10) === selectedDateStr);
   }, [recentLogs, selectedDateStr]);
@@ -354,16 +437,11 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
     });
 
     let totalCost = 0;
-    let pintsWasted = 0;
-
     logsThisWeek.forEach(l => {
       totalCost += Number(l.cost_impact || 0);
-      if (l.category === 'draught') {
-        pintsWasted += Math.round((Number(l.total_base_deducted || 0) / 568) * 10) / 10;
-      }
     });
 
-    return { totalCost, pintsWasted, count: logsThisWeek.length };
+    return { totalCost, count: logsThisWeek.length };
   }, [recentLogs, currentMonday]);
 
   const selectedDayLabel = useMemo(() => {
@@ -376,7 +454,7 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
       {...swipeHandlers}
       className="flex flex-col h-[100dvh] w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 overflow-hidden relative select-none"
     >
-      {/* Top Header */}
+      {/* Header */}
       <header className="flex items-center justify-between px-5 pt-[max(1.5rem,env(safe-area-inset-top))] pb-2 border-b border-gray-100 flex-shrink-0 bg-white z-20">
         <div className="flex items-center space-x-2">
           {onBackToHub && (
@@ -396,7 +474,7 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
         </div>
       </header>
 
-      {/* Week Title & Period Navigator (Matching Cash Up / Petty Cash) */}
+      {/* Week Title & Period Navigator */}
       <div className="px-5 pt-3 pb-2 border-b border-gray-100 flex-shrink-0 bg-white">
         <div className="flex items-center justify-between">
           <div>
@@ -406,31 +484,19 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
             </h1>
           </div>
           <div className="flex items-center space-x-1">
-            <button
-              onClick={handlePrevWeek}
-              className="p-1 rounded-lg border border-gray-200 hover:bg-gray-100 text-gray-600 transition"
-              title="Previous Week"
-            >
+            <button onClick={handlePrevWeek} className="p-1 rounded-lg border border-gray-200 hover:bg-gray-100 text-gray-600 transition">
               <ChevronLeft className="w-4 h-4" />
             </button>
-            <button
-              onClick={handleNextWeek}
-              className="p-1 rounded-lg border border-gray-200 hover:bg-gray-100 text-gray-600 transition"
-              title="Next Week"
-            >
+            <button onClick={handleNextWeek} className="p-1 rounded-lg border border-gray-200 hover:bg-gray-100 text-gray-600 transition">
               <ChevronRight className="w-4 h-4" />
             </button>
-            <button
-              onClick={() => { fetchInventory(); fetchWastageLogs(); }}
-              className="p-1 rounded-lg border border-gray-200 hover:bg-gray-100 text-gray-600 transition ml-0.5"
-              title="Refresh"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${loadingCatalog || loadingLogs ? 'animate-spin' : ''}`} />
+            <button onClick={fetchData} className="p-1 rounded-lg border border-gray-200 hover:bg-gray-100 text-gray-600 transition ml-0.5">
+              <RefreshCw className={`w-3.5 h-3.5 ${loadingData ? 'animate-spin' : ''}`} />
             </button>
           </div>
         </div>
 
-        {/* Mon - Sun Day Selection Bar */}
+        {/* Mon - Sun Selection Bar */}
         <div className="grid grid-cols-7 gap-1.5 mt-3">
           {weekDays.map(d => {
             const isSelected = selectedDateStr === d.iso;
@@ -458,7 +524,7 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
         </div>
       </div>
 
-      {/* Week Loss Summary Metric Bar */}
+      {/* Week Summary Metric Bar */}
       <div className="flex items-center justify-between px-5 py-2 bg-gray-50/80 border-b border-gray-100 text-xs flex-shrink-0">
         <span className="font-bold text-gray-900 text-[11px]">
           {selectedDayLabel}
@@ -466,7 +532,33 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
         <div className="flex items-center space-x-2 text-[10px] font-mono">
           <span className="text-gray-500">Week Loss: <strong className="text-rose-600 font-bold">£{weekSummary.totalCost.toFixed(2)}</strong></span>
           <span>•</span>
-          <span className="text-gray-500">{weekSummary.pintsWasted} pts lost</span>
+          <span className="text-gray-500">{weekSummary.count} logs</span>
+        </div>
+      </div>
+
+      {/* Single SKU vs Recipe Formulation Mode Toggle */}
+      <div className="px-5 pt-3 pb-1 flex-shrink-0">
+        <div className="flex bg-[#EDEDED] p-1 rounded-2xl">
+          <button
+            type="button"
+            onClick={() => { setMode('single'); setSelectedRecipe(null); }}
+            className={`flex-1 py-1.5 text-xs font-bold rounded-xl transition flex items-center justify-center space-x-1.5 ${
+              mode === 'single' ? 'bg-white text-black shadow-xs' : 'text-gray-500 hover:text-black'
+            }`}
+          >
+            <GlassWater className="w-3.5 h-3.5" />
+            <span>Single Bottle / Keg</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => { setMode('recipe'); setSelectedItem(null); }}
+            className={`flex-1 py-1.5 text-xs font-bold rounded-xl transition flex items-center justify-center space-x-1.5 ${
+              mode === 'recipe' ? 'bg-white text-black shadow-xs' : 'text-gray-500 hover:text-black'
+            }`}
+          >
+            <FlaskConical className="w-3.5 h-3.5 text-rose-500" />
+            <span>Cocktail / Prep BOM</span>
+          </button>
         </div>
       </div>
 
@@ -478,299 +570,413 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
         </div>
       )}
 
-      {/* Main Content Body */}
-      <div className="flex-1 overflow-y-auto px-5 py-3 space-y-4 pb-28 touch-pan-y overscroll-contain">
-        {/* Category Pills */}
-        <div className="space-y-1.5">
-          <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-gray-400 block">
-            1. Select Category
-          </span>
-          <div className="flex items-center space-x-1.5 overflow-x-auto scrollbar-none pb-0.5">
-            {CATEGORIES.map(c => {
-              const Icon = c.icon;
-              const isSelected = activeCategory === c.id;
-              return (
-                <button
-                  key={c.id}
-                  onClick={() => { setActiveCategory(c.id); setSelectedItem(null); }}
-                  className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition border ${
-                    isSelected
-                      ? 'bg-black text-white border-black shadow-xs'
-                      : 'bg-[#EDEDED] text-gray-700 border-transparent hover:bg-gray-200'
-                  }`}
-                >
-                  {Icon && <Icon className="w-3.5 h-3.5" />}
-                  <span>{c.label}</span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Item Search & Quick Results */}
-        <div className="space-y-1.5">
-          <div className="relative">
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search product (e.g. Aberfeldy 12, Tennent's)..."
-              className="w-full bg-[#EDEDED] py-2 pl-3 pr-8 rounded-xl text-xs italic placeholder-gray-500 focus:outline-none"
-            />
-            {searchQuery ? (
-              <button onClick={() => setSearchQuery('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-black">
-                <X className="w-3.5 h-3.5" />
-              </button>
-            ) : (
-              <Search className="w-3.5 h-3.5 absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-            )}
-          </div>
-
-          <div className="grid grid-cols-2 gap-1.5 max-h-36 overflow-y-auto border border-gray-100 rounded-2xl p-1 bg-gray-50/60">
-            {filteredCatalog.slice(0, 10).map(item => {
-              const isSelected = selectedItem?.id === item.id;
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => handleSelectItem(item)}
-                  className={`p-2 rounded-xl text-left transition border flex flex-col justify-between ${
-                    isSelected
-                      ? 'bg-black text-white border-black shadow-xs'
-                      : 'bg-white border-gray-200 hover:bg-gray-100 text-gray-900'
-                  }`}
-                >
-                  <span className="font-bold text-xs truncate block">{item.name}</span>
-                  <span className={`text-[9px] font-mono block mt-0.5 ${isSelected ? 'text-gray-300' : 'text-gray-400'}`}>
-                    {item.package_size_base}{item.base_uom} • £{item.cost_price_ex_vat.toFixed(2)} cost
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Deduction Form */}
-        {selectedItem && (
-          <form onSubmit={handleSubmitWastage} className="bg-white border-2 border-black rounded-3xl p-4 space-y-3.5 shadow-md animate-in fade-in duration-150">
-            <div className="flex items-start justify-between border-b border-gray-100 pb-2.5">
-              <div>
-                <span className="text-[9px] font-mono font-bold uppercase text-emerald-600 block tracking-wider">
-                  Selected Item
-                </span>
-                <h3 className="text-sm font-black text-gray-900">{selectedItem.name}</h3>
-                <span className="text-[10px] text-gray-500 font-mono">
-                  Bottle/Unit Cost: £{wastageMetrics.unitCostEx.toFixed(2)} ({selectedItem.package_size_base}{selectedItem.base_uom})
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={() => setSelectedItem(null)}
-                className="p-1 text-gray-400 hover:text-black"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            {/* Presets by Specific Bar Dispense Measures */}
+      {/* Body */}
+      <div className="flex-1 overflow-y-auto px-5 py-2 space-y-4 pb-28 touch-pan-y overscroll-contain">
+        {mode === 'single' ? (
+          /* SINGLE ITEM FLOW */
+          <>
+            {/* Category Pills */}
             <div className="space-y-1.5">
               <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-gray-400 block">
-                Select Loss Measure
+                Category Filter
               </span>
-
-              <div className="grid grid-cols-2 gap-1.5">
-                {selectedItem.category === 'draught' && (
-                  <>
+              <div className="flex items-center space-x-1.5 overflow-x-auto scrollbar-none pb-0.5">
+                {CATEGORIES.map(c => {
+                  const Icon = c.icon;
+                  const isSelected = activeCategory === c.id;
+                  return (
                     <button
-                      type="button"
-                      onClick={() => { setSelectedPreset({ label: 'Half Pint (284ml)', baseAmount: 284, unit: 'pints', qty: 0.5 }); setCustomQtyInput(''); }}
-                      className={`py-2 px-3 rounded-xl text-xs font-bold border transition ${
-                        selectedPreset?.baseAmount === 284 && !customQtyInput ? 'bg-black text-white border-black' : 'bg-gray-50 border-gray-200 text-gray-700'
+                      key={c.id}
+                      onClick={() => { setActiveCategory(c.id); setSelectedItem(null); }}
+                      className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition border ${
+                        isSelected
+                          ? 'bg-black text-white border-black shadow-xs'
+                          : 'bg-[#EDEDED] text-gray-700 border-transparent hover:bg-gray-200'
                       }`}
                     >
-                      Half Pint (284ml)
+                      {Icon && <Icon className="w-3.5 h-3.5" />}
+                      <span>{c.label}</span>
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => { setSelectedPreset({ label: 'Full Pint (568ml)', baseAmount: 568, unit: 'pints', qty: 1.0 }); setCustomQtyInput(''); }}
-                      className={`py-2 px-3 rounded-xl text-xs font-bold border transition ${
-                        selectedPreset?.baseAmount === 568 && !customQtyInput ? 'bg-black text-white border-black' : 'bg-gray-50 border-gray-200 text-gray-700'
-                      }`}
-                    >
-                      Pint (568ml)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => { setSelectedPreset({ label: `Full ${selectedItem.package_size_base / 1000}L Keg`, baseAmount: selectedItem.package_size_base, unit: 'keg', qty: 1.0 }); setCustomQtyInput(''); }}
-                      className={`py-2 px-3 rounded-xl text-xs font-bold border transition ${
-                        selectedPreset?.baseAmount === selectedItem.package_size_base && !customQtyInput ? 'bg-black text-white border-black' : 'bg-gray-50 border-gray-200 text-gray-700'
-                      }`}
-                    >
-                      Full Keg
-                    </button>
-                  </>
-                )}
-
-                {selectedItem.category === 'spirits' && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => { setSelectedPreset({ label: 'Single Measure (25ml)', baseAmount: 25, unit: 'measures', qty: 1 }); setCustomQtyInput(''); }}
-                      className={`py-2 px-3 rounded-xl text-xs font-bold border transition ${
-                        selectedPreset?.baseAmount === 25 && !customQtyInput ? 'bg-black text-white border-black' : 'bg-gray-50 border-gray-200 text-gray-700'
-                      }`}
-                    >
-                      Single (25ml)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => { setSelectedPreset({ label: 'Double Measure (50ml)', baseAmount: 50, unit: 'measures', qty: 2 }); setCustomQtyInput(''); }}
-                      className={`py-2 px-3 rounded-xl text-xs font-bold border transition ${
-                        selectedPreset?.baseAmount === 50 && !customQtyInput ? 'bg-black text-white border-black' : 'bg-gray-50 border-gray-200 text-gray-700'
-                      }`}
-                    >
-                      Double (50ml)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => { setSelectedPreset({ label: `Full Bottle (${selectedItem.package_size_base}ml)`, baseAmount: selectedItem.package_size_base, unit: 'bottle', qty: 1 }); setCustomQtyInput(''); }}
-                      className={`py-2 px-3 rounded-xl text-xs font-bold border transition ${
-                        selectedPreset?.baseAmount === selectedItem.package_size_base && !customQtyInput ? 'bg-black text-white border-black' : 'bg-gray-50 border-gray-200 text-gray-700'
-                      }`}
-                    >
-                      Full Bottle
-                    </button>
-                  </>
-                )}
-
-                {selectedItem.category === 'wine' && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => { setSelectedPreset({ label: 'Small Glass (125ml)', baseAmount: 125, unit: 'glasses', qty: 1 }); setCustomQtyInput(''); }}
-                      className={`py-2 px-3 rounded-xl text-xs font-bold border transition ${
-                        selectedPreset?.baseAmount === 125 && !customQtyInput ? 'bg-black text-white border-black' : 'bg-gray-50 border-gray-200 text-gray-700'
-                      }`}
-                    >
-                      Small (125ml)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => { setSelectedPreset({ label: 'Standard Glass (175ml)', baseAmount: 175, unit: 'glasses', qty: 1 }); setCustomQtyInput(''); }}
-                      className={`py-2 px-3 rounded-xl text-xs font-bold border transition ${
-                        selectedPreset?.baseAmount === 175 && !customQtyInput ? 'bg-black text-white border-black' : 'bg-gray-50 border-gray-200 text-gray-700'
-                      }`}
-                    >
-                      Standard (175ml)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => { setSelectedPreset({ label: 'Large Glass (250ml)', baseAmount: 250, unit: 'glasses', qty: 1 }); setCustomQtyInput(''); }}
-                      className={`py-2 px-3 rounded-xl text-xs font-bold border transition ${
-                        selectedPreset?.baseAmount === 250 && !customQtyInput ? 'bg-black text-white border-black' : 'bg-gray-50 border-gray-200 text-gray-700'
-                      }`}
-                    >
-                      Large (250ml)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => { setSelectedPreset({ label: 'Full Bottle (750ml)', baseAmount: 750, unit: 'bottle', qty: 1 }); setCustomQtyInput(''); }}
-                      className={`py-2 px-3 rounded-xl text-xs font-bold border transition ${
-                        selectedPreset?.baseAmount === 750 && !customQtyInput ? 'bg-black text-white border-black' : 'bg-gray-50 border-gray-200 text-gray-700'
-                      }`}
-                    >
-                      Full Bottle (750ml)
-                    </button>
-                  </>
-                )}
-
-                {selectedItem.category === 'packaged_beer' && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => { setSelectedPreset({ label: '1 Bottle / Can', baseAmount: 1, unit: 'each', qty: 1 }); setCustomQtyInput(''); }}
-                      className={`py-2 px-3 rounded-xl text-xs font-bold border transition ${
-                        selectedPreset?.baseAmount === 1 && !customQtyInput ? 'bg-black text-white border-black' : 'bg-gray-50 border-gray-200 text-gray-700'
-                      }`}
-                    >
-                      1 Bottle / Can
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => { setSelectedPreset({ label: `Full Case (${selectedItem.units_per_order_case})`, baseAmount: selectedItem.units_per_order_case, unit: 'case', qty: selectedItem.units_per_order_case }); setCustomQtyInput(''); }}
-                      className={`py-2 px-3 rounded-xl text-xs font-bold border transition ${
-                        selectedPreset?.baseAmount === selectedItem.units_per_order_case && !customQtyInput ? 'bg-black text-white border-black' : 'bg-gray-50 border-gray-200 text-gray-700'
-                      }`}
-                    >
-                      Full Case
-                    </button>
-                  </>
-                )}
-
-                <div className="relative">
-                  <input
-                    type="number"
-                    step="any"
-                    value={customQtyInput}
-                    onChange={(e) => { setCustomQtyInput(e.target.value); setSelectedPreset(null); }}
-                    placeholder={`Custom ${selectedItem.base_uom}...`}
-                    className="w-full bg-[#EDEDED] py-2 px-2.5 rounded-xl text-xs font-mono font-bold text-gray-900 focus:outline-none focus:ring-1 focus:ring-black"
-                  />
-                  <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[9px] text-gray-400 font-mono uppercase">
-                    {selectedItem.base_uom}
-                  </span>
-                </div>
+                  );
+                })}
               </div>
             </div>
 
-            {/* Reason Tags */}
+            {/* Product Search */}
             <div className="space-y-1.5">
-              <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-gray-400 block">
-                Reason for Spillage / Loss
-              </span>
-              <div className="grid grid-cols-2 gap-1.5">
-                {REASONS.map(r => (
-                  <button
-                    key={r.id}
-                    type="button"
-                    onClick={() => setSelectedReason(r.label)}
-                    className={`p-2 rounded-xl text-left border transition text-xs ${
-                      selectedReason === r.label
-                        ? 'bg-rose-50 border-rose-400 text-rose-900 font-bold'
-                        : 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100'
-                    }`}
-                  >
-                    <span className="block truncate">{r.label}</span>
+              <div className="relative">
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search product (e.g. Aberfeldy 12, Tennent's)..."
+                  className="w-full bg-[#EDEDED] py-2 pl-3 pr-8 rounded-xl text-xs italic placeholder-gray-500 focus:outline-none"
+                />
+                {searchQuery ? (
+                  <button onClick={() => setSearchQuery('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-black">
+                    <X className="w-3.5 h-3.5" />
                   </button>
-                ))}
+                ) : (
+                  <Search className="w-3.5 h-3.5 absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                )}
+              </div>
+
+              <div className="grid grid-cols-2 gap-1.5 max-h-36 overflow-y-auto border border-gray-100 rounded-2xl p-1 bg-gray-50/60">
+                {filteredCatalog.slice(0, 10).map(item => {
+                  const isSelected = selectedItem?.id === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => handleSelectItem(item)}
+                      className={`p-2 rounded-xl text-left transition border flex flex-col justify-between ${
+                        isSelected
+                          ? 'bg-black text-white border-black shadow-xs'
+                          : 'bg-white border-gray-200 hover:bg-gray-100 text-gray-900'
+                      }`}
+                    >
+                      <span className="font-bold text-xs truncate block">{item.name}</span>
+                      <span className={`text-[9px] font-mono block mt-0.5 ${isSelected ? 'text-gray-300' : 'text-gray-400'}`}>
+                        {item.package_size_base}{item.base_uom} • £{item.cost_price_ex_vat.toFixed(2)} cost
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
-            {/* Impact Readout */}
-            <div className="bg-gray-50 border border-gray-200 rounded-2xl p-3 flex items-center justify-between">
-              <div className="space-y-0.5">
-                <span className="text-[9px] font-mono text-gray-500 uppercase tracking-wider block">Stock Impact</span>
-                <span className="text-xs text-gray-800 block font-semibold">
-                  Deducting {wastageMetrics.totalBaseUnits} {selectedItem.base_uom}
-                </span>
+            {/* Single Item Form */}
+            {selectedItem && (
+              <form onSubmit={handleSubmitWastage} className="bg-white border-2 border-black rounded-3xl p-4 space-y-3.5 shadow-md animate-in fade-in duration-150">
+                <div className="flex items-start justify-between border-b border-gray-100 pb-2.5">
+                  <div>
+                    <span className="text-[9px] font-mono font-bold uppercase text-emerald-600 block tracking-wider">
+                      Selected Item
+                    </span>
+                    <h3 className="text-sm font-black text-gray-900">{selectedItem.name}</h3>
+                    <span className="text-[10px] text-gray-500 font-mono">
+                      Bottle/Unit Cost: £{singleMetrics.unitCostEx.toFixed(2)} ({selectedItem.package_size_base}{selectedItem.base_uom})
+                    </span>
+                  </div>
+                  <button type="button" onClick={() => setSelectedItem(null)} className="p-1 text-gray-400 hover:text-black">
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {/* Presets */}
+                <div className="space-y-1.5">
+                  <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-gray-400 block">
+                    Select Loss Measure
+                  </span>
+
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {selectedItem.category === 'draught' && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => { setSelectedPreset({ label: 'Half Pint (284ml)', baseAmount: 284, unit: 'pints', qty: 0.5 }); setCustomQtyInput(''); }}
+                          className={`py-2 px-3 rounded-xl text-xs font-bold border transition ${
+                            selectedPreset?.baseAmount === 284 && !customQtyInput ? 'bg-black text-white border-black' : 'bg-gray-50 border-gray-200 text-gray-700'
+                          }`}
+                        >
+                          Half Pint (284ml)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { setSelectedPreset({ label: 'Full Pint (568ml)', baseAmount: 568, unit: 'pints', qty: 1.0 }); setCustomQtyInput(''); }}
+                          className={`py-2 px-3 rounded-xl text-xs font-bold border transition ${
+                            selectedPreset?.baseAmount === 568 && !customQtyInput ? 'bg-black text-white border-black' : 'bg-gray-50 border-gray-200 text-gray-700'
+                          }`}
+                        >
+                          Pint (568ml)
+                        </button>
+                      </>
+                    )}
+
+                    {selectedItem.category === 'spirits' && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => { setSelectedPreset({ label: 'Single Measure (25ml)', baseAmount: 25, unit: 'measures', qty: 1 }); setCustomQtyInput(''); }}
+                          className={`py-2 px-3 rounded-xl text-xs font-bold border transition ${
+                            selectedPreset?.baseAmount === 25 && !customQtyInput ? 'bg-black text-white border-black' : 'bg-gray-50 border-gray-200 text-gray-700'
+                          }`}
+                        >
+                          Single (25ml)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { setSelectedPreset({ label: 'Double Measure (50ml)', baseAmount: 50, unit: 'measures', qty: 2 }); setCustomQtyInput(''); }}
+                          className={`py-2 px-3 rounded-xl text-xs font-bold border transition ${
+                            selectedPreset?.baseAmount === 50 && !customQtyInput ? 'bg-black text-white border-black' : 'bg-gray-50 border-gray-200 text-gray-700'
+                          }`}
+                        >
+                          Double (50ml)
+                        </button>
+                      </>
+                    )}
+
+                    {selectedItem.category === 'wine' && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => { setSelectedPreset({ label: '175ml Glass', baseAmount: 175, unit: 'glasses', qty: 1 }); setCustomQtyInput(''); }}
+                          className={`py-2 px-3 rounded-xl text-xs font-bold border transition ${
+                            selectedPreset?.baseAmount === 175 && !customQtyInput ? 'bg-black text-white border-black' : 'bg-gray-50 border-gray-200 text-gray-700'
+                          }`}
+                        >
+                          175ml Glass
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { setSelectedPreset({ label: 'Full Bottle (750ml)', baseAmount: 750, unit: 'bottle', qty: 1 }); setCustomQtyInput(''); }}
+                          className={`py-2 px-3 rounded-xl text-xs font-bold border transition ${
+                            selectedPreset?.baseAmount === 750 && !customQtyInput ? 'bg-black text-white border-black' : 'bg-gray-50 border-gray-200 text-gray-700'
+                          }`}
+                        >
+                          Full Bottle
+                        </button>
+                      </>
+                    )}
+
+                    {selectedItem.category === 'packaged_beer' && (
+                      <button
+                        type="button"
+                        onClick={() => { setSelectedPreset({ label: '1 Bottle / Can', baseAmount: 1, unit: 'each', qty: 1 }); setCustomQtyInput(''); }}
+                        className={`py-2 px-3 rounded-xl text-xs font-bold border transition col-span-2 ${
+                          selectedPreset?.baseAmount === 1 && !customQtyInput ? 'bg-black text-white border-black' : 'bg-gray-50 border-gray-200 text-gray-700'
+                        }`}
+                      >
+                        1 Bottle / Can
+                      </button>
+                    )}
+
+                    <div className="relative">
+                      <input
+                        type="number"
+                        step="any"
+                        value={customQtyInput}
+                        onChange={(e) => { setCustomQtyInput(e.target.value); setSelectedPreset(null); }}
+                        placeholder={`Custom ${selectedItem.base_uom}...`}
+                        className="w-full bg-[#EDEDED] py-2 px-2.5 rounded-xl text-xs font-mono font-bold text-gray-900 focus:outline-none"
+                      />
+                      <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[9px] text-gray-400 font-mono uppercase">
+                        {selectedItem.base_uom}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Reason */}
+                <div className="space-y-1.5">
+                  <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-gray-400 block">
+                    Reason
+                  </span>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {REASONS.map(r => (
+                      <button
+                        key={r.id}
+                        type="button"
+                        onClick={() => setSelectedReason(r.label)}
+                        className={`p-2 rounded-xl text-left border transition text-xs ${
+                          selectedReason === r.label
+                            ? 'bg-rose-50 border-rose-400 text-rose-900 font-bold'
+                            : 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100'
+                        }`}
+                      >
+                        <span className="block truncate">{r.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="bg-gray-50 border border-gray-200 rounded-2xl p-3 flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <span className="text-[9px] font-mono text-gray-500 uppercase tracking-wider block">Stock Impact</span>
+                    <span className="text-xs text-gray-800 block font-semibold">
+                      Deducting {singleMetrics.totalBaseUnits} {selectedItem.base_uom}
+                    </span>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-lg font-black text-rose-600 font-mono block">
+                      ~£{singleMetrics.costImpact.toFixed(2)}
+                    </span>
+                    <span className="text-[9px] text-gray-400 font-mono block">Cost Impact Ex VAT</span>
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={submitting || singleMetrics.totalBaseUnits <= 0}
+                  className="w-full py-3 bg-black hover:bg-neutral-800 disabled:opacity-40 text-white rounded-2xl text-xs font-black transition flex items-center justify-center space-x-1.5 shadow-md"
+                >
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                  <span>{submitting ? 'Deducting Stock...' : 'Confirm Single Spillage'}</span>
+                </button>
+              </form>
+            )}
+          </>
+        ) : (
+          /* RECIPE / COCKTAIL FORMULATION FLOW */
+          <>
+            <div className="space-y-1.5">
+              <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-gray-400 block">
+                Select Cocktail / Batch Recipe
+              </span>
+              <div className="relative">
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search cocktail or batch formulation..."
+                  className="w-full bg-[#EDEDED] py-2 pl-3 pr-8 rounded-xl text-xs italic placeholder-gray-500 focus:outline-none"
+                />
+                {searchQuery ? (
+                  <button onClick={() => setSearchQuery('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-black">
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                ) : (
+                  <Search className="w-3.5 h-3.5 absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                )}
               </div>
-              <div className="text-right">
-                <span className="text-lg font-black text-rose-600 font-mono block">
-                  ~£{wastageMetrics.costImpact.toFixed(2)}
-                </span>
-                <span className="text-[9px] text-gray-400 font-mono block">Cost Impact Ex VAT</span>
+
+              <div className="grid grid-cols-2 gap-1.5 max-h-40 overflow-y-auto border border-gray-100 rounded-2xl p-1 bg-gray-50/60">
+                {filteredRecipes.map(rec => {
+                  const isSelected = selectedRecipe?.id === rec.id;
+                  return (
+                    <button
+                      key={rec.id}
+                      type="button"
+                      onClick={() => setSelectedRecipe(rec)}
+                      className={`p-2.5 rounded-xl text-left transition border flex flex-col justify-between ${
+                        isSelected
+                          ? 'bg-black text-white border-black shadow-xs'
+                          : 'bg-white border-gray-200 hover:bg-gray-100 text-gray-900'
+                      }`}
+                    >
+                      <span className="font-bold text-xs truncate block">{rec.name}</span>
+                      <span className={`text-[9px] font-mono block mt-0.5 ${isSelected ? 'text-gray-300' : 'text-gray-400'}`}>
+                        {rec.recipe_type.toUpperCase()} • {(rec.ingredients || []).length} parts
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
-            <button
-              type="submit"
-              disabled={submitting || wastageMetrics.totalBaseUnits <= 0}
-              className="w-full py-3 bg-black hover:bg-neutral-800 active:scale-[0.98] disabled:opacity-40 text-white rounded-2xl text-xs font-black transition flex items-center justify-center space-x-1.5 shadow-md"
-            >
-              <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-              <span>{submitting ? 'Deducting Stock...' : `Log Loss for ${selectedDayLabel}`}</span>
-            </button>
-          </form>
+            {selectedRecipe && (
+              <form onSubmit={handleSubmitWastage} className="bg-white border-2 border-black rounded-3xl p-4 space-y-3.5 shadow-md animate-in fade-in duration-150">
+                <div className="flex items-start justify-between border-b border-gray-100 pb-2.5">
+                  <div>
+                    <span className="text-[9px] font-mono font-bold uppercase text-rose-600 block tracking-wider">
+                      Composite Recipe
+                    </span>
+                    <h3 className="text-sm font-black text-gray-900">{selectedRecipe.name}</h3>
+                    <span className="text-[10px] text-gray-500 font-mono">
+                      Yield: {selectedRecipe.yield_amount} {selectedRecipe.yield_unit}
+                    </span>
+                  </div>
+                  <button type="button" onClick={() => setSelectedRecipe(null)} className="p-1 text-gray-400 hover:text-black">
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {/* Serves Counter */}
+                <div className="flex items-center justify-between bg-gray-50 p-2.5 rounded-2xl border border-gray-200">
+                  <span className="text-xs font-bold text-gray-800">Quantity Wasted</span>
+                  <div className="flex items-center space-x-2">
+                    <button
+                      type="button"
+                      onClick={() => setRecipeServes(prev => Math.max(1, prev - 1))}
+                      className="w-7 h-7 bg-white rounded-lg border border-gray-300 font-bold text-gray-800 text-sm flex items-center justify-center hover:bg-gray-100"
+                    >
+                      -
+                    </button>
+                    <span className="w-8 text-center font-mono font-black text-sm">
+                      {recipeServes}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setRecipeServes(prev => prev + 1)}
+                      className="w-7 h-7 bg-white rounded-lg border border-gray-300 font-bold text-gray-800 text-sm flex items-center justify-center hover:bg-gray-100"
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+
+                {/* Live Recipe Breakdown Readout */}
+                <div className="space-y-1.5">
+                  <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-gray-400 block">
+                    Stock Breakdown Deductions
+                  </span>
+                  <div className="divide-y divide-gray-100 border border-gray-200 rounded-2xl overflow-hidden bg-gray-50/50">
+                    {recipeMetrics.breakdown.map((line, idx) => (
+                      <div key={idx} className="p-2 flex items-center justify-between text-xs">
+                        <div>
+                          <span className="font-bold text-gray-900 block leading-tight">{line.item_name}</span>
+                          <span className="text-[9px] text-gray-400 font-mono">
+                            Deducting {line.deduction}{line.unit} from catalog stock
+                          </span>
+                        </div>
+                        <span className="font-mono font-bold text-gray-800 text-xs">
+                          £{line.cost.toFixed(2)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Reason */}
+                <div className="space-y-1.5">
+                  <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-gray-400 block">
+                    Reason
+                  </span>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {REASONS.map(r => (
+                      <button
+                        key={r.id}
+                        type="button"
+                        onClick={() => setSelectedReason(r.label)}
+                        className={`p-2 rounded-xl text-left border transition text-xs ${
+                          selectedReason === r.label
+                            ? 'bg-rose-50 border-rose-400 text-rose-900 font-bold'
+                            : 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100'
+                        }`}
+                      >
+                        <span className="block truncate">{r.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Total Cost Impact */}
+                <div className="bg-gray-50 border border-gray-200 rounded-2xl p-3 flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <span className="text-[9px] font-mono text-gray-500 uppercase tracking-wider block">Cumulative Pour Cost</span>
+                    <span className="text-xs text-gray-800 block font-semibold">
+                      {recipeServes}x {selectedRecipe.name}
+                    </span>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-lg font-black text-rose-600 font-mono block">
+                      ~£{recipeMetrics.totalCost.toFixed(2)}
+                    </span>
+                    <span className="text-[9px] text-gray-400 font-mono block">Loss Ex VAT</span>
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={submitting || recipeMetrics.totalCost <= 0}
+                  className="w-full py-3 bg-black hover:bg-neutral-800 disabled:opacity-40 text-white rounded-2xl text-xs font-black transition flex items-center justify-center space-x-1.5 shadow-md"
+                >
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                  <span>{submitting ? 'Deducting Ingredients...' : 'Confirm & Deduct Recipe Stock'}</span>
+                </button>
+              </form>
+            )}
+          </>
         )}
 
         {/* Selected Day Activity Ledger */}
@@ -795,7 +1001,7 @@ export default function SpillageAndWastage({ currentUser, onBackToHub, onLogout 
                       </span>
                     </div>
                     <span className="text-[10px] text-gray-400 font-mono block mt-0.5">
-                      {log.total_base_deducted} ml/ea • {log.staff_name} • {new Date(log.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      {log.notes || `${log.total_base_deducted} ml/ea`} • {log.staff_name} • {new Date(log.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                     </span>
                   </div>
 
