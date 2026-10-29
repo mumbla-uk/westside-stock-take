@@ -14,9 +14,10 @@ import {
   Scale,
   Sparkles,
   ClipboardList,
-  Flame,
-  Sun,
-  ShieldAlert
+  Edit3,
+  Save,
+  Moon,
+  ChevronRight
 } from 'lucide-react';
 import { useTwoFingerSwipe } from './useTwoFingerSwipe';
 import { supabase, DEFAULT_VENUE_ID } from './lib/db';
@@ -37,17 +38,33 @@ function AppLogo({ className = "w-6 h-6", fallbackTextClass = "font-serif text-x
   return <span className={fallbackTextClass}>W</span>;
 }
 
+const DAYS_OF_WEEK = [
+  { key: 'mon', label: 'Mon', full: 'Monday' },
+  { key: 'tue', label: 'Tue', full: 'Tuesday' },
+  { key: 'wed', label: 'Wed', full: 'Wednesday' },
+  { key: 'thu', label: 'Thu', full: 'Thursday' },
+  { key: 'fri', label: 'Fri', full: 'Friday' },
+  { key: 'sat', label: 'Sat', full: 'Saturday' },
+  { key: 'sun', label: 'Sun', full: 'Sunday' },
+];
+
+// Returns the target service day key (ordered nightly for next-day service)
+function getNextServiceDayKey() {
+  const dayIndex = new Date().getDay(); // 0 is Sunday, 1 is Monday ... 6 is Saturday
+  // If ordering Sunday night (0), target Monday (mon)
+  // If ordering Monday night (1), target Tuesday (tue)
+  const map = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+  return map[dayIndex];
+}
+
 export default function ProduceOrderApp({ currentUser, onBackToHub, onLogout }) {
   const [produceItems, setProduceItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeCategory, setActiveCategory] = useState('all'); // 'all' | 'fruit' | 'herb' | 'chemical' | 'bakery'
+  const [activeCategory, setActiveCategory] = useState('all');
   
-  // Day Schedule: Sun (0), Mon (1), Tue (2), Wed (3) = Midweek | Thu (4), Fri (5), Sat (6) = Weekend
-  const [daySchedule, setDaySchedule] = useState(() => {
-    const day = new Date().getDay();
-    return (day >= 4 && day <= 6) ? 'weekend' : 'midweek';
-  });
+  // Target Service Day (Default: Next day service)
+  const [targetDayKey, setTargetDayKey] = useState(getNextServiceDayKey);
 
   // Shelf Stock Counts: { [id]: countVal }
   const [counts, setCounts] = useState({});
@@ -56,7 +73,12 @@ export default function ProduceOrderApp({ currentUser, onBackToHub, onLogout }) 
   const [statusMsg, setStatusMsg] = useState(null);
   const [copyFeedback, setCopyFeedback] = useState(false);
 
+  // Par Editor Modal State
+  const [editingItemPars, setEditingItemPars] = useState(null);
+  const [savingPars, setSavingPars] = useState(false);
+
   const swipeHandlers = useTwoFingerSwipe({
+    disabled: Boolean(editingItemPars),
     onSwipeRight: () => {
       if (onBackToHub) onBackToHub();
     }
@@ -75,7 +97,6 @@ export default function ProduceOrderApp({ currentUser, onBackToHub, onLogout }) 
       if (pErr) throw pErr;
       setProduceItems(pData || []);
 
-      // Pre-fill initial on-hand counts
       const initCounts = {};
       (pData || []).forEach(p => {
         initCounts[p.id] = initCounts[p.id] ?? 0;
@@ -134,11 +155,19 @@ export default function ProduceOrderApp({ currentUser, onBackToHub, onLogout }) 
     setCounts(prev => ({ ...prev, [id]: fraction }));
   };
 
-  // Order Calculation: (Target Par - On Hand) + Prep Deficits
+  // Order Calculation: Target Day Par - On Hand + Prep Demand
   const orderQueue = useMemo(() => {
     return produceItems.map(item => {
       const onHand = Number(counts[item.id] || 0);
-      const targetPar = Number(daySchedule === 'weekend' ? item.par_weekend : item.par_midweek) || 1;
+      
+      // Pull specific day par from daily_pars JSON map, fallback to midweek/weekend or 1.0
+      const dayParMap = item.daily_pars || {};
+      const targetPar = Number(
+        dayParMap[targetDayKey] ?? 
+        (targetDayKey === 'fri' || targetDayKey === 'sat' ? item.par_weekend : item.par_midweek) ?? 
+        1.0
+      );
+
       const shelfDeficit = Math.max(0, targetPar - onHand);
 
       // Check if extra prep demand exists
@@ -163,15 +192,18 @@ export default function ProduceOrderApp({ currentUser, onBackToHub, onLogout }) 
         wholeUnitsToOrder
       };
     });
-  }, [produceItems, counts, daySchedule, prepDemand]);
+  }, [produceItems, counts, targetDayKey, prepDemand]);
 
   const itemsNeedingOrder = useMemo(() => {
     return orderQueue.filter(it => it.wholeUnitsToOrder > 0);
   }, [orderQueue]);
 
+  const activeTargetDay = useMemo(() => {
+    return DAYS_OF_WEEK.find(d => d.key === targetDayKey) || DAYS_OF_WEEK[0];
+  }, [targetDayKey]);
+
   const handleCopyProduceOrder = () => {
-    const dayLabel = daySchedule === 'weekend' ? 'WEEKEND SPIKE' : 'MIDWEEK RUN';
-    let text = `WEST SIDE TAVERN - FRESH PRODUCE & PREP ORDER\nSchedule: ${dayLabel} (${new Date().toLocaleDateString('en-GB')})\n--------------------------------------------\n`;
+    let text = `WEST SIDE TAVERN - NIGHTLY PRODUCE ORDER\nFor Service On: ${activeTargetDay.full.toUpperCase()} (${new Date().toLocaleDateString('en-GB')})\n--------------------------------------------\n`;
     itemsNeedingOrder.forEach(it => {
       text += `• ${it.name}: ${it.wholeUnitsToOrder} ${it.order_unit}`;
       if (it.prepExtra > 0) text += ` (inc. +${it.prepExtra} for prep)`;
@@ -195,7 +227,7 @@ export default function ProduceOrderApp({ currentUser, onBackToHub, onLogout }) 
         .insert({
           venue_id: DEFAULT_VENUE_ID,
           order_date: dateStr,
-          day_type: daySchedule,
+          day_type: targetDayKey,
           manager_name: staffName,
           is_placed: true,
           placed_at: new Date().toISOString(),
@@ -205,18 +237,46 @@ export default function ProduceOrderApp({ currentUser, onBackToHub, onLogout }) 
       if (error) throw error;
 
       sendPushNotification(
-        `Produce Order Placed (${daySchedule.toUpperCase()})`,
-        `${staffName} ordered ${itemsNeedingOrder.length} lines of fresh produce and prep supplies.`,
+        `Produce Order Logged (${activeTargetDay.full} Service)`,
+        `${staffName} ordered ${itemsNeedingOrder.length} lines for ${activeTargetDay.full} prep & service.`,
         null,
         { module: 'produce' }
       );
 
-      setStatusMsg({ type: 'success', text: `Produce order logged! ${itemsNeedingOrder.length} items recorded.` });
+      setStatusMsg({ type: 'success', text: `Nightly order placed for ${activeTargetDay.full} service!` });
     } catch (err) {
       console.error(err);
       setStatusMsg({ type: 'error', text: 'Error recording produce order.' });
     } finally {
       setSubmittingOrder(false);
+    }
+  };
+
+  // Save 7-Day Par Adjustments
+  const handleSaveDailyPars = async (e) => {
+    e.preventDefault();
+    if (!editingItemPars) return;
+    setSavingPars(true);
+
+    try {
+      const { error } = await supabase
+        .from('produce_items')
+        .update({
+          daily_pars: editingItemPars.daily_pars,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', editingItemPars.id);
+
+      if (error) throw error;
+
+      setStatusMsg({ type: 'success', text: `Updated 7-day pars for ${editingItemPars.name}` });
+      setEditingItemPars(null);
+      await fetchProduceData();
+    } catch (err) {
+      console.error(err);
+      setStatusMsg({ type: 'error', text: 'Failed to update item pars.' });
+    } finally {
+      setSavingPars(false);
     }
   };
 
@@ -236,7 +296,7 @@ export default function ProduceOrderApp({ currentUser, onBackToHub, onLogout }) 
           <AppLogo className="w-6 h-6" fallbackTextClass="font-serif text-xl font-bold tracking-tighter" />
           <div>
             <h1 className="font-extrabold text-base tracking-tight text-gray-900 leading-tight">Fresh Produce &amp; Herbs</h1>
-            <span className="text-[10px] text-gray-400 font-mono block">Dynamic Pars &amp; Prep Demand</span>
+            <span className="text-[10px] text-gray-400 font-mono block">Nightly Service Par Engine</span>
           </div>
         </div>
 
@@ -245,37 +305,34 @@ export default function ProduceOrderApp({ currentUser, onBackToHub, onLogout }) 
         </button>
       </header>
 
-      {/* Schedule Mode Switcher */}
-      <div className="px-5 py-2.5 bg-gray-50/80 border-b border-gray-100 flex-shrink-0">
-        <div className="flex items-center justify-between">
-          <div className="space-y-0.5">
-            <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-gray-400 block">
-              Active Par Schedule
-            </span>
-            <span className="text-xs font-black text-gray-900 flex items-center space-x-1">
-              {daySchedule === 'weekend' ? <Flame className="w-3.5 h-3.5 text-rose-500 fill-rose-500" /> : <Sun className="w-3.5 h-3.5 text-amber-500" />}
-              <span>{daySchedule === 'weekend' ? 'Weekend High Volume (Thu–Sat)' : 'Midweek Lean (Sun–Wed)'}</span>
-            </span>
-          </div>
+      {/* Target Day Selector Bar */}
+      <div className="px-5 pt-3 pb-2.5 bg-gray-50/80 border-b border-gray-100 flex-shrink-0">
+        <div className="flex items-center justify-between mb-1.5">
+          <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-gray-500 flex items-center space-x-1">
+            <Moon className="w-3.5 h-3.5 text-indigo-600" />
+            <span>Ordering Tonight For: <strong className="text-black uppercase">{activeTargetDay.full} Service</strong></span>
+          </span>
+          <span className="text-[9px] font-mono text-gray-400">Nightly Shift Routine</span>
+        </div>
 
-          <div className="flex bg-white border border-gray-200 p-0.5 rounded-xl shadow-xs">
-            <button
-              onClick={() => setDaySchedule('midweek')}
-              className={`px-2.5 py-1 text-[10px] font-bold rounded-lg transition ${
-                daySchedule === 'midweek' ? 'bg-black text-white shadow-xs' : 'text-gray-500 hover:text-black'
-              }`}
-            >
-              Midweek
-            </button>
-            <button
-              onClick={() => setDaySchedule('weekend')}
-              className={`px-2.5 py-1 text-[10px] font-bold rounded-lg transition ${
-                daySchedule === 'weekend' ? 'bg-rose-600 text-white shadow-xs' : 'text-gray-500 hover:text-black'
-              }`}
-            >
-              Weekend
-            </button>
-          </div>
+        <div className="grid grid-cols-7 gap-1">
+          {DAYS_OF_WEEK.map(d => {
+            const isSelected = targetDayKey === d.key;
+            return (
+              <button
+                key={d.key}
+                type="button"
+                onClick={() => setTargetDayKey(d.key)}
+                className={`py-1.5 rounded-xl flex flex-col items-center justify-center transition border ${
+                  isSelected
+                    ? 'bg-black text-white border-black shadow-xs'
+                    : 'bg-[#EDEDED] text-gray-700 border-transparent hover:bg-gray-200'
+                }`}
+              >
+                <span className="text-[10px] font-bold uppercase tracking-wider block">{d.label}</span>
+              </button>
+            );
+          })}
         </div>
       </div>
 
@@ -330,22 +387,31 @@ export default function ProduceOrderApp({ currentUser, onBackToHub, onLogout }) 
           const onHand = metrics?.onHand ?? 0;
           const par = metrics?.targetPar ?? 1;
           const toOrder = metrics?.wholeUnitsToOrder ?? 0;
-          const isChemical = item.item_type === 'chemical' || item.count_format === 'grams';
 
           return (
             <div key={item.id} className="py-3 space-y-2">
               <div className="flex items-start justify-between">
                 <div>
-                  <span className="font-extrabold text-xs text-gray-900 block leading-tight">
-                    {item.name}
-                  </span>
+                  <div className="flex items-center space-x-1.5">
+                    <span className="font-extrabold text-xs text-gray-900 block leading-tight">
+                      {item.name}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setEditingItemPars({ ...item, daily_pars: { ...(item.daily_pars || {}) } })}
+                      className="p-0.5 text-gray-400 hover:text-black rounded"
+                      title="Edit 7-Day Pars"
+                    >
+                      <Edit3 className="w-3 h-3" />
+                    </button>
+                  </div>
                   <div className="flex items-center space-x-1.5 text-[10px] text-gray-500 font-mono mt-0.5">
                     <span>{item.supplier}</span>
                     <span>•</span>
-                    <span className="font-bold text-gray-800">Par: {par} {item.order_unit}</span>
+                    <span className="font-bold text-gray-800">{activeTargetDay.label} Par: {par} {item.order_unit}</span>
                     {metrics?.prepExtra > 0 && (
                       <span className="text-purple-700 font-bold bg-purple-50 px-1 rounded">
-                        +{metrics.prepExtra} for prep
+                        +{metrics.prepExtra} prep
                       </span>
                     )}
                   </div>
@@ -364,7 +430,6 @@ export default function ProduceOrderApp({ currentUser, onBackToHub, onLogout }) 
 
               {/* Rough Estimation Buttons & Number Scroller */}
               <div className="flex items-center justify-between pt-0.5">
-                {/* Fraction Estimator Chips */}
                 <div className="flex items-center space-x-1">
                   {[0.1, 0.25, 0.5, 0.75, 1.0].map(frac => (
                     <button
@@ -382,7 +447,6 @@ export default function ProduceOrderApp({ currentUser, onBackToHub, onLogout }) 
                   ))}
                 </div>
 
-                {/* Counter Stepper */}
                 <div className="flex items-center space-x-1">
                   <button
                     type="button"
@@ -431,6 +495,77 @@ export default function ProduceOrderApp({ currentUser, onBackToHub, onLogout }) 
         </button>
       </div>
 
+      {/* 7-DAY PARS MODAL */}
+      {editingItemPars && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200">
+          <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl overflow-hidden shadow-2xl border border-gray-200 flex flex-col max-h-[85vh] animate-in slide-in-from-bottom duration-200">
+            <div className="px-5 pt-4 pb-3 border-b border-gray-100 flex justify-between items-center bg-gray-50/80">
+              <div>
+                <span className="text-[9px] font-mono uppercase text-gray-400 font-bold block">
+                  Dynamic 7-Day Par Schedule
+                </span>
+                <h2 className="text-base font-black text-gray-900 leading-tight mt-0.5">
+                  {editingItemPars.name}
+                </h2>
+                <span className="text-[10px] text-gray-500 font-mono">
+                  Unit: {editingItemPars.order_unit}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingItemPars(null)}
+                className="p-1.5 text-gray-400 hover:text-black bg-white rounded-full border border-gray-200 shadow-xs"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveDailyPars} className="p-5 space-y-3.5 text-xs">
+              <p className="text-gray-500 text-[11px] leading-tight">
+                Adjust the par target for each service day. Nightly orders placed the evening prior will order to hit these buffers.
+              </p>
+
+              <div className="grid grid-cols-7 gap-1.5 bg-gray-50 p-2.5 rounded-2xl border border-gray-200">
+                {DAYS_OF_WEEK.map(d => (
+                  <div key={d.key} className="space-y-1 text-center">
+                    <label className="text-[9px] font-bold text-gray-600 uppercase block">{d.label}</label>
+                    <input
+                      type="number"
+                      step="any"
+                      required
+                      value={editingItemPars.daily_pars?.[d.key] ?? 1.0}
+                      onChange={(e) => {
+                        const val = parseFloat(e.target.value) || 0;
+                        setEditingItemPars(prev => ({
+                          ...prev,
+                          daily_pars: {
+                            ...(prev.daily_pars || {}),
+                            [d.key]: val
+                          }
+                        }));
+                      }}
+                      className="w-full bg-white border border-gray-300 py-1 px-1 rounded-lg font-mono font-bold text-xs text-center focus:outline-none"
+                    />
+                  </div>
+                ))}
+              </div>
+
+              <div className="pt-2">
+                <button
+                  type="submit"
+                  disabled={savingPars}
+                  className="w-full py-3 bg-black hover:bg-neutral-800 disabled:opacity-40 text-white rounded-2xl text-xs font-bold transition flex items-center justify-center space-x-1.5 shadow-md"
+                >
+                  <Save className="w-4 h-4 text-emerald-400" />
+                  <span>{savingPars ? 'Saving Schedule...' : 'Save 7-Day Par Schedule'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Hub Nav */}
       <nav className="fixed bottom-2 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-[390px] z-30 rounded-2xl bg-[#111111]/95 backdrop-blur-md text-white py-2 px-3 flex justify-around items-center text-xs font-semibold shadow-2xl border border-white/10 select-none pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))]">
         <button
           onClick={onBackToHub}
