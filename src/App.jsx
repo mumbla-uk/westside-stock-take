@@ -7,12 +7,15 @@ import SpillageAndWastage from './SpillageAndWastage';
 import CatalogManagerApp from './CatalogManagerApp';
 import PrepCalculatorApp from './PrepCalculatorApp';
 import ProduceOrderApp from './ProduceOrderApp';
+import PreferencesApp from './PreferencesApp';
 import Settings from './Settings';
+import SideNavDrawer from './SideNavDrawer';
 import PreShiftCard from './PreShiftCard';
 import OpsChatDrawer from './OpsChatDrawer';
 import OpsFloatingTrigger from './OpsFloatingTrigger';
 import NotificationCenterApp from './NotificationCenterApp';
 import {
+  Menu,
   BookOpen,
   Coins,
   Truck,
@@ -50,6 +53,7 @@ function AppLogo({ className = "w-8 h-8", fallbackTextClass = "font-serif text-2
 
 export default function App() {
   const [activeModule, setActiveModule] = useState('hub');
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const [deepLinkData, setDeepLinkData] = useState(null);
   const [currentUser, setCurrentUser] = useState(() => {
     try {
@@ -82,7 +86,7 @@ export default function App() {
   });
 
   const swipeHandlers = useTwoFingerSwipe({
-    disabled: activeModule === 'hub' || showFirstOpenPushModal || chatOpen,
+    disabled: activeModule === 'hub' || showFirstOpenPushModal || chatOpen || drawerOpen,
     onSwipeRight: () => {
       setDeepLinkData(null);
       setActiveModule('hub');
@@ -96,7 +100,6 @@ export default function App() {
     return 'Good Evening';
   };
 
-  // Query live database records for handovers, deliveries, orders, and wastage
   const fetchLiveActivity = async () => {
     try {
       const [handoverRes, goodsRes, orderRes, wastageRes] = await Promise.all([
@@ -233,7 +236,6 @@ export default function App() {
     });
   }, [currentUser]);
 
-  // Notification dispatcher
   const triggerPushNotification = async (arg1, arg2, arg3) => {
     if (typeof arg1 === 'object' && arg1 !== null) {
       const { title, message, targetManager = null } = arg1;
@@ -256,33 +258,6 @@ export default function App() {
     const updated = Array.from(new Set([...readNotifIds, ...allIds]));
     setReadNotifIds(updated);
     localStorage.setItem('wst_read_activity_ids', JSON.stringify(updated));
-  };
-
-  const handleEnablePushFromModal = async () => {
-    localStorage.setItem('wst_push_prompted', 'true');
-    setShowFirstOpenPushModal(false);
-    if (!window.OneSignalDeferred) return;
-
-    window.OneSignalDeferred.push(async function(OneSignal) {
-      try {
-        await OneSignal.User.PushSubscription.optIn();
-        if (currentUser) {
-          const cleanName = currentUser.name.trim();
-          if (typeof OneSignal.login === 'function') {
-            await OneSignal.login(cleanName);
-          }
-          if (OneSignal.User?.addAlias) {
-            await OneSignal.User.addAlias("external_id", cleanName);
-          }
-          if (OneSignal.User?.addTag) {
-            await OneSignal.User.addTag("role", currentUser.role);
-          }
-        }
-        setPushEnabled(true);
-      } catch (err) {
-        console.warn("Push permission error or denied:", err);
-      }
-    });
   };
 
   const verifyPin = async (enteredPin) => {
@@ -443,7 +418,7 @@ export default function App() {
     );
   }
 
-  // Active Module Views
+  // Active Module Router
   if (activeModule === 'notifications') {
     return (
       <NotificationCenterApp
@@ -565,6 +540,18 @@ export default function App() {
     );
   }
 
+  if (activeModule === 'preferences') {
+    return (
+      <div {...swipeHandlers} className="h-screen w-full">
+        <PreferencesApp
+          currentUser={currentUser}
+          onBackToHub={() => setActiveModule('hub')}
+          onLogout={handleLogout}
+        />
+      </div>
+    );
+  }
+
   if (activeModule === 'settings') {
     return (
       <div {...swipeHandlers} className="h-screen w-full">
@@ -582,10 +569,33 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen w-full max-w-md mx-auto bg-[#101b34] text-gray-900 font-sans antialiased border-x border-gray-100 overflow-hidden relative select-none">
-      <header className="flex items-center justify-between px-6 pt-[max(1.2rem,env(safe-area-inset-top))] pb-3 flex-shrink-0 bg-white z-30">
-        <div className="flex items-center">
+      
+      {/* Universal Side Navigation Drawer */}
+      <SideNavDrawer
+        isOpen={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        activeModule={activeModule}
+        onNavigate={(mod) => {
+          setActiveModule(mod);
+          setDrawerOpen(false);
+        }}
+        currentUser={currentUser}
+        onLogout={handleLogout}
+      />
+
+      {/* Top Navigation Bar with Hamburger Icon on Left of Logo */}
+      <header className="flex items-center justify-between px-5 pt-[max(1.2rem,env(safe-area-inset-top))] pb-3 flex-shrink-0 bg-white z-30 shadow-2xs">
+        <div className="flex items-center space-x-2.5">
+          <button
+            onClick={() => setDrawerOpen(true)}
+            className="p-1.5 -ml-1.5 text-gray-700 hover:text-black rounded-lg transition active:scale-95"
+            aria-label="Open Navigation Drawer"
+          >
+            <Menu className="w-5 h-5 stroke-[2.2]" />
+          </button>
           <AppLogo className="w-8 h-8 rounded-lg" fallbackTextClass="font-serif text-2xl font-bold tracking-tight text-neutral-900" />
         </div>
+
         <div className="relative">
           <button
             onClick={() => setShowNotifications(prev => !prev)}
@@ -663,6 +673,7 @@ export default function App() {
         </div>
       </header>
 
+      {/* Greeting Banner */}
       <div className="bg-white px-6 pt-1 pb-4 space-y-0.5 flex-shrink-0">
         <h1 className="text-3xl font-extrabold tracking-tight text-neutral-900">
           {getGreeting()}, {currentUser?.name?.split(' ')[0] || 'Ross'}
@@ -681,20 +692,21 @@ export default function App() {
         </div>
 
         <div className="bg-white rounded-t-[36px] px-6 pt-6 pb-24 space-y-6 shadow-md -mt-2">
+          
+          {/* Categorized Tools Row with Drawer Sync */}
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-black tracking-tight text-neutral-900">Tools</h2>
               <button
-                onClick={() => setActiveModule('settings')}
-                className="text-xs font-semibold text-neutral-400 hover:text-neutral-900 transition"
+                onClick={() => setDrawerOpen(true)}
+                className="text-xs font-semibold text-neutral-400 hover:text-neutral-900 transition flex items-center space-x-1"
               >
-                See All
+                <span>Full Menu</span>
+                <ChevronRight className="w-3 h-3" />
               </button>
             </div>
             
-            {/* Scrollable Tools Carousel Row */}
             <div className="flex items-start justify-start gap-4 overflow-x-auto no-scrollbar py-1">
-              {/* Diary */}
               <div
                 onClick={() => setActiveModule('handover')}
                 className="flex flex-col items-center space-y-2 cursor-pointer flex-shrink-0 group active:scale-95 transition"
@@ -707,7 +719,6 @@ export default function App() {
                 </span>
               </div>
 
-              {/* Goods Received */}
               <div
                 onClick={() => setActiveModule('goods')}
                 className="flex flex-col items-center space-y-2 cursor-pointer flex-shrink-0 group active:scale-95 transition"
@@ -720,7 +731,6 @@ export default function App() {
                 </span>
               </div>
 
-              {/* Prep & Batches */}
               <div
                 onClick={() => setActiveModule('prep')}
                 className="flex flex-col items-center space-y-2 cursor-pointer flex-shrink-0 group active:scale-95 transition"
@@ -733,7 +743,6 @@ export default function App() {
                 </span>
               </div>
 
-              {/* Fresh Produce & Herbs */}
               <div
                 onClick={() => setActiveModule('produce')}
                 className="flex flex-col items-center space-y-2 cursor-pointer flex-shrink-0 group active:scale-95 transition"
@@ -746,7 +755,6 @@ export default function App() {
                 </span>
               </div>
 
-              {/* Cash Up */}
               <div
                 onClick={() => setActiveModule('petty')}
                 className="flex flex-col items-center space-y-2 cursor-pointer flex-shrink-0 group active:scale-95 transition"
@@ -759,7 +767,6 @@ export default function App() {
                 </span>
               </div>
 
-              {/* Stocktake & Orders */}
               <div
                 onClick={() => setActiveModule('orders')}
                 className="flex flex-col items-center space-y-2 cursor-pointer flex-shrink-0 group active:scale-95 transition"
@@ -772,7 +779,6 @@ export default function App() {
                 </span>
               </div>
 
-              {/* Spillage & Waste */}
               <div
                 onClick={() => setActiveModule('wastage')}
                 className="flex flex-col items-center space-y-2 cursor-pointer flex-shrink-0 group active:scale-95 transition"
@@ -785,7 +791,6 @@ export default function App() {
                 </span>
               </div>
 
-              {/* Master Catalog */}
               <div
                 onClick={() => setActiveModule('catalog')}
                 className="flex flex-col items-center space-y-2 cursor-pointer flex-shrink-0 group active:scale-95 transition"
@@ -797,32 +802,6 @@ export default function App() {
                   Master Catalog
                 </span>
               </div>
-
-              {/* Notification Activity */}
-              <div
-                onClick={() => setActiveModule('notifications')}
-                className="flex flex-col items-center space-y-2 cursor-pointer flex-shrink-0 group active:scale-95 transition"
-              >
-                <div className="w-[66px] h-[66px] rounded-2xl bg-neutral-100 shadow-sm flex items-center justify-center text-neutral-700">
-                  <FolderOpen className="w-6 h-6 stroke-[2]" />
-                </div>
-                <span className="text-xs font-bold text-neutral-900 text-center tracking-tight leading-tight">
-                  Activity
-                </span>
-              </div>
-
-              {/* Settings */}
-              <div
-                onClick={() => setActiveModule('settings')}
-                className="flex flex-col items-center space-y-2 cursor-pointer flex-shrink-0 group active:scale-95 transition"
-              >
-                <div className="w-[66px] h-[66px] rounded-2xl bg-neutral-100 shadow-sm flex items-center justify-center text-neutral-700">
-                  <SlidersHorizontal className="w-6 h-6 stroke-[2]" />
-                </div>
-                <span className="text-xs font-bold text-neutral-900 text-center tracking-tight leading-tight">
-                  Settings
-                </span>
-              </div>
             </div>
           </div>
 
@@ -830,7 +809,6 @@ export default function App() {
           <div className="space-y-3">
             <h2 className="text-lg font-black tracking-tight text-neutral-900">Quick Links</h2>
             <div className="flex gap-4 overflow-x-auto no-scrollbar pb-2">
-              {/* Prep Quick Link Card */}
               <div
                 onClick={() => setActiveModule('prep')}
                 className="w-[220px] h-[190px] rounded-3xl bg-[#FBF7FD] border border-purple-200 p-5 flex flex-col justify-between flex-shrink-0 cursor-pointer active:scale-[0.98] transition hover:shadow-sm"
@@ -854,7 +832,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Produce Quick Link Card */}
               <div
                 onClick={() => setActiveModule('produce')}
                 className="w-[220px] h-[190px] rounded-3xl bg-[#F0FDF4] border border-emerald-200 p-5 flex flex-col justify-between flex-shrink-0 cursor-pointer active:scale-[0.98] transition hover:shadow-sm"
@@ -878,7 +855,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Handover Card */}
               <div
                 onClick={() => setActiveModule('handover')}
                 className="w-[220px] h-[190px] rounded-3xl bg-[#FFF0F2] border border-[#FFD9DF] p-5 flex flex-col justify-between flex-shrink-0 cursor-pointer active:scale-[0.98] transition hover:shadow-sm"
@@ -911,7 +887,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Petty Cash Card */}
               <div
                 onClick={() => setActiveModule('petty')}
                 className="w-[220px] h-[190px] rounded-3xl bg-white border border-neutral-200/90 p-5 flex flex-col justify-between flex-shrink-0 cursor-pointer active:scale-[0.98] transition hover:shadow-sm"
@@ -935,7 +910,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Orders Card */}
               <div
                 onClick={() => setActiveModule('orders')}
                 className="w-[220px] h-[190px] rounded-3xl bg-[#F4F5F7] border border-neutral-200 p-5 flex flex-col justify-between flex-shrink-0 cursor-pointer active:scale-[0.98] transition hover:shadow-sm"
@@ -959,7 +933,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Spillage Card */}
               <div
                 onClick={() => setActiveModule('wastage')}
                 className="w-[220px] h-[190px] rounded-3xl bg-[#FFF5F5] border border-rose-200 p-5 flex flex-col justify-between flex-shrink-0 cursor-pointer active:scale-[0.98] transition hover:shadow-sm"
@@ -1026,7 +999,10 @@ export default function App() {
             <div className="space-y-2 pt-1">
               <button
                 type="button"
-                onClick={handleEnablePushFromModal}
+                onClick={() => {
+                  localStorage.setItem('wst_push_prompted', 'true');
+                  setShowFirstOpenPushModal(false);
+                }}
                 className="w-full py-2.5 bg-black hover:bg-neutral-800 text-white rounded-xl text-xs font-bold transition shadow-sm active:scale-95"
               >
                 Allow Notifications
