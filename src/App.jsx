@@ -5,6 +5,7 @@ import GoodsReceivedApp from './GoodsReceivedApp';
 import OrderListsApp from './OrderListsApp';
 import SpillageAndWastage from './SpillageAndWastage';
 import CatalogManagerApp from './CatalogManagerApp';
+import PrepCalculatorApp from './PrepCalculatorApp';
 import Settings from './Settings';
 import PreShiftCard from './PreShiftCard';
 import OpsChatDrawer from './OpsChatDrawer';
@@ -23,7 +24,8 @@ import {
   PlusCircle,
   FolderOpen,
   TrendingDown,
-  Sliders
+  FlaskConical,
+  Package
 } from 'lucide-react';
 import { useTwoFingerSwipe } from './useTwoFingerSwipe';
 import { supabase, DEFAULT_VENUE_ID } from './lib/db';
@@ -189,7 +191,7 @@ export default function App() {
     }
   }, [currentUser, activeModule]);
 
-  // Deep linking parser
+  // Deep linking parser for module routing
   useEffect(() => {
     try {
       const params = new URLSearchParams(window.location.search);
@@ -229,6 +231,7 @@ export default function App() {
     });
   }, [currentUser]);
 
+  // Notification dispatcher
   const triggerPushNotification = async (arg1, arg2, arg3) => {
     if (typeof arg1 === 'object' && arg1 !== null) {
       const { title, message, targetManager = null } = arg1;
@@ -353,6 +356,7 @@ export default function App() {
     setActiveModule('hub');
   };
 
+  // Auth Screen
   if (!currentUser) {
     return (
       <div className="flex flex-col h-screen w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-100 justify-between px-8 pt-[max(2.5rem,env(safe-area-inset-top))] pb-[max(2rem,env(safe-area-inset-bottom))] select-none">
@@ -437,7 +441,7 @@ export default function App() {
     );
   }
 
-  // Full Activity & Notification Centre view
+  // Module Router
   if (activeModule === 'notifications') {
     return (
       <NotificationCenterApp
@@ -535,6 +539,18 @@ export default function App() {
     );
   }
 
+  if (activeModule === 'prep') {
+    return (
+      <div {...swipeHandlers} className="h-screen w-full">
+        <PrepCalculatorApp
+          currentUser={currentUser}
+          onBackToHub={() => setActiveModule('hub')}
+          onLogout={handleLogout}
+        />
+      </div>
+    );
+  }
+
   if (activeModule === 'settings') {
     return (
       <div {...swipeHandlers} className="h-screen w-full">
@@ -568,7 +584,7 @@ export default function App() {
             )}
           </button>
 
-          {/* Quick Dropdown: Last 3 Notifications + See All Button */}
+          {/* Notifications Dropdown */}
           {showNotifications && (
             <div className="absolute right-0 mt-2 w-80 bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl border border-gray-100 p-3 z-50 animate-in fade-in slide-in-from-top-2 duration-150">
               <div className="flex items-center justify-between pb-2 border-b border-gray-100 px-1">
@@ -662,8 +678,9 @@ export default function App() {
               </button>
             </div>
             
-            {/* Scrollable Tools Row */}
+            {/* Scrollable Tools Carousel Row */}
             <div className="flex items-start justify-start gap-4 overflow-x-auto no-scrollbar py-1">
+              {/* Diary / Handover */}
               <div
                 onClick={() => setActiveModule('handover')}
                 className="flex flex-col items-center space-y-2 cursor-pointer flex-shrink-0 group active:scale-95 transition"
@@ -676,6 +693,7 @@ export default function App() {
                 </span>
               </div>
 
+              {/* Goods Received */}
               <div
                 onClick={() => setActiveModule('goods')}
                 className="flex flex-col items-center space-y-2 cursor-pointer flex-shrink-0 group active:scale-95 transition"
@@ -688,31 +706,7 @@ export default function App() {
                 </span>
               </div>
 
-              <div
-                onClick={() => setActiveModule('orders')}
-                className="flex flex-col items-center space-y-2 cursor-pointer flex-shrink-0 group active:scale-95 transition"
-              >
-                <div className="w-[66px] h-[66px] rounded-2xl bg-[#CDB5FF] shadow-sm flex items-center justify-center text-neutral-900">
-                  <ClipboardList className="w-7 h-7 stroke-[2.2]" />
-                </div>
-                <span className="text-xs font-bold text-neutral-900 text-center tracking-tight leading-tight">
-                  Orders
-                </span>
-              </div>
-
-              {/* Spillage & Wastage Tool Tile */}
-              <div
-                onClick={() => setActiveModule('wastage')}
-                className="flex flex-col items-center space-y-2 cursor-pointer flex-shrink-0 group active:scale-95 transition"
-              >
-                <div className="w-[66px] h-[66px] rounded-2xl bg-[#FFA6A6] shadow-sm flex items-center justify-center text-neutral-900">
-                  <TrendingDown className="w-7 h-7 stroke-[2.2]" />
-                </div>
-                <span className="text-xs font-bold text-neutral-900 text-center tracking-tight leading-tight max-w-[70px]">
-                  Spillage &amp; Waste
-                </span>
-              </div>
-
+              {/* Petty Cash */}
               <div
                 onClick={() => setActiveModule('petty')}
                 className="flex flex-col items-center space-y-2 cursor-pointer flex-shrink-0 group active:scale-95 transition"
@@ -725,19 +719,59 @@ export default function App() {
                 </span>
               </div>
 
-              {/* Master Catalog Tool Tile */}
+              {/* Stocktake & Orders */}
+              <div
+                onClick={() => setActiveModule('orders')}
+                className="flex flex-col items-center space-y-2 cursor-pointer flex-shrink-0 group active:scale-95 transition"
+              >
+                <div className="w-[66px] h-[66px] rounded-2xl bg-[#CDB5FF] shadow-sm flex items-center justify-center text-neutral-900">
+                  <ClipboardList className="w-7 h-7 stroke-[2.2]" />
+                </div>
+                <span className="text-xs font-bold text-neutral-900 text-center tracking-tight leading-tight">
+                  Orders
+                </span>
+              </div>
+
+              {/* Prep & Batches */}
+              <div
+                onClick={() => setActiveModule('prep')}
+                className="flex flex-col items-center space-y-2 cursor-pointer flex-shrink-0 group active:scale-95 transition"
+              >
+                <div className="w-[66px] h-[66px] rounded-2xl bg-[#F3E5F5] shadow-sm flex items-center justify-center text-neutral-900">
+                  <FlaskConical className="w-7 h-7 stroke-[2.2] text-purple-700" />
+                </div>
+                <span className="text-xs font-bold text-neutral-900 text-center tracking-tight leading-tight max-w-[70px]">
+                  Prep &amp; Batches
+                </span>
+              </div>
+
+              {/* Spillage & Wastage */}
+              <div
+                onClick={() => setActiveModule('wastage')}
+                className="flex flex-col items-center space-y-2 cursor-pointer flex-shrink-0 group active:scale-95 transition"
+              >
+                <div className="w-[66px] h-[66px] rounded-2xl bg-[#FFA6A6] shadow-sm flex items-center justify-center text-neutral-900">
+                  <TrendingDown className="w-7 h-7 stroke-[2.2]" />
+                </div>
+                <span className="text-xs font-bold text-neutral-900 text-center tracking-tight leading-tight max-w-[70px]">
+                  Spillage &amp; Waste
+                </span>
+              </div>
+
+              {/* Master Catalog */}
               <div
                 onClick={() => setActiveModule('catalog')}
                 className="flex flex-col items-center space-y-2 cursor-pointer flex-shrink-0 group active:scale-95 transition"
               >
-                <div className="w-[66px] h-[66px] rounded-2xl bg-[#D6E4FF] shadow-sm flex items-center justify-center text-neutral-900">
-                  <Sliders className="w-7 h-7 stroke-[2.2]" />
+                <div className="w-[66px] h-[66px] rounded-2xl bg-[#E3F2FD] shadow-sm flex items-center justify-center text-neutral-900">
+                  <Package className="w-7 h-7 stroke-[2.2] text-blue-700" />
                 </div>
                 <span className="text-xs font-bold text-neutral-900 text-center tracking-tight leading-tight max-w-[70px]">
                   Master Catalog
                 </span>
               </div>
 
+              {/* Notification Activity */}
               <div
                 onClick={() => setActiveModule('notifications')}
                 className="flex flex-col items-center space-y-2 cursor-pointer flex-shrink-0 group active:scale-95 transition"
@@ -750,6 +784,7 @@ export default function App() {
                 </span>
               </div>
 
+              {/* Settings */}
               <div
                 onClick={() => setActiveModule('settings')}
                 className="flex flex-col items-center space-y-2 cursor-pointer flex-shrink-0 group active:scale-95 transition"
@@ -764,6 +799,7 @@ export default function App() {
             </div>
           </div>
 
+          {/* Quick Links Section */}
           <div className="space-y-3">
             <h2 className="text-lg font-black tracking-tight text-neutral-900">Quick Links</h2>
             <div className="flex gap-4 overflow-x-auto no-scrollbar pb-2">
@@ -786,7 +822,7 @@ export default function App() {
                         {latestHandover.general_notes || 'All closing routines complete.'}
                       </p>
                       <span className="text-[10px] text-neutral-400 block font-mono">
-                        {latestHandover.manager_name} • {latestHandover.close_time || 'Closed'}
+                        {latestHandover.manager_name} • {latestHandover.date_str || 'Today'}
                       </span>
                     </>
                   ) : (
@@ -795,6 +831,53 @@ export default function App() {
                   <div className="pt-2 flex items-center text-xs font-bold text-neutral-900 gap-1">
                     <span>View entry</span>
                     <ChevronRight className="w-3.5 h-3.5" />
+                  </div>
+                </div>
+              </div>
+
+              {/* Prep & Batches Quick Card */}
+              <div
+                onClick={() => setActiveModule('prep')}
+                className="w-[220px] h-[190px] rounded-3xl bg-[#FBF7FD] border border-purple-200 p-5 flex flex-col justify-between flex-shrink-0 cursor-pointer active:scale-[0.98] transition hover:shadow-sm"
+              >
+                <div>
+                  <span className="text-[10px] font-black tracking-widest uppercase text-purple-600 block mb-1">
+                    Kitchen &amp; Bar
+                  </span>
+                  <h3 className="text-base font-extrabold text-neutral-900 leading-snug">
+                    Daily Prep Production
+                  </h3>
+                </div>
+                <div className="space-y-1">
+                  <p className="text-xs text-neutral-500">
+                    Station audits, recipe scaling &amp; produce picklist.
+                  </p>
+                  <div className="pt-3 flex items-center text-xs font-bold text-neutral-900 gap-1">
+                    <FlaskConical className="w-4 h-4 text-purple-600" />
+                    <span>Open Calculator</span>
+                  </div>
+                </div>
+              </div>
+
+              <div
+                onClick={() => setActiveModule('petty')}
+                className="w-[220px] h-[190px] rounded-3xl bg-white border border-neutral-200/90 p-5 flex flex-col justify-between flex-shrink-0 cursor-pointer active:scale-[0.98] transition hover:shadow-sm"
+              >
+                <div>
+                  <span className="text-[10px] font-black tracking-widest uppercase text-emerald-600 block mb-1">
+                    Safe &amp; Till
+                  </span>
+                  <h3 className="text-base font-extrabold text-neutral-900 leading-snug">
+                    Add Petty Cash Report
+                  </h3>
+                </div>
+                <div className="space-y-1">
+                  <p className="text-xs text-neutral-500">
+                    Standard float: <strong className="text-neutral-900">£1,200.00</strong>
+                  </p>
+                  <div className="pt-3 flex items-center text-xs font-bold text-neutral-900 gap-1">
+                    <PlusCircle className="w-4 h-4 text-neutral-900" />
+                    <span>Log Expense / Denoms</span>
                   </div>
                 </div>
               </div>
@@ -836,34 +919,11 @@ export default function App() {
                 </div>
                 <div className="space-y-1">
                   <p className="text-xs text-neutral-500">
-                    Pints, broken bottles &amp; line clean flush.
+                    Pints, cocktails, broken bottles &amp; line flushes.
                   </p>
                   <div className="pt-3 flex items-center text-xs font-bold text-neutral-900 gap-1">
                     <TrendingDown className="w-4 h-4 text-rose-600" />
                     <span>Deduct stock</span>
-                  </div>
-                </div>
-              </div>
-
-              <div
-                onClick={() => setActiveModule('petty')}
-                className="w-[220px] h-[190px] rounded-3xl bg-white border border-neutral-200/90 p-5 flex flex-col justify-between flex-shrink-0 cursor-pointer active:scale-[0.98] transition hover:shadow-sm"
-              >
-                <div>
-                  <span className="text-[10px] font-black tracking-widest uppercase text-emerald-600 block mb-1">
-                    Safe &amp; Till
-                  </span>
-                  <h3 className="text-base font-extrabold text-neutral-900 leading-snug">
-                    Add Petty Cash Report
-                  </h3>
-                </div>
-                <div className="space-y-1">
-                  <p className="text-xs text-neutral-500">
-                    Standard float: <strong className="text-neutral-900">£1,200.00</strong>
-                  </p>
-                  <div className="pt-3 flex items-center text-xs font-bold text-neutral-900 gap-1">
-                    <PlusCircle className="w-4 h-4 text-neutral-900" />
-                    <span>Log Expense / Denoms</span>
                   </div>
                 </div>
               </div>
