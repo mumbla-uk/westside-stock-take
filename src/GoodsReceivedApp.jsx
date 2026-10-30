@@ -14,7 +14,10 @@ import {
   Save,
   CheckCircle2,
   RefreshCw,
-  FolderOpen
+  FolderOpen,
+  PieChart,
+  Receipt,
+  Eye
 } from 'lucide-react';
 import { useTwoFingerSwipe } from './useTwoFingerSwipe';
 import { supabase, localDb, DEFAULT_VENUE_ID } from './lib/db';
@@ -37,7 +40,6 @@ function AppLogo({ className = "w-6 h-6", fallbackTextClass = "font-serif text-x
   return <span className={fallbackTextClass}>W</span>;
 }
 
-// Fail-safe parser to guarantee items is ALWAYS a valid Array
 function parseItems(raw) {
   if (!raw) return [];
   if (Array.isArray(raw)) return raw;
@@ -55,7 +57,7 @@ function parseItems(raw) {
 export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout }) {
   const [activeTab, setActiveTab] = useState('intake'); // 'intake' | 'reports'
 
-  // Master Catalog Products (for selection)
+  // Master Catalog Products
   const [products, setProducts] = useState(() => {
     try {
       const cached = localStorage.getItem('wst_catalog_cache');
@@ -91,11 +93,14 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
   const [pastReports, setPastReports] = useState([]);
   const [loadingReports, setLoadingReports] = useState(false);
   const [reportSearchQuery, setReportSearchQuery] = useState('');
-  const [editingReport, setEditingReport] = useState(null);
+  
+  // Selected Report Modal (View vs Edit Mode)
+  const [selectedReport, setSelectedReport] = useState(null);
+  const [isEditingReport, setIsEditingReport] = useState(false);
   const [savingEdit, setSavingEdit] = useState(false);
 
   const swipeHandlers = useTwoFingerSwipe({
-    disabled: Boolean(editingReport),
+    disabled: Boolean(selectedReport),
     onSwipeRight: () => {
       if (onBackToHub) onBackToHub();
     }
@@ -261,10 +266,13 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
     const finalName = selectedProduct ? selectedProduct.name : customName.trim();
     if (!finalName || !qtyDelivered) return;
 
+    const matchedCat = selectedProduct?.category || 'general';
+
     setReceivedItems(prev => [...prev, {
       id: selectedProduct ? selectedProduct.id : `CUSTOM-${Date.now()}`,
       sku: selectedProduct ? selectedProduct.id : 'CUSTOM',
       name: finalName,
+      category: matchedCat,
       supplier: invoiceSupplier || (selectedProduct ? selectedProduct.supplier : 'General'),
       unit: customUnit || (selectedProduct ? (selectedProduct.order_unit || selectedProduct.unit) : 'unit'),
       qty: parseFloat(qtyDelivered) || 1,
@@ -337,7 +345,7 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
     }
   };
 
-  // Filter Past Reports safely
+  // Filter Past Reports
   const filteredPastReports = useMemo(() => {
     const q = reportSearchQuery.toLowerCase();
     return pastReports.filter(rep => {
@@ -348,16 +356,17 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
     });
   }, [pastReports, reportSearchQuery]);
 
-  // Open Edit Report
-  const handleOpenEditReport = (rep) => {
-    setEditingReport({
+  // Open Report in Read-Only View Mode First
+  const handleOpenReportView = (rep) => {
+    setSelectedReport({
       ...rep,
       items: parseItems(rep.items).map(i => ({ ...i }))
     });
+    setIsEditingReport(false);
   };
 
   const handleUpdateEditingItemLine = (idx, field, val) => {
-    setEditingReport(prev => {
+    setSelectedReport(prev => {
       const itemsCopy = [...(prev.items || [])];
       itemsCopy[idx] = { ...itemsCopy[idx], [field]: val };
 
@@ -374,7 +383,7 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
   };
 
   const handleRemoveEditingItemLine = (idx) => {
-    setEditingReport(prev => ({
+    setSelectedReport(prev => ({
       ...prev,
       items: (prev.items || []).filter((_, i) => i !== idx)
     }));
@@ -382,7 +391,7 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
 
   const handleSaveEditedReport = async (e) => {
     e.preventDefault();
-    if (!editingReport?.id) return;
+    if (!selectedReport?.id) return;
 
     setSavingEdit(true);
     setStatusMsg(null);
@@ -391,18 +400,17 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
       const { error } = await supabase
         .from('goods_received')
         .update({
-          supplier: editingReport.supplier?.trim() || 'Supplier',
-          invoice_ref: editingReport.invoice_ref?.trim() || '',
-          delivery_date: editingReport.delivery_date,
-          notes: editingReport.notes?.trim() || '',
-          items: editingReport.items || []
+          supplier: selectedReport.supplier?.trim() || 'Supplier',
+          invoice_ref: selectedReport.invoice_ref?.trim() || '',
+          delivery_date: selectedReport.delivery_date,
+          notes: selectedReport.notes?.trim() || '',
+          items: selectedReport.items || []
         })
-        .eq('id', editingReport.id);
+        .eq('id', selectedReport.id);
 
       if (error) throw error;
 
-      // Sync updated unit costs into catalog
-      for (const item of (editingReport.items || [])) {
+      for (const item of (selectedReport.items || [])) {
         if (item.unitEx > 0 && item.id && !String(item.id).startsWith('CUSTOM-')) {
           await supabase
             .from('catalog_items')
@@ -415,8 +423,8 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
         }
       }
 
-      setStatusMsg({ type: 'success', text: `Updated invoice ${editingReport.invoice_ref || editingReport.supplier}` });
-      setEditingReport(null);
+      setStatusMsg({ type: 'success', text: `Updated invoice ${selectedReport.invoice_ref || selectedReport.supplier}` });
+      setIsEditingReport(false);
       await fetchPastReports();
     } catch (err) {
       console.error(err);
@@ -431,13 +439,60 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
     try {
       const { error } = await supabase.from('goods_received').delete().eq('id', id);
       if (error) throw error;
-      setEditingReport(null);
+      setSelectedReport(null);
       setStatusMsg({ type: 'success', text: 'Report removed.' });
       await fetchPastReports();
     } catch (err) {
       setStatusMsg({ type: 'error', text: 'Could not delete report.' });
     }
   };
+
+  // Financial & Category Breakdown of the Active Report
+  const reportFinancials = useMemo(() => {
+    if (!selectedReport) return { netTotal: 0, vatTotal: 0, grossTotal: 0, categories: [] };
+
+    const items = parseItems(selectedReport.items);
+    let net = 0;
+    const catMap = {};
+
+    items.forEach(item => {
+      const lineNet = Number(item.totalEx || (item.qty * item.unitEx) || 0);
+      net += lineNet;
+
+      // Match category from catalog products if not explicitly stored
+      let cat = (item.category || '').toLowerCase();
+      if (!cat) {
+        const found = products.find(p => p.id === item.id || p.name === item.name);
+        cat = (found?.category || 'general').toLowerCase();
+      }
+
+      let label = 'General / Other';
+      if (cat.includes('draught') || cat.includes('keg')) label = 'Draught Beer';
+      else if (cat.includes('spirit')) label = 'Spirits & Liqueurs';
+      else if (cat.includes('wine')) label = 'Wine & Champagne';
+      else if (cat.includes('beer') || cat.includes('pack')) label = 'Packaged Beer';
+      else if (cat.includes('prep')) label = 'Prep & Syrups';
+      else if (cat.includes('mineral') || cat.includes('soft')) label = 'Minerals & Softs';
+
+      catMap[label] = (catMap[label] || 0) + lineNet;
+    });
+
+    const vat = Math.round(net * 0.20 * 100) / 100;
+    const gross = Math.round((net + vat) * 100) / 100;
+
+    const categories = Object.entries(catMap).map(([name, total]) => ({
+      name,
+      total: Math.round(total * 100) / 100,
+      percent: net > 0 ? Math.round((total / net) * 1000) / 10 : 0
+    })).sort((a, b) => b.total - a.total);
+
+    return {
+      netTotal: Math.round(net * 100) / 100,
+      vatTotal: vat,
+      grossTotal: gross,
+      categories
+    };
+  }, [selectedReport, products]);
 
   const hasQty = parseFloat(qtyDelivered) > 0;
 
@@ -787,7 +842,7 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
                 return (
                   <div
                     key={rep.id}
-                    onClick={() => handleOpenEditReport(rep)}
+                    onClick={() => handleOpenReportView(rep)}
                     className="p-3.5 flex items-center justify-between cursor-pointer hover:bg-gray-50 transition group"
                   >
                     <div className="space-y-0.5 pr-2">
@@ -821,7 +876,7 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
                         </span>
                         <span className="text-[9px] text-gray-400 font-mono">Total Ex</span>
                       </div>
-                      <Edit3 className="w-3.5 h-3.5 text-gray-400 group-hover:text-black" />
+                      <Eye className="w-3.5 h-3.5 text-gray-400 group-hover:text-black" />
                     </div>
                   </div>
                 );
@@ -831,142 +886,231 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
         </div>
       )}
 
-      {/* EDIT REPORT MODAL */}
-      {editingReport && (
+      {/* REPORT VIEWER & AUDIT MODAL */}
+      {selectedReport && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200">
           <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl overflow-hidden shadow-2xl border border-gray-200 flex flex-col max-h-[92vh] animate-in slide-in-from-bottom duration-200">
+            
+            {/* Header with View vs Edit Toggle */}
             <div className="px-5 pt-4 pb-3 border-b border-gray-100 flex justify-between items-center bg-gray-50/80">
               <div>
                 <span className="text-[9px] font-mono uppercase text-amber-700 font-bold block">
-                  Delivery Report Audit &amp; Edit
+                  {isEditingReport ? 'Editing Delivery Report' : 'Invoice Inspection Report'}
                 </span>
                 <h2 className="text-base font-black text-gray-900 leading-tight mt-0.5">
-                  {editingReport.supplier} • {editingReport.delivery_date}
+                  {selectedReport.supplier} • {selectedReport.delivery_date}
                 </h2>
+                {selectedReport.invoice_ref && (
+                  <span className="text-[10px] font-mono text-gray-500 block">
+                    Ref: {selectedReport.invoice_ref}
+                  </span>
+                )}
               </div>
-              <button
-                type="button"
-                onClick={() => setEditingReport(null)}
-                className="p-1.5 text-gray-400 hover:text-black bg-white rounded-full border border-gray-200 shadow-xs"
-              >
-                <X className="w-4 h-4" />
-              </button>
+
+              <div className="flex items-center space-x-1.5">
+                <button
+                  type="button"
+                  onClick={() => setIsEditingReport(!isEditingReport)}
+                  className={`px-2.5 py-1 rounded-xl text-xs font-bold border transition flex items-center space-x-1 ${
+                    isEditingReport
+                      ? 'bg-amber-100 border-amber-300 text-amber-900'
+                      : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-100 shadow-2xs'
+                  }`}
+                >
+                  <Edit3 className="w-3.5 h-3.5" />
+                  <span>{isEditingReport ? 'Viewing' : 'Edit'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedReport(null)}
+                  className="p-1.5 text-gray-400 hover:text-black bg-white rounded-full border border-gray-200 shadow-2xs"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
             </div>
 
-            <form onSubmit={handleSaveEditedReport} className="p-5 overflow-y-auto space-y-4 text-xs touch-pan-y overscroll-contain">
-              <div className="grid grid-cols-3 gap-2">
-                <div>
-                  <label className="text-[9px] font-bold text-gray-500 uppercase block mb-0.5">Supplier</label>
-                  <input
-                    type="text"
-                    required
-                    value={editingReport.supplier || ''}
-                    onChange={(e) => setEditingReport({ ...editingReport, supplier: e.target.value })}
-                    className="w-full bg-[#EDEDED] py-1.5 px-2 rounded-xl text-xs font-bold focus:outline-none"
-                  />
+            {/* Modal Body */}
+            <form onSubmit={handleSaveEditedReport} className="p-5 overflow-y-auto space-y-4 text-xs touch-pan-y overscroll-contain flex-1">
+              {isEditingReport ? (
+                /* EDIT CONTROLS */
+                <div className="grid grid-cols-3 gap-2 pb-2">
+                  <div>
+                    <label className="text-[9px] font-bold text-gray-500 uppercase block mb-0.5">Supplier</label>
+                    <input
+                      type="text"
+                      required
+                      value={selectedReport.supplier || ''}
+                      onChange={(e) => setSelectedReport({ ...selectedReport, supplier: e.target.value })}
+                      className="w-full bg-[#EDEDED] py-1.5 px-2 rounded-xl text-xs font-bold focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[9px] font-bold text-gray-500 uppercase block mb-0.5">Invoice Ref</label>
+                    <input
+                      type="text"
+                      value={selectedReport.invoice_ref || ''}
+                      onChange={(e) => setSelectedReport({ ...selectedReport, invoice_ref: e.target.value })}
+                      className="w-full bg-[#EDEDED] py-1.5 px-2 rounded-xl text-xs font-mono font-bold focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[9px] font-bold text-gray-500 uppercase block mb-0.5">Delivery Date</label>
+                    <input
+                      type="date"
+                      required
+                      value={selectedReport.delivery_date || ''}
+                      onChange={(e) => setSelectedReport({ ...selectedReport, delivery_date: e.target.value })}
+                      className="w-full bg-[#EDEDED] py-1.5 px-1.5 rounded-xl text-xs font-mono font-bold focus:outline-none appearance-none"
+                    />
+                  </div>
                 </div>
-                <div>
-                  <label className="text-[9px] font-bold text-gray-500 uppercase block mb-0.5">Invoice Ref</label>
-                  <input
-                    type="text"
-                    value={editingReport.invoice_ref || ''}
-                    onChange={(e) => setEditingReport({ ...editingReport, invoice_ref: e.target.value })}
-                    className="w-full bg-[#EDEDED] py-1.5 px-2 rounded-xl text-xs font-mono font-bold focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="text-[9px] font-bold text-gray-500 uppercase block mb-0.5">Delivery Date</label>
-                  <input
-                    type="date"
-                    required
-                    value={editingReport.delivery_date || ''}
-                    onChange={(e) => setEditingReport({ ...editingReport, delivery_date: e.target.value })}
-                    className="w-full bg-[#EDEDED] py-1.5 px-1.5 rounded-xl text-xs font-mono font-bold focus:outline-none appearance-none"
-                  />
-                </div>
-              </div>
+              ) : null}
 
-              <div className="space-y-2 pt-1 border-t border-gray-100">
+              {/* Items Line Sheet */}
+              <div className="space-y-1.5">
                 <span className="font-bold uppercase tracking-wider text-[10px] text-gray-400 block">
-                  Delivered Items &amp; Wholesale Costs
+                  Delivered Items ({parseItems(selectedReport.items).length})
                 </span>
 
-                <div className="space-y-2">
-                  {parseItems(editingReport.items).map((line, idx) => (
-                    <div key={idx} className="bg-gray-50 p-2.5 rounded-2xl border border-gray-200/80 space-y-1.5">
-                      <div className="flex items-center justify-between">
-                        <span className="font-bold text-xs text-gray-900 block truncate">{line.name}</span>
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveEditingItemLine(idx)}
-                          className="p-1 text-gray-400 hover:text-red-500"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                <div className="divide-y divide-gray-100 border border-gray-200 rounded-2xl bg-white overflow-hidden shadow-2xs">
+                  {parseItems(selectedReport.items).map((line, idx) => (
+                    <div key={idx} className="p-2.5 flex items-center justify-between text-xs">
+                      <div className="min-w-0 pr-2">
+                        <span className="font-bold text-gray-900 block leading-tight truncate">{line.name}</span>
+                        <span className="text-[10px] text-gray-400 font-mono mt-0.5 block">
+                          {line.qty} {line.unit} @ £{Number(line.unitEx || 0).toFixed(2)} ex
+                        </span>
                       </div>
 
-                      <div className="grid grid-cols-12 gap-1.5">
-                        <div className="col-span-4">
-                          <label className="text-[8px] font-bold text-gray-500 uppercase block mb-0.5">Delivered Qty</label>
+                      {isEditingReport ? (
+                        <div className="flex items-center space-x-1.5 flex-shrink-0">
                           <input
                             type="number"
                             step="any"
                             value={line.qty}
                             onChange={(e) => handleUpdateEditingItemLine(idx, 'qty', e.target.value)}
-                            className="w-full bg-white border border-gray-300 py-1 px-1.5 rounded-lg font-mono font-bold text-xs text-center"
+                            className="w-12 bg-white border border-gray-300 py-1 px-1 rounded-lg font-mono text-center text-xs font-bold"
                           />
-                        </div>
-                        <div className="col-span-4">
-                          <label className="text-[8px] font-bold text-gray-500 uppercase block mb-0.5">Unit Ex (£)</label>
                           <input
                             type="number"
                             step="0.01"
                             value={line.unitEx}
                             onChange={(e) => handleUpdateEditingItemLine(idx, 'unitEx', e.target.value)}
-                            className="w-full bg-white border border-gray-300 py-1 px-1.5 rounded-lg font-mono font-bold text-xs text-center"
+                            className="w-14 bg-white border border-gray-300 py-1 px-1 rounded-lg font-mono text-center text-xs font-bold"
                           />
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveEditingItemLine(idx)}
+                            className="p-1 text-gray-400 hover:text-red-500"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
                         </div>
-                        <div className="col-span-4">
-                          <label className="text-[8px] font-bold text-gray-500 uppercase block mb-0.5">Line Total Ex</label>
-                          <div className="w-full bg-gray-100 py-1 px-1.5 rounded-lg font-mono font-black text-xs text-center text-gray-800">
-                            £{Number(line.totalEx || 0).toFixed(2)}
-                          </div>
+                      ) : (
+                        <div className="text-right flex-shrink-0">
+                          <span className="font-mono font-bold text-gray-900 block">
+                            £{Number(line.totalEx || (line.qty * line.unitEx) || 0).toFixed(2)}
+                          </span>
+                          <span className="text-[9px] font-mono text-gray-400 block">
+                            Inc: £{Number(line.totalInc || (line.qty * line.unitEx * 1.20) || 0).toFixed(2)}
+                          </span>
                         </div>
-                      </div>
+                      )}
                     </div>
                   ))}
                 </div>
               </div>
 
-              <div className="space-y-1 pt-1 border-t border-gray-100">
-                <label className="text-[9px] font-bold text-gray-500 uppercase block">Delivery Notes</label>
-                <textarea
-                  rows={2}
-                  value={editingReport.notes || ''}
-                  onChange={(e) => setEditingReport({ ...editingReport, notes: e.target.value })}
-                  placeholder="Notes, driver signatures or delivery discrepancies..."
-                  className="w-full bg-[#EDEDED] p-2 rounded-xl text-xs leading-relaxed focus:outline-none resize-none"
-                />
+              {/* Delivery Notes */}
+              {selectedReport.notes && !isEditingReport && (
+                <div className="p-2.5 bg-gray-50 border border-gray-200 rounded-xl space-y-0.5">
+                  <span className="text-[9px] font-bold uppercase text-gray-400 tracking-wider block">Notes</span>
+                  <p className="text-[11px] text-gray-700 italic leading-snug">"{selectedReport.notes}"</p>
+                </div>
+              )}
+
+              {isEditingReport && (
+                <div className="space-y-1 pt-1 border-t border-gray-100">
+                  <label className="text-[9px] font-bold text-gray-500 uppercase block">Delivery Notes</label>
+                  <textarea
+                    rows={2}
+                    value={selectedReport.notes || ''}
+                    onChange={(e) => setSelectedReport({ ...selectedReport, notes: e.target.value })}
+                    placeholder="Notes or discrepancy logs..."
+                    className="w-full bg-[#EDEDED] p-2 rounded-xl text-xs leading-relaxed focus:outline-none resize-none"
+                  />
+                </div>
+              )}
+
+              {/* SECTION: SUMMARY & VAT AUDIT REPORT */}
+              <div className="space-y-2 pt-2 border-t border-gray-100">
+                <span className="font-bold uppercase tracking-wider text-[10px] text-gray-400 flex items-center space-x-1">
+                  <Receipt className="w-3.5 h-3.5" />
+                  <span>Invoice Financial Summary &amp; VAT</span>
+                </span>
+
+                <div className="bg-gray-50 border border-gray-200 rounded-2xl p-3 space-y-2 font-mono text-xs">
+                  <div className="flex justify-between items-center text-gray-600">
+                    <span>Subtotal (Net Ex VAT):</span>
+                    <span className="font-bold text-gray-900">£{reportFinancials.netTotal.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between items-center text-gray-600">
+                    <span>VAT @ 20.0%:</span>
+                    <span className="font-bold text-gray-900">£{reportFinancials.vatTotal.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between items-center pt-1.5 border-t border-gray-200 text-sm font-black text-black">
+                    <span>Gross Invoice Total:</span>
+                    <span className="text-base font-black text-emerald-700">£{reportFinancials.grossTotal.toFixed(2)}</span>
+                  </div>
+                </div>
               </div>
 
-              <div className="pt-2 flex items-center space-x-2">
-                <button
-                  type="button"
-                  onClick={() => handleDeleteReport(editingReport.id, editingReport.invoice_ref)}
-                  className="p-3 bg-red-50 hover:bg-red-100 text-red-600 rounded-2xl transition"
-                  title="Delete report"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-                <button
-                  type="submit"
-                  disabled={savingEdit}
-                  className="flex-1 py-3 bg-black hover:bg-neutral-800 disabled:opacity-40 text-white rounded-2xl text-xs font-bold transition flex items-center justify-center space-x-1.5 shadow-md"
-                >
-                  <Save className="w-4 h-4 text-emerald-400" />
-                  <span>{savingEdit ? 'Updating Report...' : 'Save & Sync Invoice'}</span>
-                </button>
+              {/* SECTION: CATEGORY COST BREAKDOWN */}
+              <div className="space-y-1.5 pt-1">
+                <span className="font-bold uppercase tracking-wider text-[10px] text-gray-400 flex items-center space-x-1">
+                  <PieChart className="w-3.5 h-3.5" />
+                  <span>Category Cost Breakdown</span>
+                </span>
+
+                <div className="border border-gray-200 rounded-2xl overflow-hidden divide-y divide-gray-100 bg-white shadow-2xs">
+                  {reportFinancials.categories.map((cat, idx) => (
+                    <div key={idx} className="p-2.5 flex items-center justify-between text-xs">
+                      <div>
+                        <span className="font-bold text-gray-900 block leading-tight">{cat.name}</span>
+                        <span className="text-[10px] font-mono text-gray-400">
+                          {cat.percent}% of invoice net
+                        </span>
+                      </div>
+                      <span className="font-mono font-black text-gray-900 text-xs">
+                        £{cat.total.toFixed(2)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
               </div>
+
+              {/* Action Buttons for Editing */}
+              {isEditingReport && (
+                <div className="pt-2 flex items-center space-x-2">
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteReport(selectedReport.id, selectedReport.invoice_ref)}
+                    className="p-3 bg-red-50 hover:bg-red-100 text-red-600 rounded-2xl transition"
+                    title="Delete report"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={savingEdit}
+                    className="flex-1 py-3 bg-black hover:bg-neutral-800 disabled:opacity-40 text-white rounded-2xl text-xs font-bold transition flex items-center justify-center space-x-1.5 shadow-md"
+                  >
+                    <Save className="w-4 h-4 text-emerald-400" />
+                    <span>{savingEdit ? 'Updating Report...' : 'Save & Sync Changes'}</span>
+                  </button>
+                </div>
+              )}
             </form>
           </div>
         </div>
