@@ -1,26 +1,23 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   ArrowLeft,
   Calendar,
   Clock,
   User,
-  Save,
   Send,
-  AlertCircle,
-  CheckCircle2,
-  FileText,
-  DollarSign,
-  TrendingDown,
   RefreshCw,
   Search,
   X,
+  FileText,
+  DollarSign,
+  Receipt,
+  Smile,
   MessageSquare,
-  HelpCircle,
-  Pin
+  ChevronDown
 } from 'lucide-react';
 import { useTwoFingerSwipe } from './useTwoFingerSwipe';
 import { supabase, DEFAULT_VENUE_ID } from './lib/db';
-import { sendPushNotification } from './lib/notifications';
+import { sendPushNotification, dispatchMentionsFromText } from './lib/notifications';
 import MentionInput from './MentionInput';
 
 function AppLogo({ className = "w-6 h-6", fallbackTextClass = "font-serif text-xl font-bold tracking-tighter" }) {
@@ -38,49 +35,94 @@ function AppLogo({ className = "w-6 h-6", fallbackTextClass = "font-serif text-x
   return <span className={fallbackTextClass}>W</span>;
 }
 
+// Format Date as: Day DD-MM-YY (e.g., Fri 30-10-26)
+function formatBritishDate(dateInput) {
+  const d = dateInput ? new Date(dateInput) : new Date();
+  if (isNaN(d.getTime())) return '';
+  const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const dayName = days[d.getDay()];
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const yy = String(d.getFullYear()).slice(-2);
+  return `${dayName} ${dd}-${mm}-${yy}`;
+}
+
+// 15-minute increment times starting from 22:00 (10:00 PM)
+const CLOSING_TIMES = [
+  '22:00', '22:15', '22:30', '22:45',
+  '23:00', '23:15', '23:30', '23:45',
+  '00:00', '00:15', '00:30', '00:45',
+  '01:00', '01:15', '01:30', '01:45',
+  '02:00'
+];
+
+const EMOJIS = ['👍', '❤️', '🔥', '👀', '🙌'];
+
 export default function HandoverApp({
   currentUser,
   initialDeepLink,
   onClearDeepLink,
   onBackToHub,
-  onLogout,
-  onSendNotification
+  onLogout
 }) {
   const [activeTab, setActiveTab] = useState('write'); // 'write' | 'history'
-  const [dateStr, setDateStr] = useState(() => new Date().toISOString().slice(0, 10));
-  const [entryType, setEntryType] = useState('Night Close'); // 'Night Close' | 'Day Note'
-  const [closeTime, setCloseTime] = useState(() => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
 
-  // Financial figures
-  const [netSales, setNetSales] = useState('');
+  // Form State
+  const [rawDate, setRawDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [entryType, setEntryType] = useState('Night Close');
+  const [closeTime, setCloseTime] = useState('22:00');
+
+  // Financial figures: Gross -> Auto Net, Tips & Service Charge
   const [grossSales, setGrossSales] = useState('');
-  const [serviceCharge, setServiceCharge] = useState('');
+  const [netSales, setNetSales] = useState('');
   const [cardTips, setCardTips] = useState('');
+  const [serviceCharge, setServiceCharge] = useState('');
   const [cashVariance, setCashVariance] = useState('');
 
-  // Qualitative reporting
+  // Qualitative notes
   const [generalNotes, setGeneralNotes] = useState('');
   const [maintenanceNotes, setMaintenanceNotes] = useState('');
   const [staffNotes, setStaffNotes] = useState('');
 
-  // State & Feedback
-  const [submitting, setSubmitting] = useState(false);
-  const [statusMsg, setStatusMsg] = useState(null);
+  // History & Detail View
   const [historyList, setHistoryList] = useState([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [historySearch, setHistorySearch] = useState('');
   const [selectedHistoricalHandover, setSelectedHistoricalHandover] = useState(null);
 
-  // Opt-in Task Creation Preview Modal
-  const [pendingActionThreads, setPendingActionThreads] = useState([]);
-  const [showTaskPromptModal, setShowTaskPromptModal] = useState(false);
+  // Comments & Reactions State for Active Inspection Modal
+  const [comments, setComments] = useState([]);
+  const [reactions, setReactions] = useState([]);
+  const [newCommentText, setNewCommentText] = useState('');
+  const [postingComment, setPostingComment] = useState(false);
+
+  const [submitting, setSubmitting] = useState(false);
+  const [statusMsg, setStatusMsg] = useState(null);
 
   const swipeHandlers = useTwoFingerSwipe({
-    disabled: Boolean(selectedHistoricalHandover) || showTaskPromptModal,
+    disabled: Boolean(selectedHistoricalHandover),
     onSwipeRight: () => {
       if (onBackToHub) onBackToHub();
     }
   });
+
+  // Calculate Auto Net whenever Gross Sales changes
+  const handleGrossChange = (val) => {
+    setGrossSales(val);
+    const num = parseFloat(val);
+    if (!isNaN(num) && num > 0) {
+      const calculatedNet = (num / 1.20).toFixed(2);
+      setNetSales(calculatedNet);
+    } else {
+      setNetSales('');
+    }
+  };
+
+  const totalGratuities = useMemo(() => {
+    const t = parseFloat(cardTips) || 0;
+    const s = parseFloat(serviceCharge) || 0;
+    return (t + s).toFixed(2);
+  }, [cardTips, serviceCharge]);
 
   const fetchHistory = async () => {
     setLoadingHistory(true);
@@ -91,7 +133,7 @@ export default function HandoverApp({
         .eq('venue_id', DEFAULT_VENUE_ID)
         .order('date_str', { ascending: false })
         .order('created_at', { ascending: false })
-        .limit(50);
+        .limit(60);
 
       if (error) throw error;
       setHistoryList(data || []);
@@ -99,7 +141,7 @@ export default function HandoverApp({
       if (initialDeepLink?.entryId) {
         const found = (data || []).find(h => String(h.id) === String(initialDeepLink.entryId));
         if (found) {
-          setSelectedHistoricalHandover(found);
+          openInspectionModal(found);
           setActiveTab('history');
           if (onClearDeepLink) onClearDeepLink();
         }
@@ -115,82 +157,56 @@ export default function HandoverApp({
     fetchHistory();
   }, []);
 
-  // Filter history
-  const filteredHistory = useMemo(() => {
-    const q = historySearch.toLowerCase().trim();
-    return historyList.filter(h => {
-      if (!q) return true;
-      const notes = String(h.general_notes || '').toLowerCase();
-      const manager = String(h.manager_name || '').toLowerCase();
-      const dt = String(h.date_str || '').toLowerCase();
-      return notes.includes(q) || manager.includes(q) || dt.includes(q);
-    });
-  }, [historyList, historySearch]);
+  // Fetch comments and reactions for the active modal
+  const fetchModalFeedback = async (handoverId) => {
+    try {
+      const [commRes, reactRes] = await Promise.all([
+        supabase
+          .from('handover_comments')
+          .select('*')
+          .eq('handover_id', handoverId)
+          .order('created_at', { ascending: true }),
+        supabase
+          .from('handover_reactions')
+          .select('*')
+          .eq('handover_id', handoverId)
+      ]);
 
-  // Parser: Scan for mentions (@), questions (?), or maintenance snags (broken, leak, etc.)
-  const scanForActionItems = (notesText, maintText) => {
-    const combined = `${notesText} \n ${maintText}`;
-    const lines = combined.split('\n').map(l => l.trim()).filter(Boolean);
-    const candidateTasks = [];
-
-    const issueKeywords = ['broken', 'leak', 'fix', 'repair', 'snag', 'maintenance', 'fault', 'service'];
-
-    lines.forEach(line => {
-      const hasMention = line.includes('@');
-      const hasQuestion = line.includes('?');
-      const hasKeyword = issueKeywords.some(kw => line.toLowerCase().includes(kw));
-
-      if (hasMention || hasQuestion || hasKeyword) {
-        const match = line.match(/@(\w+)/);
-        const assignedTo = match ? match[1] : 'Next Shift Openers';
-        const severity = (line.toLowerCase().includes('leak') || line.toLowerCase().includes('urgent')) ? 'critical' : 'normal';
-
-        candidateTasks.push({
-          id: `task-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-          title: line.slice(0, 80),
-          snippet: line,
-          assigned_to: assignedTo,
-          severity,
-          selected: true
-        });
-      }
-    });
-
-    return candidateTasks;
-  };
-
-  const handlePreSubmit = (e) => {
-    e.preventDefault();
-    setStatusMsg(null);
-
-    const candidates = scanForActionItems(generalNotes, maintenanceNotes);
-    if (candidates.length > 0) {
-      setPendingActionThreads(candidates);
-      setShowTaskPromptModal(true);
-    } else {
-      executeSaveHandover([]);
+      setComments(commRes.data || []);
+      setReactions(reactRes.data || []);
+    } catch (err) {
+      console.warn("Could not load feedback:", err);
     }
   };
 
-  const executeSaveHandover = async (tasksToCreate = []) => {
+  const openInspectionModal = (item) => {
+    setSelectedHistoricalHandover(item);
+    fetchModalFeedback(item.id);
+  };
+
+  // Submit new diary entry
+  const handleSubmitHandover = async (e) => {
+    e.preventDefault();
     setSubmitting(true);
-    setShowTaskPromptModal(false);
     setStatusMsg(null);
 
     const authorName = currentUser?.name || 'Duty Manager';
     const authorId = currentUser?.name || 'anonymous';
+    const formattedBritish = formatBritishDate(rawDate);
 
     try {
       const payload = {
         venue_id: DEFAULT_VENUE_ID,
-        date_str: dateStr,
+        date_str: rawDate,
+        date_formatted: formattedBritish,
         entry_type: entryType,
         close_time: closeTime,
         manager_name: authorName,
-        net_sales: parseFloat(netSales) || 0,
         gross_sales: parseFloat(grossSales) || 0,
-        service_charge: parseFloat(serviceCharge) || 0,
+        net_sales: parseFloat(netSales) || 0,
         card_tips: parseFloat(cardTips) || 0,
+        service_charge: parseFloat(serviceCharge) || 0,
+        total_grats: parseFloat(totalGratuities) || 0,
         cash_variance: parseFloat(cashVariance) || 0,
         general_notes: generalNotes.trim(),
         maintenance_notes: maintenanceNotes.trim(),
@@ -198,7 +214,7 @@ export default function HandoverApp({
         created_at: new Date().toISOString()
       };
 
-      const { data: handoverRes, error: hErr } = await supabase
+      const { data: savedRow, error: hErr } = await supabase
         .from('handovers')
         .insert(payload)
         .select()
@@ -206,63 +222,128 @@ export default function HandoverApp({
 
       if (hErr) throw hErr;
 
-      // Create confirmed Action Threads linked to this handover
-      if (tasksToCreate.length > 0) {
-        const threadPayloads = tasksToCreate.map(t => ({
-          venue_id: DEFAULT_VENUE_ID,
-          handover_id: handoverRes.id,
-          title: t.title,
-          snippet: t.snippet,
-          topic_type: t.severity === 'critical' ? 'issue' : 'direct',
-          severity: t.severity,
-          assigned_to: t.assigned_to,
-          author_id: authorId,
-          author_name: authorName,
-          is_pinned: t.severity === 'critical',
-          status: 'open'
-        }));
-
-        await supabase.from('discussion_threads').insert(threadPayloads);
-
-        // Targeted push alert if someone was tagged
-        tasksToCreate.forEach(t => {
-          if (t.assigned_to && t.assigned_to !== 'Next Shift Openers') {
-            sendPushNotification(
-              `Handover Action: ${t.title}`,
-              `${authorName} assigned an item to you from tonight's handover.`,
-              t.assigned_to,
-              { module: 'discussions' }
-            );
-          }
-        });
-      }
-
-      sendPushNotification(
-        `${entryType} Submitted`,
-        `${authorName} logged handover notes for ${dateStr}.`,
-        null,
-        { module: 'handover' }
+      // Dispatch @mentions if any staff were tagged
+      const combinedNotes = `${generalNotes} \n ${maintenanceNotes} \n ${staffNotes}`;
+      await dispatchMentionsFromText(
+        combinedNotes,
+        authorName,
+        `Handover (${formattedBritish})`,
+        { module: 'handover', entryId: savedRow.id }
       );
 
-      setStatusMsg({ type: 'success', text: `Handover for ${dateStr} saved cleanly!` });
+      sendPushNotification(
+        `Diary Logged: ${formattedBritish}`,
+        `${authorName} submitted ${entryType}. Gross: £${grossSales || '0'} (Net: £${netSales || '0'})`,
+        null,
+        { module: 'handover', entryId: savedRow.id }
+      );
 
-      // Reset form
+      setStatusMsg({ type: 'success', text: `Handover recorded for ${formattedBritish}!` });
+
+      // Reset Form
+      setGrossSales('');
+      setNetSales('');
+      setCardTips('');
+      setServiceCharge('');
+      setCashVariance('');
       setGeneralNotes('');
       setMaintenanceNotes('');
       setStaffNotes('');
-      setNetSales('');
-      setGrossSales('');
-      setServiceCharge('');
-      setCardTips('');
-      setCashVariance('');
       fetchHistory();
     } catch (err) {
       console.error(err);
-      setStatusMsg({ type: 'error', text: err.message || 'Error recording handover.' });
+      setStatusMsg({ type: 'error', text: err.message || 'Error saving handover diary.' });
     } finally {
       setSubmitting(false);
     }
   };
+
+  // Add Comment to an existing handover
+  const handleAddComment = async (e) => {
+    e.preventDefault();
+    if (!newCommentText.trim() || !selectedHistoricalHandover?.id || postingComment) return;
+
+    setPostingComment(true);
+    const authorName = currentUser?.name || 'Staff';
+
+    try {
+      const { data, error } = await supabase
+        .from('handover_comments')
+        .insert({
+          handover_id: selectedHistoricalHandover.id,
+          author_name: authorName,
+          comment: newCommentText.trim()
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      setComments(prev => [...prev, data]);
+      setNewCommentText('');
+
+      // Notify the manager who wrote the handover
+      if (selectedHistoricalHandover.manager_name !== authorName) {
+        sendPushNotification(
+          `New Comment on Your Handover`,
+          `${authorName}: "${newCommentText.trim().slice(0, 60)}"`,
+          selectedHistoricalHandover.manager_name,
+          { module: 'handover', entryId: selectedHistoricalHandover.id }
+        );
+      }
+    } catch (err) {
+      console.error("Error adding comment:", err);
+    } finally {
+      setPostingComment(false);
+    }
+  };
+
+  // Toggle Reaction on an existing handover
+  const handleToggleReaction = async (emoji) => {
+    if (!selectedHistoricalHandover?.id) return;
+    const userName = currentUser?.name || 'Staff';
+
+    const existing = reactions.find(
+      r => r.user_name === userName && r.emoji === emoji
+    );
+
+    try {
+      if (existing) {
+        await supabase
+          .from('handover_reactions')
+          .delete()
+          .eq('id', existing.id);
+        setReactions(prev => prev.filter(r => r.id !== existing.id));
+      } else {
+        const { data, error } = await supabase
+          .from('handover_reactions')
+          .insert({
+            handover_id: selectedHistoricalHandover.id,
+            user_name: userName,
+            emoji: emoji
+          })
+          .select()
+          .single();
+
+        if (error) throw error;
+        setReactions(prev => [...prev, data]);
+      }
+    } catch (err) {
+      console.error("Error toggling reaction:", err);
+    }
+  };
+
+  // Filtered History
+  const filteredHistory = useMemo(() => {
+    const q = historySearch.toLowerCase().trim();
+    return historyList.filter(h => {
+      if (!q) return true;
+      const notes = String(h.general_notes || '').toLowerCase();
+      const manager = String(h.manager_name || '').toLowerCase();
+      const dt = String(h.date_formatted || h.date_str || '').toLowerCase();
+      return notes.includes(q) || manager.includes(q) || dt.includes(q);
+    });
+  }, [historyList, historySearch]);
 
   return (
     <div
@@ -321,21 +402,26 @@ export default function HandoverApp({
         </div>
       )}
 
-      {/* Main Body */}
+      {/* Write View */}
       {activeTab === 'write' ? (
-        <form onSubmit={handlePreSubmit} className="flex-1 overflow-y-auto px-5 py-3 space-y-4 pb-28 touch-pan-y overscroll-contain text-xs">
-          {/* Shift Metadata */}
+        <form onSubmit={handleSubmitHandover} className="flex-1 overflow-y-auto px-5 py-3 space-y-4 pb-28 touch-pan-y overscroll-contain text-xs">
+          
+          {/* Shift Metadata Row */}
           <div className="grid grid-cols-12 gap-1.5">
             <div className="col-span-5">
               <label className="text-[9px] font-bold text-gray-400 uppercase block mb-0.5">Date</label>
               <input
                 type="date"
                 required
-                value={dateStr}
-                onChange={(e) => setDateStr(e.target.value)}
+                value={rawDate}
+                onChange={(e) => setRawDate(e.target.value)}
                 className="w-full bg-[#EDEDED] py-1.5 px-2 rounded-xl font-mono text-xs font-bold text-gray-900 focus:outline-none appearance-none"
               />
+              <span className="text-[9px] font-mono text-gray-500 block mt-0.5 pl-0.5">
+                {formatBritishDate(rawDate)}
+              </span>
             </div>
+
             <div className="col-span-4">
               <label className="text-[9px] font-bold text-gray-400 uppercase block mb-0.5">Type</label>
               <select
@@ -347,137 +433,164 @@ export default function HandoverApp({
                 <option value="Day Note">Day Note</option>
               </select>
             </div>
+
+            {/* Closing Time Dropdown - Starts at 10:00 PM */}
             <div className="col-span-3">
-              <label className="text-[9px] font-bold text-gray-400 uppercase block mb-0.5">Time</label>
-              <input
-                type="text"
+              <label className="text-[9px] font-bold text-gray-400 uppercase block mb-0.5">Closing Time</label>
+              <select
                 value={closeTime}
                 onChange={(e) => setCloseTime(e.target.value)}
-                className="w-full bg-[#EDEDED] py-1.5 px-2 rounded-xl text-center font-mono text-xs font-bold text-gray-900 focus:outline-none"
-              />
+                className="w-full bg-[#EDEDED] py-1.5 px-1.5 rounded-xl font-mono text-xs font-bold text-gray-900 focus:outline-none"
+              >
+                {CLOSING_TIMES.map(t => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </select>
             </div>
           </div>
 
-          {/* Financial Breakdown (Net/Gross/Tips) */}
-          <div className="bg-gray-50 border border-gray-200 rounded-2xl p-3 space-y-2">
-            <span className="text-[9px] font-mono font-bold uppercase tracking-wider text-gray-400 block">
-              1. Z-Report &amp; Gratuity Figures
-            </span>
+          {/* 1. General Shift Notes (First Section) */}
+          <div className="space-y-1">
+            <label className="text-[10px] font-bold text-gray-700 uppercase tracking-wider block">
+              1. General Notes &amp; Shift Summary (Type @ to tag staff)
+            </label>
+            <MentionInput
+              as="textarea"
+              rows={4}
+              value={generalNotes}
+              onChange={setGeneralNotes}
+              placeholder="Atmosphere, trade pacing, 86'd items, guest feedback, key handover updates..."
+              className="w-full bg-[#EDEDED] p-3 rounded-2xl text-xs leading-relaxed focus:outline-none resize-none"
+            />
+          </div>
 
+          {/* 2. Financial Figures: Gross Z -> Auto Net & Gratuities */}
+          <div className="bg-gray-50 border border-gray-200 rounded-2xl p-3 space-y-2.5">
+            <div className="flex items-center justify-between">
+              <span className="text-[9px] font-mono font-bold uppercase tracking-wider text-gray-400 block">
+                2. Z-Report &amp; Gratuity Figures
+              </span>
+              <span className="text-[9px] font-mono font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded">
+                VAT Auto-Calculated
+              </span>
+            </div>
+
+            {/* Gross Z to Net Z */}
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <label className="text-[9px] font-bold text-gray-600 block mb-0.5">Net Sales (Ex VAT £)</label>
+                <label className="text-[9px] font-bold text-gray-900 block mb-0.5">
+                  Gross Z-Report (£ Inc VAT) *
+                </label>
                 <input
                   type="number"
                   step="0.01"
-                  placeholder="0.00"
-                  value={netSales}
-                  onChange={(e) => {
-                    setNetSales(e.target.value);
-                    const n = parseFloat(e.target.value) || 0;
-                    if (n > 0 && !grossSales) setGrossSales((n * 1.20).toFixed(2));
-                  }}
-                  className="w-full bg-white border border-gray-300 py-1.5 px-2.5 rounded-xl font-mono font-black text-gray-900 focus:outline-none"
+                  required
+                  placeholder="e.g. 2400.00"
+                  value={grossSales}
+                  onChange={(e) => handleGrossChange(e.target.value)}
+                  className="w-full bg-white border-2 border-black py-1.5 px-2.5 rounded-xl font-mono font-black text-gray-900 focus:outline-none"
                 />
               </div>
+
               <div>
-                <label className="text-[9px] font-bold text-gray-600 block mb-0.5">Gross Sales (Inc VAT £)</label>
-                <input
-                  type="number"
-                  step="0.01"
-                  placeholder="0.00"
-                  value={grossSales}
-                  onChange={(e) => setGrossSales(e.target.value)}
-                  className="w-full bg-white border border-gray-300 py-1.5 px-2.5 rounded-xl font-mono font-bold text-gray-700 focus:outline-none"
-                />
+                <label className="text-[9px] font-bold text-gray-500 block mb-0.5">
+                  Net Z-Report (£ Ex VAT)
+                </label>
+                <div className="w-full bg-gray-100 border border-gray-200 py-1.5 px-2.5 rounded-xl font-mono font-bold text-gray-700 text-xs">
+                  £{netSales || '0.00'}
+                </div>
               </div>
             </div>
 
-            <div className="grid grid-cols-3 gap-2 pt-1">
-              <div>
-                <label className="text-[8px] font-bold text-gray-500 uppercase block mb-0.5">Service Chg</label>
-                <input
-                  type="number"
-                  step="0.01"
-                  placeholder="0.00"
-                  value={serviceCharge}
-                  onChange={(e) => setServiceCharge(e.target.value)}
-                  className="w-full bg-white border border-gray-300 py-1 px-2 rounded-lg font-mono text-xs focus:outline-none"
-                />
+            {/* Tips & Service Charges */}
+            <div className="pt-1 border-t border-gray-200/60">
+              <span className="text-[9px] font-bold text-gray-500 uppercase block mb-1">
+                Tips &amp; Service Charge Collection
+              </span>
+
+              <div className="grid grid-cols-3 gap-2">
+                <div>
+                  <label className="text-[8px] font-bold text-gray-600 block mb-0.5">Card Tips (£)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    placeholder="0.00"
+                    value={cardTips}
+                    onChange={(e) => setCardTips(e.target.value)}
+                    className="w-full bg-white border border-gray-300 py-1 px-2 rounded-lg font-mono text-xs focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[8px] font-bold text-gray-600 block mb-0.5">Service Charge (£)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    placeholder="0.00"
+                    value={serviceCharge}
+                    onChange={(e) => setServiceCharge(e.target.value)}
+                    className="w-full bg-white border border-gray-300 py-1 px-2 rounded-lg font-mono text-xs focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[8px] font-bold text-gray-600 block mb-0.5">Total Gratuities</label>
+                  <div className="w-full bg-emerald-50 border border-emerald-200 py-1 px-1.5 rounded-lg font-mono font-black text-emerald-800 text-xs text-center">
+                    £{totalGratuities}
+                  </div>
+                </div>
               </div>
-              <div>
-                <label className="text-[8px] font-bold text-gray-500 uppercase block mb-0.5">Card Tips</label>
-                <input
-                  type="number"
-                  step="0.01"
-                  placeholder="0.00"
-                  value={cardTips}
-                  onChange={(e) => setCardTips(e.target.value)}
-                  className="w-full bg-white border border-gray-300 py-1 px-2 rounded-lg font-mono text-xs focus:outline-none"
-                />
-              </div>
-              <div>
-                <label className="text-[8px] font-bold text-gray-500 uppercase block mb-0.5">Till Variance</label>
-                <input
-                  type="number"
-                  step="0.01"
-                  placeholder="0.00"
-                  value={cashVariance}
-                  onChange={(e) => setCashVariance(e.target.value)}
-                  className="w-full bg-white border border-gray-300 py-1 px-2 rounded-lg font-mono text-xs focus:outline-none"
-                />
-              </div>
+            </div>
+
+            {/* Cash Drawer Variance */}
+            <div className="pt-1">
+              <label className="text-[9px] font-bold text-gray-600 block mb-0.5">
+                Cash Till Variance (£ Over / Short)
+              </label>
+              <input
+                type="number"
+                step="0.01"
+                placeholder="0.00"
+                value={cashVariance}
+                onChange={(e) => setCashVariance(e.target.value)}
+                className="w-full bg-white border border-gray-300 py-1.5 px-2.5 rounded-xl font-mono text-xs focus:outline-none"
+              />
             </div>
           </div>
 
-          {/* Qualitative Notes with MentionInput */}
-          <div className="space-y-3">
-            <div>
-              <label className="text-[10px] font-bold text-gray-700 uppercase tracking-wider block mb-1">
-                2. Shift Notes &amp; Incidents (Type @ to tag staff)
-              </label>
-              <MentionInput
-                as="textarea"
-                rows={4}
-                value={generalNotes}
-                onChange={setGeneralNotes}
-                placeholder="Trade atmosphere, VIP tables, 86'd lines, guest complaints (type @ to assign tasks)..."
-                className="w-full bg-[#EDEDED] p-3 rounded-2xl text-xs leading-relaxed focus:outline-none resize-none"
-              />
-            </div>
+          {/* 3. Maintenance, Cellar & Snags */}
+          <div className="space-y-1">
+            <label className="text-[10px] font-bold text-gray-700 uppercase tracking-wider block">
+              3. Maintenance, Cellar &amp; Snags
+            </label>
+            <MentionInput
+              as="textarea"
+              rows={2}
+              value={maintenanceNotes}
+              onChange={setMaintenanceNotes}
+              placeholder="e.g. Glasswasher chemical pump leaking, cellar gas bottle changed..."
+              className="w-full bg-[#EDEDED] p-3 rounded-2xl text-xs leading-relaxed focus:outline-none resize-none"
+            />
+          </div>
 
-            <div>
-              <label className="text-[10px] font-bold text-gray-700 uppercase tracking-wider block mb-1">
-                3. Maintenance, Cellar &amp; Snags
-              </label>
-              <MentionInput
-                as="textarea"
-                rows={2}
-                value={maintenanceNotes}
-                onChange={setMaintenanceNotes}
-                placeholder="e.g. Glasswasher pump dripping, cellar gas switchover..."
-                className="w-full bg-[#EDEDED] p-3 rounded-2xl text-xs leading-relaxed focus:outline-none resize-none"
-              />
-            </div>
-
-            <div>
-              <label className="text-[10px] font-bold text-gray-700 uppercase tracking-wider block mb-1">
-                4. Staff Shoutouts &amp; Team Comms
-              </label>
-              <MentionInput
-                as="textarea"
-                rows={2}
-                value={staffNotes}
-                onChange={setStaffNotes}
-                placeholder="Top performers, punctuality, floor rotation notes..."
-                className="w-full bg-[#EDEDED] p-3 rounded-2xl text-xs leading-relaxed focus:outline-none resize-none"
-              />
-            </div>
+          {/* 4. Staff Shoutouts */}
+          <div className="space-y-1">
+            <label className="text-[10px] font-bold text-gray-700 uppercase tracking-wider block">
+              4. Staff Shoutouts &amp; Comms
+            </label>
+            <MentionInput
+              as="textarea"
+              rows={2}
+              value={staffNotes}
+              onChange={setStaffNotes}
+              placeholder="Good shifts, praise, floor rotation reminders..."
+              className="w-full bg-[#EDEDED] p-3 rounded-2xl text-xs leading-relaxed focus:outline-none resize-none"
+            />
           </div>
 
           <button
             type="submit"
-            disabled={submitting}
+            disabled={submitting || !grossSales}
             className="w-full py-3.5 bg-black hover:bg-neutral-800 disabled:opacity-40 text-white rounded-2xl text-xs font-black transition flex items-center justify-center space-x-1.5 shadow-md mt-2"
           >
             <Send className="w-4 h-4 text-emerald-400" />
@@ -485,14 +598,14 @@ export default function HandoverApp({
           </button>
         </form>
       ) : (
-        /* PAST DIARY LOG */
+        /* Past Diary Feed */
         <div className="flex-1 min-h-0 flex flex-col overflow-y-auto px-5 py-3 space-y-3 pb-28 touch-pan-y overscroll-contain">
           <div className="relative flex-shrink-0">
             <input
               type="text"
               value={historySearch}
               onChange={(e) => setHistorySearch(e.target.value)}
-              placeholder="Search notes, dates, managers..."
+              placeholder="Search diary notes, managers, dates..."
               className="w-full bg-[#EDEDED] py-2 pl-3 pr-8 rounded-xl text-xs placeholder-gray-400 focus:outline-none"
             />
             {historySearch ? (
@@ -508,52 +621,57 @@ export default function HandoverApp({
             {loadingHistory ? (
               <p className="p-8 text-center text-xs text-gray-400 italic">Syncing past handovers...</p>
             ) : filteredHistory.length === 0 ? (
-              <p className="p-8 text-center text-xs text-gray-400 italic">No handover records found.</p>
+              <p className="p-8 text-center text-xs text-gray-400 italic">No handover diaries found.</p>
             ) : (
-              filteredHistory.map((item) => (
-                <div
-                  key={item.id}
-                  onClick={() => setSelectedHistoricalHandover(item)}
-                  className="p-3.5 cursor-pointer hover:bg-gray-50 transition space-y-1"
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="font-extrabold text-xs text-gray-900 leading-tight">
-                      {item.date_str} • {item.entry_type}
-                    </span>
-                    <span className="font-mono text-xs font-bold text-gray-900">
-                      £{Number(item.net_sales || 0).toFixed(2)}
-                    </span>
-                  </div>
+              filteredHistory.map((item) => {
+                const displayDate = item.date_formatted || formatBritishDate(item.date_str);
+                return (
+                  <div
+                    key={item.id}
+                    onClick={() => openInspectionModal(item)}
+                    className="p-3.5 cursor-pointer hover:bg-gray-50 transition space-y-1.5 group"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-extrabold text-xs text-gray-900 group-hover:text-black">
+                        {displayDate} • {item.entry_type}
+                      </span>
+                      <span className="font-mono text-xs font-black text-gray-900">
+                        Gross: £{Number(item.gross_sales || 0).toFixed(2)}
+                      </span>
+                    </div>
 
-                  <p className="text-xs text-gray-600 line-clamp-2 leading-relaxed">
-                    {item.general_notes || item.maintenance_notes || 'Closing duties completed.'}
-                  </p>
+                    <p className="text-xs text-gray-600 line-clamp-2 leading-relaxed">
+                      {item.general_notes || item.maintenance_notes || 'Closing figures recorded.'}
+                    </p>
 
-                  <div className="flex items-center justify-between text-[10px] text-gray-400 font-mono pt-1">
-                    <span>By {item.manager_name}</span>
-                    <span>{item.close_time || 'Closed'}</span>
+                    <div className="flex items-center justify-between text-[10px] text-gray-400 font-mono pt-1">
+                      <span>By {item.manager_name}</span>
+                      <span>Closed at {item.close_time || '22:00'}</span>
+                    </div>
                   </div>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
         </div>
       )}
 
-      {/* HISTORICAL HANDOVER INSPECTION MODAL */}
+      {/* DETAIL INSPECTION MODAL: Comments & Reactions Reinstated */}
       {selectedHistoricalHandover && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200">
-          <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl overflow-hidden shadow-2xl border border-gray-200 flex flex-col max-h-[90vh] animate-in slide-in-from-bottom duration-200">
+          <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl overflow-hidden shadow-2xl border border-gray-200 flex flex-col max-h-[92vh] animate-in slide-in-from-bottom duration-200">
+            
+            {/* Modal Header */}
             <div className="px-5 pt-4 pb-3 border-b border-gray-100 flex justify-between items-center bg-gray-50/80">
               <div>
                 <span className="text-[9px] font-mono uppercase text-rose-600 font-bold block">
-                  Handover Inspection
+                  Handover Diary Entry
                 </span>
                 <h2 className="text-base font-black text-gray-900 leading-tight mt-0.5">
-                  {selectedHistoricalHandover.date_str} • {selectedHistoricalHandover.entry_type}
+                  {selectedHistoricalHandover.date_formatted || formatBritishDate(selectedHistoricalHandover.date_str)}
                 </h2>
                 <span className="text-[10px] text-gray-500 font-mono">
-                  Submitted by {selectedHistoricalHandover.manager_name} at {selectedHistoricalHandover.close_time || 'Close'}
+                  {selectedHistoricalHandover.manager_name} • Closed at {selectedHistoricalHandover.close_time || '22:00'}
                 </span>
               </div>
               <button
@@ -565,117 +683,130 @@ export default function HandoverApp({
               </button>
             </div>
 
-            <div className="p-5 overflow-y-auto space-y-4 text-xs touch-pan-y overscroll-contain">
-              {/* Financial Recap */}
-              <div className="bg-gray-50 p-3 rounded-2xl border border-gray-200 space-y-1 font-mono">
-                <span className="text-[9px] font-bold uppercase text-gray-400 block mb-1">Financial Figures</span>
-                <div className="flex justify-between">
-                  <span className="text-gray-500">Net Sales:</span>
-                  <span className="font-bold text-gray-900">£{Number(selectedHistoricalHandover.net_sales || 0).toFixed(2)}</span>
+            {/* Modal Scrollable Content */}
+            <div className="p-5 overflow-y-auto space-y-4 text-xs touch-pan-y overscroll-contain flex-1">
+              
+              {/* Financial Recap Table */}
+              <div className="bg-gray-50 p-3.5 rounded-2xl border border-gray-200 space-y-1.5 font-mono">
+                <span className="text-[9px] font-bold uppercase text-gray-400 block mb-1">Financial Reconciliation</span>
+                <div className="flex justify-between items-center text-gray-800">
+                  <span>Gross Z-Report:</span>
+                  <span className="font-black text-sm">£{Number(selectedHistoricalHandover.gross_sales || 0).toFixed(2)}</span>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-500">Gross Sales:</span>
-                  <span className="font-bold text-gray-900">£{Number(selectedHistoricalHandover.gross_sales || 0).toFixed(2)}</span>
+                <div className="flex justify-between items-center text-gray-600 text-[11px]">
+                  <span>Net Z-Report (Ex VAT):</span>
+                  <span>£{Number(selectedHistoricalHandover.net_sales || 0).toFixed(2)}</span>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-500">Service Charges / Tips:</span>
-                  <span className="font-bold text-emerald-700">£{Number(selectedHistoricalHandover.service_charge || selectedHistoricalHandover.card_tips || 0).toFixed(2)}</span>
+                <div className="flex justify-between items-center text-emerald-800 text-[11px] pt-1 border-t border-gray-200">
+                  <span>Tips &amp; Service Charge:</span>
+                  <span className="font-bold">
+                    £{Number(selectedHistoricalHandover.total_grats || (Number(selectedHistoricalHandover.card_tips || 0) + Number(selectedHistoricalHandover.service_charge || 0))).toFixed(2)}
+                  </span>
                 </div>
+                {Number(selectedHistoricalHandover.cash_variance || 0) !== 0 && (
+                  <div className="flex justify-between items-center text-[10px] text-gray-500">
+                    <span>Till Variance:</span>
+                    <span>£{Number(selectedHistoricalHandover.cash_variance || 0).toFixed(2)}</span>
+                  </div>
+                )}
               </div>
 
-              {/* General Notes */}
+              {/* Notes Sections */}
               {selectedHistoricalHandover.general_notes && (
                 <div className="space-y-1">
-                  <span className="text-[10px] font-bold uppercase text-gray-400 tracking-wider block">Shift Notes</span>
-                  <p className="bg-neutral-50 p-3 rounded-2xl text-gray-800 leading-relaxed italic">
+                  <span className="text-[10px] font-bold uppercase text-gray-400 tracking-wider block">General Notes</span>
+                  <p className="bg-neutral-50 p-3 rounded-2xl text-gray-800 leading-relaxed italic border border-gray-100">
                     "{selectedHistoricalHandover.general_notes}"
                   </p>
                 </div>
               )}
 
-              {/* Maintenance Notes */}
               {selectedHistoricalHandover.maintenance_notes && (
                 <div className="space-y-1">
-                  <span className="text-[10px] font-bold uppercase text-rose-600 tracking-wider block">Maintenance &amp; Cellar</span>
+                  <span className="text-[10px] font-bold uppercase text-rose-600 tracking-wider block">Maintenance &amp; Snags</span>
                   <p className="bg-rose-50/50 p-3 rounded-2xl text-rose-950 leading-relaxed border border-rose-200/50">
                     "{selectedHistoricalHandover.maintenance_notes}"
                   </p>
                 </div>
               )}
 
-              {/* Staff Notes */}
               {selectedHistoricalHandover.staff_notes && (
                 <div className="space-y-1">
-                  <span className="text-[10px] font-bold uppercase text-purple-600 tracking-wider block">Staff &amp; Comms</span>
+                  <span className="text-[10px] font-bold uppercase text-purple-600 tracking-wider block">Staff &amp; Shoutouts</span>
                   <p className="bg-purple-50/50 p-3 rounded-2xl text-purple-950 leading-relaxed border border-purple-200/50">
                     "{selectedHistoricalHandover.staff_notes}"
                   </p>
                 </div>
               )}
-            </div>
-          </div>
-        </div>
-      )}
 
-      {/* OPT-IN ACTION THREAD CONFIRMATION PROMPT */}
-      {showTaskPromptModal && (
-        <div className="fixed inset-0 z-60 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white w-full max-w-sm rounded-3xl p-5 space-y-3.5 shadow-2xl border border-gray-200 animate-in zoom-in-95 duration-150">
-            <div>
-              <span className="text-[10px] font-mono font-bold uppercase text-purple-600 block">
-                Continuous Shift Continuity
-              </span>
-              <h3 className="text-base font-extrabold text-gray-900 leading-tight">
-                Create Action Threads?
-              </h3>
-              <p className="text-xs text-gray-500 mt-1">
-                Detected actionable items, @mentions, or maintenance snags in your log:
-              </p>
-            </div>
-
-            <div className="space-y-2 max-h-56 overflow-y-auto">
-              {pendingActionThreads.map((task, idx) => (
-                <div
-                  key={task.id}
-                  onClick={() => {
-                    setPendingActionThreads(prev =>
-                      prev.map((t, i) => i === idx ? { ...t, selected: !t.selected } : t)
+              {/* Emoji Reactions Bar */}
+              <div className="pt-2 border-t border-gray-100 space-y-1.5">
+                <span className="text-[9px] font-mono font-bold uppercase tracking-wider text-gray-400 block">
+                  Reactions
+                </span>
+                <div className="flex items-center space-x-2">
+                  {EMOJIS.map(emoji => {
+                    const count = reactions.filter(r => r.emoji === emoji).length;
+                    const isMine = reactions.some(r => r.emoji === emoji && r.user_name === currentUser?.name);
+                    return (
+                      <button
+                        key={emoji}
+                        type="button"
+                        onClick={() => handleToggleReaction(emoji)}
+                        className={`px-2 py-1 rounded-xl text-xs flex items-center space-x-1 border transition ${
+                          isMine
+                            ? 'bg-amber-50 border-amber-300 font-bold'
+                            : 'bg-gray-50 border-gray-200 hover:bg-gray-100'
+                        }`}
+                      >
+                        <span>{emoji}</span>
+                        {count > 0 && <span className="font-mono text-[10px]">{count}</span>}
+                      </button>
                     );
-                  }}
-                  className={`p-2.5 rounded-xl border cursor-pointer text-xs transition ${
-                    task.selected
-                      ? 'bg-purple-50/80 border-purple-300 text-purple-950'
-                      : 'bg-gray-50 border-gray-200 opacity-50'
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold truncate pr-2">{task.title}</span>
-                    <span className="text-[9px] font-mono bg-white px-1.5 py-0.5 rounded border border-gray-200">
-                      @{task.assigned_to}
-                    </span>
-                  </div>
+                  })}
                 </div>
-              ))}
-            </div>
+              </div>
 
-            <div className="flex items-center space-x-2 pt-2 border-t border-gray-100">
-              <button
-                type="button"
-                onClick={() => executeSaveHandover([])}
-                className="flex-1 py-2 text-xs font-semibold text-gray-500 hover:text-black bg-gray-100 rounded-xl transition"
-              >
-                Skip Tasks
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  const selected = pendingActionThreads.filter(t => t.selected);
-                  executeSaveHandover(selected);
-                }}
-                className="flex-1 py-2 bg-black hover:bg-neutral-800 text-white rounded-xl text-xs font-bold transition shadow-xs"
-              >
-                Track {pendingActionThreads.filter(t => t.selected).length} Item(s)
-              </button>
+              {/* Team Comments Thread */}
+              <div className="pt-2 border-t border-gray-100 space-y-2">
+                <span className="text-[9px] font-mono font-bold uppercase tracking-wider text-gray-400 block">
+                  Comments &amp; Queries ({comments.length})
+                </span>
+
+                <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                  {comments.length === 0 ? (
+                    <p className="text-[11px] text-gray-400 italic">No comments yet. Leave a note below.</p>
+                  ) : (
+                    comments.map(c => (
+                      <div key={c.id} className="bg-gray-50 p-2.5 rounded-xl border border-gray-200/60 space-y-0.5">
+                        <div className="flex items-center justify-between text-[9px] font-mono text-gray-500">
+                          <span className="font-bold text-gray-800">{c.author_name}</span>
+                          <span>{new Date(c.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                        </div>
+                        <p className="text-xs text-gray-800 leading-snug">{c.comment}</p>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                {/* Add Comment Input */}
+                <form onSubmit={handleAddComment} className="flex items-center space-x-1.5 pt-1">
+                  <input
+                    type="text"
+                    value={newCommentText}
+                    onChange={(e) => setNewCommentText(e.target.value)}
+                    placeholder="Write a comment or query..."
+                    className="flex-1 bg-[#EDEDED] py-2 px-3 rounded-xl text-xs focus:outline-none"
+                  />
+                  <button
+                    type="submit"
+                    disabled={!newCommentText.trim() || postingComment}
+                    className="p-2 bg-black hover:bg-neutral-800 disabled:opacity-30 text-white rounded-xl transition"
+                  >
+                    <Send className="w-3.5 h-3.5" />
+                  </button>
+                </form>
+              </div>
             </div>
           </div>
         </div>
