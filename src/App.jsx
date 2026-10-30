@@ -106,89 +106,99 @@ export default function App() {
 
   const fetchLiveActivity = async () => {
     try {
-      const [handoverRes, goodsRes, orderRes, wastageRes] = await Promise.all([
+      // Use Promise.allSettled so an error on one table does not wipe the entire feed
+      const [handoverRes, goodsRes, orderRes, wastageRes] = await Promise.allSettled([
         supabase
           .from('handovers')
-          .select('id, date_str, date_formatted, manager_name, entry_type, general_notes, created_at')
+          .select('*')
           .eq('venue_id', DEFAULT_VENUE_ID)
           .order('created_at', { ascending: false })
-          .limit(10),
+          .limit(15),
         supabase
           .from('goods_received')
-          .select('id, supplier, invoice_ref, delivery_date, items, created_at')
+          .select('*')
           .eq('venue_id', DEFAULT_VENUE_ID)
           .order('created_at', { ascending: false })
-          .limit(10),
+          .limit(15),
         supabase
           .from('supplier_orders')
-          .select('id, supplier_name, order_date, manager_name, is_placed, created_at')
+          .select('*')
           .eq('venue_id', DEFAULT_VENUE_ID)
           .order('created_at', { ascending: false })
-          .limit(10),
+          .limit(15),
         supabase
           .from('wastage_log')
-          .select('id, item_name, cost_impact, reason, staff_name, created_at')
+          .select('*')
           .eq('venue_id', DEFAULT_VENUE_ID)
           .order('created_at', { ascending: false })
-          .limit(10)
+          .limit(15)
       ]);
 
       const items = [];
 
-      (handoverRes.data || []).forEach(h => {
-        items.push({
-          id: `h-${h.id}`,
-          entryId: h.id,
-          module: 'handover',
-          title: h.entry_type === 'Day Note' ? 'Day Note Logged' : 'Shift Handover Submitted',
-          desc: `${h.manager_name}: "${(h.general_notes || 'Closing figures logged').slice(0, 50)}..."`,
-          timestamp: new Date(h.created_at || Date.now()).getTime(),
-          timeStr: h.date_formatted || h.date_str || 'Today'
+      if (handoverRes.status === 'fulfilled' && handoverRes.value.data) {
+        handoverRes.value.data.forEach(h => {
+          items.push({
+            id: `h-${h.id}`,
+            entryId: h.id,
+            module: 'handover',
+            title: h.entry_type === 'Day Note' ? 'Day Note Logged' : 'Shift Handover Submitted',
+            desc: `${h.manager_name || 'Staff'}: "${(h.general_notes || 'Closing figures logged').slice(0, 55)}..."`,
+            timestamp: new Date(h.created_at || Date.now()).getTime(),
+            timeStr: h.date_formatted || h.date_str || 'Today'
+          });
         });
-      });
 
-      (goodsRes.data || []).forEach(g => {
-        const count = Array.isArray(g.items) ? g.items.length : 0;
-        items.push({
-          id: `g-${g.id}`,
-          entryId: g.id,
-          module: 'goods',
-          title: `Delivery Logged: ${g.supplier}`,
-          desc: `${count} items checked in (${g.invoice_ref ? 'Ref: ' + g.invoice_ref : g.delivery_date})`,
-          timestamp: new Date(g.created_at || Date.now()).getTime(),
-          timeStr: g.delivery_date || 'Today'
-        });
-      });
+        if (handoverRes.value.data.length > 0) {
+          setLatestHandover(handoverRes.value.data[0]);
+        }
+      }
 
-      (orderRes.data || []).forEach(o => {
-        items.push({
-          id: `o-${o.id}`,
-          entryId: o.id,
-          module: 'orders',
-          title: o.is_placed ? `Order Placed: ${o.supplier_name}` : `Order Drafted: ${o.supplier_name}`,
-          desc: `${o.manager_name} recorded orders for ${o.supplier_name}`,
-          timestamp: new Date(o.created_at || Date.now()).getTime(),
-          timeStr: o.order_date || 'Today'
+      if (goodsRes.status === 'fulfilled' && goodsRes.value.data) {
+        goodsRes.value.data.forEach(g => {
+          const count = Array.isArray(g.items) ? g.items.length : 0;
+          items.push({
+            id: `g-${g.id}`,
+            entryId: g.id,
+            module: 'goods',
+            title: `Delivery Logged: ${g.supplier || 'Supplier'}`,
+            desc: `${count} items checked in (${g.invoice_ref ? 'Ref: ' + g.invoice_ref : g.delivery_date})`,
+            timestamp: new Date(g.created_at || Date.now()).getTime(),
+            timeStr: g.delivery_date || 'Today'
+          });
         });
-      });
+      }
 
-      (wastageRes.data || []).forEach(w => {
-        items.push({
-          id: `w-${w.id}`,
-          entryId: w.id,
-          module: 'wastage',
-          title: `Wastage Logged: £${Number(w.cost_impact || 0).toFixed(2)}`,
-          desc: `${w.staff_name} logged ${w.item_name} (${w.reason})`,
-          timestamp: new Date(w.created_at || Date.now()).getTime(),
-          timeStr: 'Today'
+      if (orderRes.status === 'fulfilled' && orderRes.value.data) {
+        orderRes.value.data.forEach(o => {
+          items.push({
+            id: `o-${o.id}`,
+            entryId: o.id,
+            module: 'orders',
+            title: o.is_placed ? `Order Placed: ${o.supplier_name}` : `Order Drafted: ${o.supplier_name}`,
+            desc: `${o.manager_name || 'Staff'} recorded order for ${o.supplier_name}`,
+            timestamp: new Date(o.created_at || Date.now()).getTime(),
+            timeStr: o.order_date || 'Today'
+          });
         });
-      });
+      }
+
+      if (wastageRes.status === 'fulfilled' && wastageRes.value.data) {
+        wastageRes.value.data.forEach(w => {
+          items.push({
+            id: `w-${w.id}`,
+            entryId: w.id,
+            module: 'wastage',
+            title: `Wastage Logged: £${Number(w.cost_impact || 0).toFixed(2)}`,
+            desc: `${w.staff_name || 'Staff'} logged ${w.item_name} (${w.reason || 'Waste'})`,
+            timestamp: new Date(w.created_at || Date.now()).getTime(),
+            timeStr: 'Today'
+          });
+        });
+      }
 
       items.sort((a, b) => b.timestamp - a.timestamp);
       setActivityFeed(items);
-      if (handoverRes.data && handoverRes.data.length > 0) {
-        setLatestHandover(handoverRes.data[0]);
-      }
     } catch (err) {
       console.warn("Could not sync live activity feed:", err);
     }
@@ -197,6 +207,19 @@ export default function App() {
   useEffect(() => {
     if (currentUser) {
       fetchLiveActivity();
+
+      // Realtime listener to update the Notification Center feed on new inserts
+      const channel = supabase
+        .channel('public_activity_feed')
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'handovers' }, () => fetchLiveActivity())
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'goods_received' }, () => fetchLiveActivity())
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'supplier_orders' }, () => fetchLiveActivity())
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'wastage_log' }, () => fetchLiveActivity())
+        .subscribe();
+
+      return () => {
+        supabase.removeChannel(channel);
+      };
     }
   }, [currentUser, activeModule]);
 
@@ -216,7 +239,7 @@ export default function App() {
     }
   }, []);
 
-  // OneSignal registration & default tag seeding
+  // OneSignal registration & tag seeding on login
   useEffect(() => {
     if (!currentUser || !window.OneSignalDeferred) return;
     const hasPrompted = localStorage.getItem('wst_push_prompted');

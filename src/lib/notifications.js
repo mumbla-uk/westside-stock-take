@@ -5,7 +5,7 @@ const ONESIGNAL_REST_API_KEY = import.meta.env.VITE_ONESIGNAL_REST_KEY || '';
 
 /**
  * Universal Push Notification Dispatcher
- * Directly calls OneSignal REST API while supporting Supabase and Netlify fallbacks.
+ * Compatible with both object arguments and legacy positional arguments.
  */
 export async function sendPushNotification(arg1, arg2, arg3, arg4) {
   let title, message, targetUser, targetUsers, prefKey, excludeUser, dataPayload;
@@ -19,6 +19,7 @@ export async function sendPushNotification(arg1, arg2, arg3, arg4) {
     excludeUser = arg1.excludeUser || null;
     dataPayload = arg1.dataPayload || {};
   } else {
+    // Legacy positional support: sendPushNotification(title, message, targetUser, dataPayload)
     title = arg1;
     message = arg2;
     targetUser = arg3 || null;
@@ -44,7 +45,7 @@ export async function sendPushNotification(arg1, arg2, arg3, arg4) {
       }
     };
 
-    // 1. Target single specific user (@mention or diary author)
+    // 1. Direct Target to a Single User (@mention or specific author)
     if (targetUser) {
       const cleanTarget = String(targetUser).replace('@', '').trim();
       if (excludeUser && cleanTarget.toLowerCase() === excludeUser.toLowerCase()) {
@@ -54,7 +55,7 @@ export async function sendPushNotification(arg1, arg2, arg3, arg4) {
       payload.include_external_user_ids = [cleanTarget];
       payload.target_channel = 'push';
     } 
-    // 2. Target list of specific users (e.g. commenters)
+    // 2. Direct Target to Multiple Users (e.g. commenters)
     else if (targetUsers && targetUsers.length > 0) {
       const cleanList = Array.from(new Set(
         targetUsers
@@ -68,7 +69,7 @@ export async function sendPushNotification(arg1, arg2, arg3, arg4) {
       payload.include_external_user_ids = cleanList;
       payload.target_channel = 'push';
     } 
-    // 3. Broadcast to all subscribed staff
+    // 3. Broadcast to All Subscribed Staff
     else {
       payload.included_segments = ['Subscribed Users'];
     }
@@ -87,17 +88,6 @@ export async function sendPushNotification(arg1, arg2, arg3, arg4) {
       if (directRes.ok) {
         return true;
       }
-    }
-
-    // Fallback: Netlify Serverless Function
-    const netlifyRes = await fetch('/.netlify/functions/send-push', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    }).catch(() => null);
-
-    if (netlifyRes && netlifyRes.ok) {
-      return true;
     }
 
     // Fallback: Supabase Edge Function
@@ -119,7 +109,7 @@ export async function sendPushNotification(arg1, arg2, arg3, arg4) {
 }
 
 /**
- * Scans text for @mentions and triggers direct pushes
+ * Scans text for @mentions and fires direct push notifications
  */
 export async function dispatchMentionsFromText(text, authorName, contextTitle, dataPayload = {}) {
   if (!text || !text.includes('@')) return;
