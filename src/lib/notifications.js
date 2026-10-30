@@ -1,79 +1,88 @@
 import { supabase, DEFAULT_VENUE_ID } from './db';
 
-const ONESIGNAL_APP_ID = "93cb91c7-7f6c-4f75-a66b-40a5fb5375f9";
-const ONESIGNAL_REST_KEY = import.meta.env.VITE_ONESIGNAL_REST_KEY || "";
-const APP_LAUNCH_URL = typeof window !== 'undefined' ? window.location.origin : 'https://silly-cendol-6613d3.netlify.app';
+const ONESIGNAL_APP_ID = import.meta.env.VITE_ONESIGNAL_APP_ID || '';
+const ONESIGNAL_REST_API_KEY = import.meta.env.VITE_ONESIGNAL_REST_KEY || '';
 
-export async function sendPushNotification(title, message, targetManager = null, customData = {}) {
+/**
+ * Sends a OneSignal push notification either directly or via Netlify Edge / Supabase edge function
+ */
+export async function sendPushNotification(title, message, targetUserOrGroup = null, dataPayload = {}) {
   try {
-    if (!ONESIGNAL_REST_KEY) {
-      console.warn("OneSignal REST key not found in environment (VITE_ONESIGNAL_REST_KEY is empty).");
-      return;
-    }
-
-    let targetUrl = APP_LAUNCH_URL;
-    if (customData?.module) {
-      const params = new URLSearchParams({ module: customData.module });
-      if (customData.entryId) params.append("entryId", customData.entryId);
-      targetUrl = `${APP_LAUNCH_URL}?${params.toString()}`;
-    }
-
     const payload = {
       app_id: ONESIGNAL_APP_ID,
-      headings: { en: String(title || "West Side Tavern") },
-      contents: { en: String(message || "New operations update.") },
-      url: targetUrl,
-      data: customData,
+      headings: { en: title },
+      contents: { en: message },
+      data: {
+        venue_id: DEFAULT_VENUE_ID,
+        ...dataPayload
+      }
     };
 
-    if (targetManager) {
-      // 1. Direct 1-to-1 alert (Comment / Reaction)
-      const cleanTarget = String(targetManager).split("(")[0].trim();
-      payload.include_aliases = { external_id: [cleanTarget] };
-      payload.include_external_user_ids = [cleanTarget];
-      payload.target_channel = "push";
+    if (targetUserOrGroup) {
+      const cleanTarget = String(targetUserOrGroup).replace('@', '').trim();
+      
+      if (['Openers', 'Closers', 'Kitchen', 'Bar'].includes(cleanTarget)) {
+        payload.filters = [
+          { field: 'tag', key: 'role', relation: 'exists' },
+          { field: 'tag', key: 'shift_group', relation: '=', value: cleanTarget.toLowerCase() }
+        ];
+      } else {
+        payload.include_aliases = {
+          external_id: [cleanTarget]
+        };
+        payload.target_channel = 'push';
+      }
     } else {
-      // 2. Broadcast alerts (Deliveries, New Diaries, Petty Cash, Orders)
-      // Query active team roster dynamically from Supabase
-      let staffAliases = [];
-      try {
-        const { data: staffData } = await supabase
-          .from('staff')
-          .select('name')
-          .eq('venue_id', DEFAULT_VENUE_ID);
-        if (staffData && staffData.length > 0) {
-          staffAliases = staffData.map(s => s.name.trim()).filter(Boolean);
-        }
-      } catch (err) {
-        console.warn("Could not query dynamic staff roster:", err);
-      }
-
-      payload.included_segments = ["Total Subscriptions", "Subscribed Users"];
-      if (staffAliases.length > 0) {
-        payload.include_aliases = { external_id: staffAliases };
-      }
-      payload.target_channel = "push";
+      payload.included_segments = ['Subscribed Users'];
     }
 
-    const res = await fetch("https://onesignal.com/api/v1/notifications", {
-      method: "POST",
+    const edgeFunctionUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-push`;
+    const response = await fetch(edgeFunctionUrl, {
+      method: 'POST',
       headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Basic ${ONESIGNAL_REST_KEY}`,
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`
       },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(payload)
     });
 
-    const data = await res.json();
-    if (!res.ok) {
-      console.error("OneSignal API error response:", data);
-    } else {
-      console.log("OneSignal push dispatched successfully:", data);
+    if (!response.ok && ONESIGNAL_REST_API_KEY) {
+      await fetch('https://onesignal.com/api/v1/notifications', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Basic ${ONESIGNAL_REST_API_KEY}`
+        },
+        body: JSON.stringify(payload)
+      });
     }
+
+    return true;
   } catch (err) {
-    console.warn("Push dispatch error:", err);
+    console.warn("Could not dispatch targeted push notification:", err);
+    return false;
   }
 }
 
-export const sendNotification = sendPushNotification;
-export default sendPushNotification;
+/**
+ * Scans any block of text for @mentions and fires push notifications to each tagged person
+ */
+export async function dispatchMentionsFromText(text, authorName, contextTitle, dataPayload = {}) {
+  if (!text || !text.includes('@')) return;
+
+  const matches = text.match(/@(\w+)/g) || [];
+  const mentioned = Array.from(new Set(matches.map(m => m.replace('@', '').trim())));
+
+  for (const target of mentioned) {
+    if (target.toLowerCase() === String(authorName || '').toLowerCase()) continue;
+
+    const snippet = text.length > 70 ? `${text.slice(0, 67)}...` : text;
+
+    await sendPushNotification(
+      `Mention from ${authorName}`,
+      `${contextTitle}: "${snippet}"`,
+      target,
+      dataPayload
+    );
+  }
+}
