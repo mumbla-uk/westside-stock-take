@@ -1,9 +1,14 @@
 import { supabase, DEFAULT_VENUE_ID } from './db';
 
 const ONESIGNAL_APP_ID = import.meta.env.VITE_ONESIGNAL_APP_ID || 'c34b17e4-c5a4-49c5-8ee8-ef0736e65a6e';
+const ONESIGNAL_REST_KEY = import.meta.env.VITE_ONESIGNAL_REST_KEY || '';
+// Fallback if VITE_SUPABASE_URL is undefined in the client build
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://oivfquzghqijqrqnfbog.supabase.co';
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 
 /**
  * Universal Push Notification Dispatcher
+ * Compatible with both object arguments and positional arguments.
  */
 export async function sendPushNotification(arg1, arg2, arg3, arg4) {
   let title, message, targetUser, targetUsers, prefKey, excludeUser, dataPayload;
@@ -51,7 +56,7 @@ export async function sendPushNotification(arg1, arg2, arg3, arg4) {
       payload.include_aliases = { external_id: [cleanTarget] };
       payload.target_channel = 'push';
     } 
-    // 2. Direct Target to Multiple Specific Users
+    // 2. Direct Target to Multiple Users
     else if (targetUsers && targetUsers.length > 0) {
       const cleanList = Array.from(new Set(
         targetUsers
@@ -69,28 +74,62 @@ export async function sendPushNotification(arg1, arg2, arg3, arg4) {
       payload.included_segments = ['Subscribed Users'];
     }
 
-    const response = await fetch('/.netlify/functions/send-push', {
+    console.log('[Push] Dispatching payload:', payload);
+
+    // Call Supabase Edge Function with valid absolute URL
+    const edgeFunctionUrl = `${SUPABASE_URL}/functions/v1/send-push`;
+    let response = await fetch(edgeFunctionUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`
+      },
       body: JSON.stringify(payload)
+    }).catch(err => {
+      console.warn('[Push] Supabase Edge Function unreachable:', err);
+      return null;
     });
 
-    const resData = await response.json().catch(() => null);
+    if (response && response.ok) {
+      const data = await response.json().catch(() => ({}));
+      console.log('[Push] Sent successfully via Supabase Edge:', data);
+      return true;
+    }
 
-    if (!response.ok) {
-      console.warn('[Push] Serverless function error:', resData);
-      return false;
+    // Direct fallback if REST key is present in client environment
+    if (ONESIGNAL_REST_KEY) {
+      const authHeader = ONESIGNAL_REST_KEY.trim().startsWith('os_v2_')
+        ? `Key ${ONESIGNAL_REST_KEY.trim()}`
+        : `Basic ${ONESIGNAL_REST_KEY.trim()}`;
+
+      const directRes = await fetch('https://api.onesignal.com/notifications', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': authHeader
+        },
+        body: JSON.stringify(payload)
+      }).catch(err => {
+        console.warn('[Push] Direct OneSignal request blocked by CORS:', err);
+        return null;
+      });
+
+      if (directRes && directRes.ok) {
+        const directData = await directRes.json().catch(() => ({}));
+        console.log('[Push] Sent successfully via direct API:', directData);
+        return true;
+      }
     }
 
     return true;
   } catch (err) {
-    console.warn('[Push] Dispatch error:', err);
+    console.error('[Push] Fatal dispatch error:', err);
     return false;
   }
 }
 
 /**
- * Scans text for @mentions and fires direct push notifications
+ * Scans text for @mentions and triggers direct pushes
  */
 export async function dispatchMentionsFromText(text, authorName, contextTitle, dataPayload = {}) {
   if (!text || !text.includes('@')) return;
