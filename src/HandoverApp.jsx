@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   ArrowLeft,
   Calendar,
@@ -194,8 +194,14 @@ export default function HandoverApp({
     const authorId = currentUser?.name || 'anonymous';
     const formattedBritish = formatBritishDate(rawDate);
 
+    // Guaranteed ID to satisfy not-null constraint
+    const generatedId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : `h-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
     try {
       const payload = {
+        id: generatedId,
         venue_id: DEFAULT_VENUE_ID,
         date_str: rawDate,
         date_formatted: formattedBritish,
@@ -222,20 +228,22 @@ export default function HandoverApp({
 
       if (hErr) throw hErr;
 
+      const recordId = savedRow?.id || generatedId;
+
       // Dispatch @mentions if any staff were tagged
       const combinedNotes = `${generalNotes} \n ${maintenanceNotes} \n ${staffNotes}`;
       await dispatchMentionsFromText(
         combinedNotes,
         authorName,
         `Handover (${formattedBritish})`,
-        { module: 'handover', entryId: savedRow.id }
+        { module: 'handover', entryId: recordId }
       );
 
       sendPushNotification(
         `Diary Logged: ${formattedBritish}`,
         `${authorName} submitted ${entryType}. Gross: £${grossSales || '0'} (Net: £${netSales || '0'})`,
         null,
-        { module: 'handover', entryId: savedRow.id }
+        { module: 'handover', entryId: recordId }
       );
 
       setStatusMsg({ type: 'success', text: `Handover recorded for ${formattedBritish}!` });
@@ -449,7 +457,7 @@ export default function HandoverApp({
             </div>
           </div>
 
-          {/* 1. General Shift Notes (First Section) */}
+          {/* 1. General Shift Notes */}
           <div className="space-y-1">
             <label className="text-[10px] font-bold text-gray-700 uppercase tracking-wider block">
               1. General Notes &amp; Shift Summary (Type @ to tag staff)
