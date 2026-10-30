@@ -106,7 +106,6 @@ export default function App() {
 
   const fetchLiveActivity = async () => {
     try {
-      // Use Promise.allSettled so an error on one table never wipes out the entire feed
       const [handoverRes, goodsRes, orderRes, wastageRes] = await Promise.allSettled([
         supabase
           .from('handovers')
@@ -208,7 +207,6 @@ export default function App() {
     if (currentUser) {
       fetchLiveActivity();
 
-      // Realtime listener so any new insert updates the Notification Center immediately
       const channel = supabase
         .channel('public_activity_feed')
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'handovers' }, () => fetchLiveActivity())
@@ -248,8 +246,8 @@ export default function App() {
       try {
         const cleanName = currentUser.name.trim();
 
-        // 1. OneSignal.login automatically sets the external_id.
-        // DO NOT call addAlias("external_id", ...) as external_id is reserved.
+        // 1. OneSignal.login sets external_id internally.
+        // DO NOT call addAlias("external_id") because external_id is reserved.
         if (typeof OneSignal.login === 'function') {
           await OneSignal.login(cleanName);
         }
