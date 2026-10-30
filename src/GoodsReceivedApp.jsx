@@ -17,7 +17,8 @@ import {
   FolderOpen,
   PieChart,
   Receipt,
-  Eye
+  Eye,
+  PlusCircle
 } from 'lucide-react';
 import { useTwoFingerSwipe } from './useTwoFingerSwipe';
 import { supabase, localDb, DEFAULT_VENUE_ID } from './lib/db';
@@ -99,6 +100,15 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
   const [isEditingReport, setIsEditingReport] = useState(false);
   const [savingEdit, setSavingEdit] = useState(false);
 
+  // Add Item to Existing Report Drawer Sub-State
+  const [showAddLineToReport, setShowAddLineToReport] = useState(false);
+  const [editLineSearch, setEditLineSearch] = useState('');
+  const [editLineProduct, setEditLineProduct] = useState(null);
+  const [editLineName, setEditLineName] = useState('');
+  const [editLineUnit, setEditLineUnit] = useState('case');
+  const [editLineQty, setEditLineQty] = useState('1');
+  const [editLineUnitEx, setEditLineUnitEx] = useState('');
+
   const swipeHandlers = useTwoFingerSwipe({
     disabled: Boolean(selectedReport),
     onSwipeRight: () => {
@@ -163,6 +173,16 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
       (p.id && String(p.id).toLowerCase().includes(q))
     ).slice(0, 6);
   }, [products, itemSearch, selectedProduct]);
+
+  // Search results for adding to an existing report
+  const editLineSearchResults = useMemo(() => {
+    if (!editLineSearch.trim() || editLineProduct) return [];
+    const q = editLineSearch.toLowerCase();
+    return products.filter(p => 
+      (p.name && p.name.toLowerCase().includes(q)) || 
+      (p.id && String(p.id).toLowerCase().includes(q))
+    ).slice(0, 5);
+  }, [products, editLineSearch, editLineProduct]);
 
   const handleSelectProduct = (prod) => {
     setSelectedProduct(prod);
@@ -311,7 +331,6 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
 
       if (error) throw error;
 
-      // Update last invoice cost ex VAT in catalog
       for (const item of receivedItems) {
         if (item.unitEx > 0 && item.id && !String(item.id).startsWith('CUSTOM-')) {
           await supabase
@@ -345,7 +364,6 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
     }
   };
 
-  // Filter Past Reports
   const filteredPastReports = useMemo(() => {
     const q = reportSearchQuery.toLowerCase();
     return pastReports.filter(rep => {
@@ -356,13 +374,13 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
     });
   }, [pastReports, reportSearchQuery]);
 
-  // Open Report in Read-Only View Mode First
   const handleOpenReportView = (rep) => {
     setSelectedReport({
       ...rep,
       items: parseItems(rep.items).map(i => ({ ...i }))
     });
     setIsEditingReport(false);
+    setShowAddLineToReport(false);
   };
 
   const handleUpdateEditingItemLine = (idx, field, val) => {
@@ -387,6 +405,43 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
       ...prev,
       items: (prev.items || []).filter((_, i) => i !== idx)
     }));
+  };
+
+  // Add a newly typed or selected item to the current editing report
+  const handleConfirmAddLineToReport = (e) => {
+    e.preventDefault();
+    const finalName = editLineProduct ? editLineProduct.name : editLineName.trim();
+    const qty = parseFloat(editLineQty) || 1;
+    const uEx = parseFloat(editLineUnitEx) || 0;
+    if (!finalName || qty <= 0) return;
+
+    const matchedCat = editLineProduct?.category || 'general';
+
+    const newLine = {
+      id: editLineProduct ? editLineProduct.id : `CUSTOM-${Date.now()}`,
+      sku: editLineProduct ? editLineProduct.id : 'CUSTOM',
+      name: finalName,
+      category: matchedCat,
+      supplier: selectedReport?.supplier || (editLineProduct ? editLineProduct.supplier : 'General'),
+      unit: editLineUnit || (editLineProduct ? (editLineProduct.order_unit || editLineProduct.unit) : 'unit'),
+      qty: qty,
+      unitEx: uEx,
+      unitInc: Math.round(uEx * 1.20 * 100) / 100,
+      totalEx: Math.round(qty * uEx * 100) / 100,
+      totalInc: Math.round(qty * uEx * 1.20 * 100) / 100
+    };
+
+    setSelectedReport(prev => ({
+      ...prev,
+      items: [...(prev.items || []), newLine]
+    }));
+
+    setEditLineSearch('');
+    setEditLineProduct(null);
+    setEditLineName('');
+    setEditLineQty('1');
+    setEditLineUnitEx('');
+    setShowAddLineToReport(false);
   };
 
   const handleSaveEditedReport = async (e) => {
@@ -425,6 +480,7 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
 
       setStatusMsg({ type: 'success', text: `Updated invoice ${selectedReport.invoice_ref || selectedReport.supplier}` });
       setIsEditingReport(false);
+      setShowAddLineToReport(false);
       await fetchPastReports();
     } catch (err) {
       console.error(err);
@@ -447,7 +503,6 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
     }
   };
 
-  // Financial & Category Breakdown of the Active Report
   const reportFinancials = useMemo(() => {
     if (!selectedReport) return { netTotal: 0, vatTotal: 0, grossTotal: 0, categories: [] };
 
@@ -459,7 +514,6 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
       const lineNet = Number(item.totalEx || (item.qty * item.unitEx) || 0);
       net += lineNet;
 
-      // Match category from catalog products if not explicitly stored
       let cat = (item.category || '').toLowerCase();
       if (!cat) {
         const found = products.find(p => p.id === item.id || p.name === item.name);
@@ -891,7 +945,7 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200">
           <div className="bg-white w-full max-w-md rounded-t-3xl sm:rounded-3xl overflow-hidden shadow-2xl border border-gray-200 flex flex-col max-h-[92vh] animate-in slide-in-from-bottom duration-200">
             
-            {/* Header with View vs Edit Toggle */}
+            {/* Header */}
             <div className="px-5 pt-4 pb-3 border-b border-gray-100 flex justify-between items-center bg-gray-50/80">
               <div>
                 <span className="text-[9px] font-mono uppercase text-amber-700 font-bold block">
@@ -910,7 +964,10 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
               <div className="flex items-center space-x-1.5">
                 <button
                   type="button"
-                  onClick={() => setIsEditingReport(!isEditingReport)}
+                  onClick={() => {
+                    setIsEditingReport(!isEditingReport);
+                    setShowAddLineToReport(false);
+                  }}
                   className={`px-2.5 py-1 rounded-xl text-xs font-bold border transition flex items-center space-x-1 ${
                     isEditingReport
                       ? 'bg-amber-100 border-amber-300 text-amber-900'
@@ -918,7 +975,7 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
                   }`}
                 >
                   <Edit3 className="w-3.5 h-3.5" />
-                  <span>{isEditingReport ? 'Viewing' : 'Edit'}</span>
+                  <span>{isEditingReport ? 'Done' : 'Edit Invoice'}</span>
                 </button>
                 <button
                   type="button"
@@ -932,8 +989,7 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
 
             {/* Modal Body */}
             <form onSubmit={handleSaveEditedReport} className="p-5 overflow-y-auto space-y-4 text-xs touch-pan-y overscroll-contain flex-1">
-              {isEditingReport ? (
-                /* EDIT CONTROLS */
+              {isEditingReport && (
                 <div className="grid grid-cols-3 gap-2 pb-2">
                   <div>
                     <label className="text-[9px] font-bold text-gray-500 uppercase block mb-0.5">Supplier</label>
@@ -965,13 +1021,126 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
                     />
                   </div>
                 </div>
-              ) : null}
+              )}
 
               {/* Items Line Sheet */}
               <div className="space-y-1.5">
-                <span className="font-bold uppercase tracking-wider text-[10px] text-gray-400 block">
-                  Delivered Items ({parseItems(selectedReport.items).length})
-                </span>
+                <div className="flex items-center justify-between">
+                  <span className="font-bold uppercase tracking-wider text-[10px] text-gray-400 block">
+                    Delivered Items ({parseItems(selectedReport.items).length})
+                  </span>
+
+                  {isEditingReport && (
+                    <button
+                      type="button"
+                      onClick={() => setShowAddLineToReport(!showAddLineToReport)}
+                      className="flex items-center space-x-1 text-[10px] font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-2 py-0.5 rounded-lg transition"
+                    >
+                      <Plus className="w-3 h-3" />
+                      <span>{showAddLineToReport ? 'Close' : 'Add Item'}</span>
+                    </button>
+                  )}
+                </div>
+
+                {/* ADD ITEM DRAWER (IN EDIT MODE) */}
+                {isEditingReport && showAddLineToReport && (
+                  <div className="bg-amber-50/80 border border-amber-200 rounded-2xl p-3 space-y-2 mb-2 animate-in fade-in duration-150">
+                    <span className="font-bold text-[10px] uppercase text-amber-900 block">
+                      Add Product to this Invoice
+                    </span>
+
+                    <div className="relative">
+                      <input
+                        type="text"
+                        value={editLineSearch}
+                        onChange={(e) => {
+                          setEditLineSearch(e.target.value);
+                          setEditLineProduct(null);
+                          setEditLineName(e.target.value);
+                        }}
+                        placeholder="Search catalog SKU or product name..."
+                        className="w-full bg-white border border-gray-300 py-1.5 pl-2.5 pr-7 rounded-xl text-xs focus:outline-none"
+                      />
+                      {editLineSearch && (
+                        <button
+                          type="button"
+                          onClick={() => { setEditLineSearch(''); setEditLineProduct(null); setEditLineName(''); }}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-black"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      )}
+
+                      {editLineSearchResults.length > 0 && !editLineProduct && (
+                        <div className="absolute z-40 left-0 right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg divide-y divide-gray-100 max-h-36 overflow-y-auto">
+                          {editLineSearchResults.map(prod => (
+                            <button
+                              key={prod.id}
+                              type="button"
+                              onClick={() => {
+                                setEditLineProduct(prod);
+                                setEditLineName(prod.name || '');
+                                setEditLineUnit(prod.order_unit || prod.unit || 'unit');
+                                setEditLineSearch(prod.name || '');
+                                const cost = Number(prod.last_cost_ex_vat || prod.cost_price_ex_vat || 0);
+                                if (cost > 0) setEditLineUnitEx(cost.toFixed(2));
+                              }}
+                              className="w-full text-left px-2.5 py-1.5 text-xs hover:bg-gray-100 flex items-center justify-between"
+                            >
+                              <span className="font-bold text-gray-900 truncate">{prod.name}</span>
+                              <span className="text-[10px] text-gray-500 font-mono">£{Number(prod.last_cost_ex_vat || prod.cost_price_ex_vat || 0).toFixed(2)}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-12 gap-1.5">
+                      <div className="col-span-3">
+                        <label className="text-[8px] font-bold text-gray-600 uppercase block mb-0.5">Qty</label>
+                        <input
+                          type="number"
+                          step="any"
+                          required
+                          value={editLineQty}
+                          onChange={(e) => setEditLineQty(e.target.value)}
+                          className="w-full bg-white border border-gray-300 py-1 px-1 rounded-lg font-mono font-bold text-xs text-center focus:outline-none"
+                        />
+                      </div>
+                      <div className="col-span-4">
+                        <label className="text-[8px] font-bold text-gray-600 uppercase block mb-0.5">Unit Format</label>
+                        <input
+                          type="text"
+                          value={editLineUnit}
+                          onChange={(e) => setEditLineUnit(e.target.value)}
+                          className="w-full bg-white border border-gray-300 py-1 px-1.5 rounded-lg text-xs focus:outline-none"
+                        />
+                      </div>
+                      <div className="col-span-5">
+                        <label className="text-[8px] font-bold text-gray-600 uppercase block mb-0.5">Unit Ex (£)</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          required
+                          placeholder="0.00"
+                          value={editLineUnitEx}
+                          onChange={(e) => setEditLineUnitEx(e.target.value)}
+                          className="w-full bg-white border border-gray-300 py-1 px-1.5 rounded-lg font-mono font-bold text-xs text-center focus:outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={handleConfirmAddLineToReport}
+                      disabled={!editLineName.trim() || parseFloat(editLineQty) <= 0}
+                      className="w-full py-1.5 bg-black hover:bg-neutral-800 disabled:opacity-40 text-white rounded-xl text-xs font-bold transition flex items-center justify-center space-x-1"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Append Item to List</span>
+                    </button>
+                  </div>
+                )}
 
                 <div className="divide-y divide-gray-100 border border-gray-200 rounded-2xl bg-white overflow-hidden shadow-2xs">
                   {parseItems(selectedReport.items).map((line, idx) => (
@@ -1107,7 +1276,7 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
                     className="flex-1 py-3 bg-black hover:bg-neutral-800 disabled:opacity-40 text-white rounded-2xl text-xs font-bold transition flex items-center justify-center space-x-1.5 shadow-md"
                   >
                     <Save className="w-4 h-4 text-emerald-400" />
-                    <span>{savingEdit ? 'Updating Report...' : 'Save & Sync Changes'}</span>
+                    <span>{savingEdit ? 'Updating Report...' : 'Save & Sync Invoice'}</span>
                   </button>
                 </div>
               )}
