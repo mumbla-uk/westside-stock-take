@@ -237,7 +237,7 @@ export default function App() {
     }
   }, []);
 
-  // OneSignal registration & tag seeding (omits reserved external_id alias)
+  // OneSignal registration & permission initialization
   useEffect(() => {
     if (!currentUser || !window.OneSignalDeferred) return;
     const hasPrompted = localStorage.getItem('wst_push_prompted');
@@ -246,7 +246,7 @@ export default function App() {
       try {
         const cleanName = currentUser.name.trim();
 
-        // 1. OneSignal.login automatically manages external_id internally
+        // 1. OneSignal.login sets external_id internally
         if (typeof OneSignal.login === 'function') {
           await OneSignal.login(cleanName);
         }

@@ -34,13 +34,29 @@ exports.handler = async (event) => {
   }
 
   try {
-    const payload = JSON.parse(event.body);
+    const rawPayload = JSON.parse(event.body);
+
+    // Build the OneSignal payload
+    const payload = {
+      app_id: rawPayload.app_id,
+      headings: rawPayload.headings,
+      contents: rawPayload.contents,
+      data: rawPayload.data || {}
+    };
+
+    // OneSignal Target Audience: Mutually exclusive targeting
+    if (rawPayload.include_aliases && rawPayload.include_aliases.external_id?.length > 0) {
+      payload.include_aliases = rawPayload.include_aliases;
+      payload.target_channel = 'push';
+    } else {
+      payload.included_segments = ['Subscribed Users'];
+    }
 
     const authHeader = REST_KEY.trim().startsWith('os_v2_')
       ? `Key ${REST_KEY.trim()}`
       : `Basic ${REST_KEY.trim()}`;
 
-    const response = await fetch('https://onesignal.com/api/v1/notifications', {
+    const response = await fetch('https://api.onesignal.com/notifications', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -50,6 +66,7 @@ exports.handler = async (event) => {
     });
 
     const resData = await response.json();
+    console.log('[Netlify Function] OneSignal status:', response.status, 'Response:', JSON.stringify(resData));
 
     return {
       statusCode: response.status,
@@ -60,7 +77,7 @@ exports.handler = async (event) => {
       body: JSON.stringify(resData)
     };
   } catch (err) {
-    console.error('[Netlify Function] Error forwarding to OneSignal:', err);
+    console.error('[Netlify Function] Exception:', err);
     return {
       statusCode: 500,
       headers: { 'Access-Control-Allow-Origin': '*' },

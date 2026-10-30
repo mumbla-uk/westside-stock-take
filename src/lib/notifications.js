@@ -4,7 +4,6 @@ const ONESIGNAL_APP_ID = import.meta.env.VITE_ONESIGNAL_APP_ID || 'c34b17e4-c5a4
 
 /**
  * Universal Push Notification Dispatcher
- * Directly calls the Netlify serverless proxy to avoid browser CORS blocks.
  */
 export async function sendPushNotification(arg1, arg2, arg3, arg4) {
   let title, message, targetUser, targetUsers, prefKey, excludeUser, dataPayload;
@@ -70,6 +69,8 @@ export async function sendPushNotification(arg1, arg2, arg3, arg4) {
       payload.included_segments = ['Subscribed Users'];
     }
 
+    console.log('[Push] Dispatching payload:', payload);
+
     // Call serverless proxy (avoids browser CORS restrictions)
     const response = await fetch('/.netlify/functions/send-push', {
       method: 'POST',
@@ -77,9 +78,11 @@ export async function sendPushNotification(arg1, arg2, arg3, arg4) {
       body: JSON.stringify(payload)
     });
 
+    const resData = await response.json().catch(() => null);
+    console.log('[Push] Server response:', response.status, resData);
+
     if (!response.ok) {
-      const errText = await response.text();
-      console.warn('[Push] Proxy dispatch failed:', errText);
+      console.warn('[Push] Proxy dispatch failed:', resData);
       return false;
     }
 
@@ -91,7 +94,7 @@ export async function sendPushNotification(arg1, arg2, arg3, arg4) {
 }
 
 /**
- * Scans text for @mentions and triggers direct pushes
+ * Scans text for @mentions and fires direct push notifications
  */
 export async function dispatchMentionsFromText(text, authorName, contextTitle, dataPayload = {}) {
   if (!text || !text.includes('@')) return;
