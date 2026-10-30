@@ -42,7 +42,7 @@ export async function sendPushNotification(arg1, arg2, arg3, arg4) {
       }
     };
 
-    // 1. Direct Target to a Single User (@mention or specific author)
+    // 1. Direct Target to a Single User (@mention or specific recipient)
     if (targetUser) {
       const cleanTarget = String(targetUser).replace('@', '').trim();
       if (excludeUser && cleanTarget.toLowerCase() === excludeUser.toLowerCase()) {
@@ -51,7 +51,7 @@ export async function sendPushNotification(arg1, arg2, arg3, arg4) {
       payload.include_aliases = { external_id: [cleanTarget] };
       payload.target_channel = 'push';
     } 
-    // 2. Direct Target to Multiple Users (e.g. commenters)
+    // 2. Direct Target to Multiple Specific Users
     else if (targetUsers && targetUsers.length > 0) {
       const cleanList = Array.from(new Set(
         targetUsers
@@ -64,14 +64,11 @@ export async function sendPushNotification(arg1, arg2, arg3, arg4) {
       payload.include_aliases = { external_id: cleanList };
       payload.target_channel = 'push';
     } 
-    // 3. Broadcast to All Subscribed Staff
+    // 3. Broadcast to All Subscribed Users
     else {
       payload.included_segments = ['Subscribed Users'];
     }
 
-    console.log('[Push] Dispatching payload:', payload);
-
-    // Call serverless proxy (avoids browser CORS restrictions)
     const response = await fetch('/.netlify/functions/send-push', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -79,10 +76,9 @@ export async function sendPushNotification(arg1, arg2, arg3, arg4) {
     });
 
     const resData = await response.json().catch(() => null);
-    console.log('[Push] Server response:', response.status, resData);
 
     if (!response.ok) {
-      console.warn('[Push] Proxy dispatch failed:', resData);
+      console.warn('[Push] Serverless function error:', resData);
       return false;
     }
 

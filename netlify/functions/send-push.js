@@ -21,31 +21,29 @@ exports.handler = async (event) => {
 
   const REST_KEY = 
     process.env.ONESIGNAL_REST_KEY || 
-    process.env.VITE_ONESIGNAL_REST_KEY ||
+    process.env.VITE_ONESIGNAL_REST_KEY || 
     process.env.ONESIGNAL_API_KEY;
 
   if (!REST_KEY) {
-    console.error('[Netlify Function] Missing ONESIGNAL_REST_KEY in environment variables.');
+    console.error('[send-push] Missing ONESIGNAL_REST_KEY in Netlify environment variables');
     return {
       statusCode: 500,
       headers: { 'Access-Control-Allow-Origin': '*' },
-      body: JSON.stringify({ error: 'Missing ONESIGNAL_REST_KEY in Netlify environment variables' })
+      body: JSON.stringify({ error: 'Missing ONESIGNAL_REST_KEY on server' })
     };
   }
 
   try {
-    const rawPayload = JSON.parse(event.body);
+    const rawPayload = JSON.parse(event.body || '{}');
 
-    // Build the OneSignal payload
     const payload = {
-      app_id: rawPayload.app_id,
+      app_id: rawPayload.app_id || 'c34b17e4-c5a4-49c5-8ee8-ef0736e65a6e',
       headings: rawPayload.headings,
       contents: rawPayload.contents,
       data: rawPayload.data || {}
     };
 
-    // OneSignal Target Audience: Mutually exclusive targeting
-    if (rawPayload.include_aliases && rawPayload.include_aliases.external_id?.length > 0) {
+    if (rawPayload.include_aliases?.external_id?.length > 0) {
       payload.include_aliases = rawPayload.include_aliases;
       payload.target_channel = 'push';
     } else {
@@ -66,7 +64,6 @@ exports.handler = async (event) => {
     });
 
     const resData = await response.json();
-    console.log('[Netlify Function] OneSignal status:', response.status, 'Response:', JSON.stringify(resData));
 
     return {
       statusCode: response.status,
@@ -77,7 +74,6 @@ exports.handler = async (event) => {
       body: JSON.stringify(resData)
     };
   } catch (err) {
-    console.error('[Netlify Function] Exception:', err);
     return {
       statusCode: 500,
       headers: { 'Access-Control-Allow-Origin': '*' },

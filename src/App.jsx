@@ -106,6 +106,7 @@ export default function App() {
 
   const fetchLiveActivity = async () => {
     try {
+      // Use Promise.allSettled so an error on one table never wipes out the entire feed
       const [handoverRes, goodsRes, orderRes, wastageRes] = await Promise.allSettled([
         supabase
           .from('handovers')
@@ -207,6 +208,7 @@ export default function App() {
     if (currentUser) {
       fetchLiveActivity();
 
+      // Realtime listener so any new insert updates the Notification Center immediately
       const channel = supabase
         .channel('public_activity_feed')
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'handovers' }, () => fetchLiveActivity())
@@ -237,7 +239,7 @@ export default function App() {
     }
   }, []);
 
-  // OneSignal registration & permission initialization
+  // OneSignal registration & preference initialization
   useEffect(() => {
     if (!currentUser || !window.OneSignalDeferred) return;
     const hasPrompted = localStorage.getItem('wst_push_prompted');
@@ -246,12 +248,13 @@ export default function App() {
       try {
         const cleanName = currentUser.name.trim();
 
-        // 1. OneSignal.login sets external_id internally
+        // 1. OneSignal.login automatically sets the external_id.
+        // DO NOT call addAlias("external_id", ...) as external_id is reserved.
         if (typeof OneSignal.login === 'function') {
           await OneSignal.login(cleanName);
         }
 
-        // 2. Set user tags for operational rules
+        // 2. Set operational preference tags
         if (OneSignal.User?.addTags) {
           await OneSignal.User.addTags({
             user_name: cleanName,
@@ -265,20 +268,14 @@ export default function App() {
           });
         }
 
-        // 3. Request push permission if not granted
         const isOptedIn = await OneSignal.User?.PushSubscription?.optedIn;
         setPushEnabled(Boolean(isOptedIn));
 
-        if (!isOptedIn) {
-          if (OneSignal.Notifications?.permission !== true && typeof OneSignal.Notifications?.requestPermission === 'function') {
-            await OneSignal.Notifications.requestPermission();
-          }
-          if (!hasPrompted) {
-            setShowFirstOpenPushModal(true);
-          }
+        if (!isOptedIn && !hasPrompted) {
+          setShowFirstOpenPushModal(true);
         }
       } catch (err) {
-        console.warn("OneSignal initialization error:", err);
+        console.warn("OneSignal setup error:", err);
       }
     });
   }, [currentUser]);
