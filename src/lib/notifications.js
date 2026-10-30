@@ -1,11 +1,10 @@
 import { supabase, DEFAULT_VENUE_ID } from './db';
 
 const ONESIGNAL_APP_ID = import.meta.env.VITE_ONESIGNAL_APP_ID || 'c34b17e4-c5a4-49c5-8ee8-ef0736e65a6e';
-const ONESIGNAL_REST_API_KEY = import.meta.env.VITE_ONESIGNAL_REST_KEY || '';
+const ONESIGNAL_REST_KEY = import.meta.env.VITE_ONESIGNAL_REST_KEY || '';
 
 /**
  * Universal Push Notification Dispatcher
- * Compatible with both object arguments and legacy positional arguments.
  */
 export async function sendPushNotification(arg1, arg2, arg3, arg4) {
   let title, message, targetUser, targetUsers, prefKey, excludeUser, dataPayload;
@@ -19,7 +18,6 @@ export async function sendPushNotification(arg1, arg2, arg3, arg4) {
     excludeUser = arg1.excludeUser || null;
     dataPayload = arg1.dataPayload || {};
   } else {
-    // Legacy positional support: sendPushNotification(title, message, targetUser, dataPayload)
     title = arg1;
     message = arg2;
     targetUser = arg3 || null;
@@ -45,16 +43,15 @@ export async function sendPushNotification(arg1, arg2, arg3, arg4) {
       }
     };
 
-    // 1. Direct Target to a Single User (@mention or specific author)
+    // 1. Direct Target to a Single User (@mention or specific user)
     if (targetUser) {
       const cleanTarget = String(targetUser).replace('@', '').trim();
       if (excludeUser && cleanTarget.toLowerCase() === excludeUser.toLowerCase()) {
         return false;
       }
       payload.include_aliases = { external_id: [cleanTarget] };
-      payload.include_external_user_ids = [cleanTarget];
       payload.target_channel = 'push';
-    } 
+    }
     // 2. Direct Target to Multiple Users (e.g. commenters)
     else if (targetUsers && targetUsers.length > 0) {
       const cleanList = Array.from(new Set(
@@ -66,33 +63,18 @@ export async function sendPushNotification(arg1, arg2, arg3, arg4) {
       if (cleanList.length === 0) return false;
 
       payload.include_aliases = { external_id: cleanList };
-      payload.include_external_user_ids = cleanList;
       payload.target_channel = 'push';
-    } 
+    }
     // 3. Broadcast to All Subscribed Staff
     else {
       payload.included_segments = ['Subscribed Users'];
     }
 
-    // Try direct OneSignal REST API call first if key is present
-    if (ONESIGNAL_REST_API_KEY) {
-      const directRes = await fetch('https://onesignal.com/api/v1/notifications', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Basic ${ONESIGNAL_REST_API_KEY}`
-        },
-        body: JSON.stringify(payload)
-      });
+    console.log('[Push] Dispatching payload:', payload);
 
-      if (directRes.ok) {
-        return true;
-      }
-    }
-
-    // Fallback: Supabase Edge Function
+    // Primary: Call Supabase Edge Function to avoid client CORS blocks
     const edgeFunctionUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-push`;
-    await fetch(edgeFunctionUrl, {
+    let response = await fetch(edgeFunctionUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -101,9 +83,41 @@ export async function sendPushNotification(arg1, arg2, arg3, arg4) {
       body: JSON.stringify(payload)
     }).catch(() => null);
 
+    // If edge function returned ok, we are done
+    if (response && response.ok) {
+      const resData = await response.json().catch(() => ({}));
+      console.log('[Push] Sent successfully via Supabase Edge Function:', resData);
+      return true;
+    }
+
+    // Secondary fallback: Direct OneSignal REST API call
+    if (ONESIGNAL_REST_KEY) {
+      const authHeader = ONESIGNAL_REST_KEY.startsWith('os_v2_')
+        ? `Key ${ONESIGNAL_REST_KEY.trim()}`
+        : `Basic ${ONESIGNAL_REST_KEY.trim()}`;
+
+      const directRes = await fetch('https://api.onesignal.com/notifications', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': authHeader
+        },
+        body: JSON.stringify(payload)
+      }).catch(err => {
+        console.warn('[Push] Direct OneSignal call blocked by browser CORS:', err);
+        return null;
+      });
+
+      if (directRes && directRes.ok) {
+        const resData = await directRes.json().catch(() => ({}));
+        console.log('[Push] Direct OneSignal API success:', resData);
+        return true;
+      }
+    }
+
     return true;
   } catch (err) {
-    console.warn('[Push] Dispatch error:', err);
+    console.error('[Push] Unexpected error in sendPushNotification:', err);
     return false;
   }
 }
