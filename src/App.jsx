@@ -109,7 +109,7 @@ export default function App() {
       const [handoverRes, goodsRes, orderRes, wastageRes] = await Promise.all([
         supabase
           .from('handovers')
-          .select('id, date_str, manager_name, entry_type, general_notes, created_at')
+          .select('id, date_str, date_formatted, manager_name, entry_type, general_notes, created_at')
           .eq('venue_id', DEFAULT_VENUE_ID)
           .order('created_at', { ascending: false })
           .limit(10),
@@ -143,7 +143,7 @@ export default function App() {
           title: h.entry_type === 'Day Note' ? 'Day Note Logged' : 'Shift Handover Submitted',
           desc: `${h.manager_name}: "${(h.general_notes || 'Closing figures logged').slice(0, 50)}..."`,
           timestamp: new Date(h.created_at || Date.now()).getTime(),
-          timeStr: h.date_str || 'Today'
+          timeStr: h.date_formatted || h.date_str || 'Today'
         });
       });
 
@@ -216,22 +216,33 @@ export default function App() {
     }
   }, []);
 
-  // OneSignal registration
+  // OneSignal registration & default tag seeding
   useEffect(() => {
     if (!currentUser || !window.OneSignalDeferred) return;
     const hasPrompted = localStorage.getItem('wst_push_prompted');
 
     window.OneSignalDeferred.push(async function(OneSignal) {
       const cleanName = currentUser.name.trim();
+
       if (typeof OneSignal.login === 'function') {
         await OneSignal.login(cleanName);
       }
       if (OneSignal.User?.addAlias) {
         await OneSignal.User.addAlias("external_id", cleanName);
       }
-      if (OneSignal.User?.addTag) {
-        await OneSignal.User.addTag("role", currentUser.role);
+      if (OneSignal.User?.addTags) {
+        await OneSignal.User.addTags({
+          user_name: cleanName,
+          role: currentUser.role || 'Staff',
+          notify_handover: '1',
+          notify_orders: '1',
+          notify_goods: '1',
+          notify_my_diary_comments: '1',
+          notify_thread_comments: '1',
+          notify_mentions: '1'
+        });
       }
+
       const isOptedIn = await OneSignal.User?.PushSubscription?.optedIn;
       setPushEnabled(Boolean(isOptedIn));
       if (!isOptedIn && !hasPrompted) {
@@ -242,8 +253,7 @@ export default function App() {
 
   const triggerPushNotification = async (arg1, arg2, arg3) => {
     if (typeof arg1 === 'object' && arg1 !== null) {
-      const { title, message, targetManager = null } = arg1;
-      await sendPushNotification(title, message, targetManager, { module: activeModule });
+      await sendPushNotification(arg1);
     } else {
       await sendPushNotification(arg1, arg2, arg3, { module: activeModule });
     }
@@ -451,7 +461,6 @@ export default function App() {
             setActiveModule('hub');
           }}
           onLogout={handleLogout}
-          onSendNotification={triggerPushNotification}
         />
       </div>
     );
@@ -489,7 +498,6 @@ export default function App() {
           currentUser={currentUser}
           onBackToHub={() => setActiveModule('hub')}
           onLogout={handleLogout}
-          onSendNotification={triggerPushNotification}
         />
       </div>
     );
@@ -502,7 +510,6 @@ export default function App() {
           currentUser={currentUser}
           onBackToHub={() => setActiveModule('hub')}
           onLogout={handleLogout}
-          onSendNotification={triggerPushNotification}
         />
       </div>
     );
@@ -904,7 +911,7 @@ export default function App() {
                         {latestHandover.general_notes || 'All closing routines complete.'}
                       </p>
                       <span className="text-[10px] text-neutral-400 block font-mono">
-                        {latestHandover.manager_name} • {latestHandover.date_str || 'Today'}
+                        {latestHandover.manager_name} • {latestHandover.date_formatted || latestHandover.date_str || 'Today'}
                       </span>
                     </>
                   ) : (
@@ -1029,7 +1036,10 @@ export default function App() {
             <div className="space-y-2 pt-1">
               <button
                 type="button"
-                onClick={handleEnablePushFromModal}
+                onClick={() => {
+                  localStorage.setItem('wst_push_prompted', 'true');
+                  setShowFirstOpenPushModal(false);
+                }}
                 className="w-full py-2.5 bg-black hover:bg-neutral-800 text-white rounded-xl text-xs font-bold transition shadow-sm active:scale-95"
               >
                 Allow Notifications
