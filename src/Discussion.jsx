@@ -17,6 +17,7 @@ import {
 import { useTwoFingerSwipe } from './useTwoFingerSwipe';
 import { supabase, DEFAULT_VENUE_ID } from './lib/db';
 import ThreadDrawer from './ThreadDrawer';
+import MentionInput from './MentionInput';
 
 function formatDateSafe(val, type = 'time') {
   if (!val) return 'Recently';
@@ -77,7 +78,6 @@ export default function Discussion({ currentUser, onBackToHub, onLogout }) {
   useEffect(() => {
     fetchThreads();
 
-    // Isolated Realtime Listener mounted ONLY while Discussion is open
     const channel = supabase
       .channel('discussion_realtime')
       .on(
@@ -94,7 +94,6 @@ export default function Discussion({ currentUser, onBackToHub, onLogout }) {
     };
   }, []);
 
-  // Filtered Threads with complete null-guards
   const filteredThreads = useMemo(() => {
     const q = (searchQuery || '').toLowerCase().trim();
     return (threads || []).filter((t) => {
@@ -108,21 +107,18 @@ export default function Discussion({ currentUser, onBackToHub, onLogout }) {
     });
   }, [threads, searchQuery]);
 
-  // Section 1: Top Pinned Shelf
   const pinnedThreads = useMemo(() => {
     return filteredThreads.filter(
       (t) => (t.status || 'open') === 'open' && (t.is_pinned || t.severity === 'critical')
     );
   }, [filteredThreads]);
 
-  // Section 2: Active Action Feed
   const activeActionThreads = useMemo(() => {
     return filteredThreads.filter(
       (t) => (t.status || 'open') === 'open' && !t.is_pinned && t.severity !== 'critical'
     );
   }, [filteredThreads]);
 
-  // Section 3: Resolved / Archive
   const resolvedThreads = useMemo(() => {
     return filteredThreads.filter((t) => t.status === 'resolved');
   }, [filteredThreads]);
@@ -135,6 +131,13 @@ export default function Discussion({ currentUser, onBackToHub, onLogout }) {
     const authorName = currentUser?.name || 'Staff';
     const authorId = currentUser?.name || 'anonymous';
 
+    // Auto-detect @mentions inside title/snippet to auto-assign
+    let autoAssigned = newAssignedTo.trim() || 'Next Shift Openers';
+    const match = newTitle.match(/@(\w+)/) || newSnippet.match(/@(\w+)/);
+    if (match && match[1]) {
+      autoAssigned = match[1];
+    }
+
     try {
       const payload = {
         venue_id: DEFAULT_VENUE_ID,
@@ -142,7 +145,7 @@ export default function Discussion({ currentUser, onBackToHub, onLogout }) {
         snippet: newSnippet.trim() || null,
         topic_type: newTopicType,
         severity: newSeverity,
-        assigned_to: newAssignedTo.trim() || 'Next Shift Openers',
+        assigned_to: autoAssigned,
         author_id: authorId,
         author_name: authorName,
         is_pinned: newSeverity === 'critical' || newTopicType === 'team'
@@ -409,7 +412,7 @@ export default function Discussion({ currentUser, onBackToHub, onLogout }) {
         />
       )}
 
-      {/* Create Action Modal */}
+      {/* Create Action Modal with Autocomplete @mentions */}
       {showNewModal && (
         <div className="fixed inset-0 z-60 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white w-full max-w-sm rounded-3xl p-5 space-y-3.5 shadow-2xl border border-gray-200 animate-in zoom-in-95 duration-150">
@@ -434,27 +437,28 @@ export default function Discussion({ currentUser, onBackToHub, onLogout }) {
             <form onSubmit={handleCreateThread} className="space-y-3 text-xs">
               <div>
                 <label className="text-[9px] font-bold text-gray-500 uppercase block mb-1">
-                  Title / Action *
+                  Title / Action * (Type @ for staff)
                 </label>
-                <input
-                  type="text"
+                <MentionInput
+                  as="input"
                   required
-                  placeholder="e.g. Glasswasher chemical pump leaking"
+                  placeholder="e.g. @Luca please reset glasswasher breaker"
                   value={newTitle}
-                  onChange={(e) => setNewTitle(e.target.value)}
+                  onChange={setNewTitle}
                   className="w-full bg-[#EDEDED] py-2 px-3 rounded-xl text-xs font-bold text-gray-900 focus:outline-none"
                 />
               </div>
 
               <div>
                 <label className="text-[9px] font-bold text-gray-500 uppercase block mb-1">
-                  Handover Snippet / Context (Optional)
+                  Context / Notes (Optional)
                 </label>
-                <textarea
+                <MentionInput
+                  as="textarea"
                   rows={2}
-                  placeholder="e.g. Started dripping during Friday close around 1am."
+                  placeholder="e.g. Pump started dripping during Sunday close..."
                   value={newSnippet}
-                  onChange={(e) => setNewSnippet(e.target.value)}
+                  onChange={setNewSnippet}
                   className="w-full bg-[#EDEDED] p-2.5 rounded-xl text-xs leading-relaxed focus:outline-none resize-none"
                 />
               </div>
@@ -464,11 +468,11 @@ export default function Discussion({ currentUser, onBackToHub, onLogout }) {
                   <label className="text-[9px] font-bold text-gray-500 uppercase block mb-1">
                     Assignee (@User)
                   </label>
-                  <input
-                    type="text"
+                  <MentionInput
+                    as="input"
                     placeholder="e.g. Luca or Openers"
                     value={newAssignedTo}
-                    onChange={(e) => setNewAssignedTo(e.target.value)}
+                    onChange={setNewAssignedTo}
                     className="w-full bg-[#EDEDED] py-1.5 px-2.5 rounded-xl text-xs font-semibold focus:outline-none"
                   />
                 </div>

@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { supabase } from './lib/db';
 import { sendPushNotification } from './lib/notifications';
+import MentionInput from './MentionInput';
 
 function formatDrawerTime(val) {
   if (!val) return 'Just now';
@@ -71,7 +72,6 @@ export default function ThreadDrawer({
 
     if (!thread?.id) return;
 
-    // Isolated realtime channel strictly inside drawer
     const channel = supabase
       .channel(`thread:${thread.id}`)
       .on(
@@ -314,7 +314,7 @@ export default function ThreadDrawer({
             <p className="text-center py-6 text-xs text-gray-400 italic">Syncing action thread...</p>
           ) : messages.length === 0 ? (
             <p className="text-center py-6 text-xs text-gray-400 italic">
-              No replies yet. Post an update or tag a manager using @name.
+              No replies yet. Type @ to assign or tag a staff member.
             </p>
           ) : (
             messages.map((msg) => {
@@ -345,22 +345,24 @@ export default function ThreadDrawer({
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Reply Input Bar */}
+        {/* Reply Input Bar with Auto @mention picker */}
         <form
           onSubmit={handleSendReply}
           className="p-3 border-t border-gray-100 bg-white flex items-center space-x-2 pb-[max(1rem,env(safe-area-inset-bottom))]"
         >
-          <input
-            type="text"
-            value={replyText}
-            onChange={(e) => setReplyText(e.target.value)}
-            placeholder="Reply or re-assign with @Luca..."
-            className="flex-1 bg-[#EDEDED] py-2 px-3 rounded-xl text-xs placeholder-gray-400 focus:outline-none"
-          />
+          <div className="flex-1">
+            <MentionInput
+              as="input"
+              value={replyText}
+              onChange={setReplyText}
+              placeholder="Type @ to mention Luca, Josh, Matt..."
+              className="w-full bg-[#EDEDED] py-2 px-3 rounded-xl text-xs placeholder-gray-400 focus:outline-none"
+            />
+          </div>
           <button
             type="submit"
             disabled={!replyText.trim() || sending}
-            className="p-2 bg-black hover:bg-neutral-800 disabled:opacity-30 text-white rounded-xl transition"
+            className="p-2 bg-black hover:bg-neutral-800 disabled:opacity-30 text-white rounded-xl transition flex-shrink-0"
           >
             <Send className="w-4 h-4" />
           </button>
@@ -389,7 +391,7 @@ export default function ThreadDrawer({
                     required
                     value={resolutionNote}
                     onChange={(e) => setResolutionNote(e.target.value)}
-                    placeholder="e.g. Cleared drainage pipe and reset pump. Working normally."
+                    placeholder="e.g. Reset breaker and checked pressure. Running fine."
                     className="w-full bg-[#EDEDED] p-2.5 rounded-xl text-xs leading-relaxed focus:outline-none resize-none"
                   />
                 </div>
