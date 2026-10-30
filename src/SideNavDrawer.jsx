@@ -17,7 +17,8 @@ import {
   FileSpreadsheet,
   Receipt,
   DollarSign,
-  PieChart
+  PieChart,
+  MessageSquare
 } from 'lucide-react';
 
 function DrawerLogo({ className = "w-7 h-7" }) {
@@ -54,6 +55,7 @@ export default function SideNavDrawer({
       title: 'Daily Paperwork',
       items: [
         { id: 'handover', label: 'Diary', icon: BookOpen, color: 'text-amber-600', bg: 'bg-amber-50' },
+        { id: 'discussions', label: 'Discussions & Actions', icon: MessageSquare, color: 'text-purple-600', bg: 'bg-purple-50' },
         { id: 'petty', label: 'Cash Up', icon: Coins, color: 'text-emerald-700', bg: 'bg-emerald-50' },
         { id: 'wastage', label: 'Spillage & Wastage', icon: TrendingDown, color: 'text-rose-600', bg: 'bg-rose-50' }
       ]

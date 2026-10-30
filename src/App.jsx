@@ -8,6 +8,7 @@ import CatalogManagerApp from './CatalogManagerApp';
 import PrepCalculatorApp from './PrepCalculatorApp';
 import ProduceOrderApp from './ProduceOrderApp';
 import ReportsApp from './ReportsApp';
+import Discussion from './Discussion';
 import PreferencesApp from './PreferencesApp';
 import Settings from './Settings';
 import SideNavDrawer from './SideNavDrawer';
@@ -31,7 +32,8 @@ import {
   TrendingDown,
   FlaskConical,
   Package,
-  Apple
+  Apple,
+  MessageSquare
 } from 'lucide-react';
 import { useTwoFingerSwipe } from './useTwoFingerSwipe';
 import { supabase, DEFAULT_VENUE_ID } from './lib/db';
@@ -455,6 +457,18 @@ export default function App() {
     );
   }
 
+  if (activeModule === 'discussions') {
+    return (
+      <div {...swipeHandlers} className="h-screen w-full">
+        <Discussion
+          currentUser={currentUser}
+          onBackToHub={() => setActiveModule('hub')}
+          onLogout={handleLogout}
+        />
+      </div>
+    );
+  }
+
   if (activeModule === 'petty') {
     return (
       <div {...swipeHandlers} className="h-screen w-full">
@@ -839,7 +853,7 @@ export default function App() {
                 </div>
                 <div className="space-y-1">
                   <p className="text-xs text-neutral-500">
-                    Station audits, recipe scaling &amp; produce picklists[cite: 1, 6].
+                    Station audits, recipe scaling &amp; produce picklists.
                   </p>
                   <div className="pt-3 flex items-center text-xs font-bold text-neutral-900 gap-1">
                     <FlaskConical className="w-4 h-4 text-purple-600" />
@@ -862,7 +876,7 @@ export default function App() {
                 </div>
                 <div className="space-y-1">
                   <p className="text-xs text-neutral-500">
-                    Limes, lemons, herbs &amp; chemicals with dynamic pars[cite: 5, 6].
+                    Limes, lemons, herbs &amp; chemicals with dynamic pars.
                   </p>
                   <div className="pt-3 flex items-center text-xs font-bold text-neutral-900 gap-1">
                     <Apple className="w-4 h-4 text-emerald-600" />
@@ -1015,10 +1029,7 @@ export default function App() {
             <div className="space-y-2 pt-1">
               <button
                 type="button"
-                onClick={() => {
-                  localStorage.setItem('wst_push_prompted', 'true');
-                  setShowFirstOpenPushModal(false);
-                }}
+                onClick={handleEnablePushFromModal}
                 className="w-full py-2.5 bg-black hover:bg-neutral-800 text-white rounded-xl text-xs font-bold transition shadow-sm active:scale-95"
               >
                 Allow Notifications
