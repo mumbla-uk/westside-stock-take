@@ -7,6 +7,7 @@ import SpillageAndWastage from './SpillageAndWastage';
 import CatalogManagerApp from './CatalogManagerApp';
 import PrepCalculatorApp from './PrepCalculatorApp';
 import ProduceOrderApp from './ProduceOrderApp';
+import ReportsApp from './ReportsApp';
 import PreferencesApp from './PreferencesApp';
 import Settings from './Settings';
 import SideNavDrawer from './SideNavDrawer';
@@ -53,6 +54,7 @@ function AppLogo({ className = "w-8 h-8", fallbackTextClass = "font-serif text-2
 
 export default function App() {
   const [activeModule, setActiveModule] = useState('hub');
+  const [reportType, setReportType] = useState('master');
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [deepLinkData, setDeepLinkData] = useState(null);
   const [currentUser, setCurrentUser] = useState(() => {
@@ -540,6 +542,19 @@ export default function App() {
     );
   }
 
+  if (activeModule.startsWith('report_') || activeModule === 'reports') {
+    return (
+      <div {...swipeHandlers} className="h-screen w-full">
+        <ReportsApp
+          currentUser={currentUser}
+          initialReportType={reportType}
+          onBackToHub={() => setActiveModule('hub')}
+          onLogout={handleLogout}
+        />
+      </div>
+    );
+  }
+
   if (activeModule === 'preferences') {
     return (
       <div {...swipeHandlers} className="h-screen w-full">
@@ -575,7 +590,8 @@ export default function App() {
         isOpen={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         activeModule={activeModule}
-        onNavigate={(mod) => {
+        onNavigate={(mod, repType) => {
+          if (repType) setReportType(repType);
           setActiveModule(mod);
           setDrawerOpen(false);
         }}
@@ -693,7 +709,7 @@ export default function App() {
 
         <div className="bg-white rounded-t-[36px] px-6 pt-6 pb-24 space-y-6 shadow-md -mt-2">
           
-          {/* Categorized Tools Row with Drawer Sync */}
+          {/* Categorized Tools Row */}
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-black tracking-tight text-neutral-900">Tools</h2>
