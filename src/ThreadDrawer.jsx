@@ -14,6 +14,17 @@ import {
 import { supabase } from './lib/db';
 import { sendPushNotification } from './lib/notifications';
 
+function formatDrawerTime(val) {
+  if (!val) return 'Just now';
+  try {
+    const d = new Date(val);
+    if (isNaN(d.getTime())) return 'Just now';
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  } catch {
+    return 'Just now';
+  }
+}
+
 export default function ThreadDrawer({
   thread,
   currentUser,
@@ -58,6 +69,8 @@ export default function ThreadDrawer({
   useEffect(() => {
     fetchMessages();
 
+    if (!thread?.id) return;
+
     // Isolated realtime channel strictly inside drawer
     const channel = supabase
       .channel(`thread:${thread.id}`)
@@ -95,7 +108,7 @@ export default function ThreadDrawer({
     const mentioned = matches.map((m) => m.replace('@', ''));
 
     try {
-      const { data: newMsg, error } = await supabase
+      const { error } = await supabase
         .from('thread_messages')
         .insert({
           thread_id: thread.id,
@@ -103,19 +116,15 @@ export default function ThreadDrawer({
           author_name: authorName,
           body: text,
           mentioned_users: mentioned
-        })
-        .select()
-        .single();
+        });
 
       if (error) throw error;
 
-      // Update thread timestamp
       await supabase
         .from('discussion_threads')
         .update({ updated_at: new Date().toISOString() })
         .eq('id', thread.id);
 
-      // Targeted push alerts ONLY to mentioned individuals (avoids noisy broadcast)
       if (mentioned.length > 0) {
         for (const target of mentioned) {
           if (target.toLowerCase() !== 'all' && target.toLowerCase() !== 'team') {
@@ -214,7 +223,7 @@ export default function ThreadDrawer({
                 </span>
               ) : (
                 <span className="text-[9px] font-mono font-bold uppercase bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">
-                  {thread.topic_type}
+                  {thread.topic_type || 'direct'}
                 </span>
               )}
               <span className="text-[10px] text-gray-400 font-mono">
@@ -239,7 +248,7 @@ export default function ThreadDrawer({
           <div className="flex items-center space-x-1.5">
             <User className="w-3.5 h-3.5 text-gray-400" />
             <span className="text-gray-600 text-[11px]">
-              Logged by <strong>{thread.author_name}</strong>
+              Logged by <strong>{thread.author_name || 'Staff'}</strong>
             </span>
           </div>
 
@@ -269,7 +278,6 @@ export default function ThreadDrawer({
 
         {/* Message Feed */}
         <div className="flex-1 overflow-y-auto px-5 py-3 space-y-3 touch-pan-y overscroll-contain">
-          {/* Thread Initial Handover Snippet */}
           {thread.snippet && (
             <div className="p-3 bg-neutral-50 border border-neutral-200/80 rounded-2xl space-y-1">
               <span className="text-[9px] font-mono font-bold uppercase text-gray-400 tracking-wider flex items-center space-x-1">
@@ -282,7 +290,6 @@ export default function ThreadDrawer({
             </div>
           )}
 
-          {/* Permanent Resolution Record */}
           {thread.status === 'resolved' && (
             <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-2xl space-y-1">
               <div className="flex items-center justify-between text-emerald-800 text-[10px] font-bold uppercase tracking-wider">
@@ -291,19 +298,18 @@ export default function ThreadDrawer({
                   <span>Resolution Audit Trail</span>
                 </span>
                 <span className="font-mono text-gray-500">
-                  {new Date(thread.resolved_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  {formatDrawerTime(thread.resolved_at)}
                 </span>
               </div>
               <p className="text-xs text-emerald-950 font-medium">
                 {thread.resolution_note || 'Resolved with no additional comments.'}
               </p>
               <span className="text-[9px] text-emerald-700 block font-mono">
-                Confirmed by {thread.resolved_by}
+                Confirmed by {thread.resolved_by || 'Manager'}
               </span>
             </div>
           )}
 
-          {/* Replies */}
           {loadingMessages ? (
             <p className="text-center py-6 text-xs text-gray-400 italic">Syncing action thread...</p>
           ) : messages.length === 0 ? (
@@ -319,11 +325,9 @@ export default function ThreadDrawer({
                   className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} space-y-0.5`}
                 >
                   <div className="flex items-center space-x-1 text-[9px] text-gray-400 font-mono px-1">
-                    <span className="font-bold text-gray-700">{msg.author_name}</span>
+                    <span className="font-bold text-gray-700">{msg.author_name || 'Staff'}</span>
                     <span>•</span>
-                    <span>
-                      {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                    </span>
+                    <span>{formatDrawerTime(msg.created_at)}</span>
                   </div>
                   <div
                     className={`max-w-[85%] p-3 rounded-2xl text-xs leading-relaxed ${
@@ -362,7 +366,7 @@ export default function ThreadDrawer({
           </button>
         </form>
 
-        {/* 2-Tier Resolution Modal */}
+        {/* Resolution Modal */}
         {showResolveModal && (
           <div className="fixed inset-0 z-60 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
             <div className="bg-white w-full max-w-sm rounded-3xl p-5 space-y-3.5 shadow-2xl border border-gray-200 animate-in zoom-in-95 duration-150">

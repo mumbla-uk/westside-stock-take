@@ -1,195 +1,504 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
-  X,
-  BookOpen,
-  Coins,
-  TrendingDown,
-  Apple,
-  FlaskConical,
-  ClipboardList,
-  Truck,
-  Package,
-  SlidersHorizontal,
-  Wrench,
-  UserCheck,
-  LogOut,
-  ChevronRight,
-  FileSpreadsheet,
-  Receipt,
-  DollarSign,
-  PieChart,
-  MessageSquare
+  ArrowLeft,
+  Search,
+  Plus,
+  Pin,
+  AlertCircle,
+  CheckCircle2,
+  Clock,
+  User,
+  MessageSquare,
+  ChevronDown,
+  ChevronUp,
+  RefreshCw,
+  X
 } from 'lucide-react';
+import { useTwoFingerSwipe } from './useTwoFingerSwipe';
+import { supabase, DEFAULT_VENUE_ID } from './lib/db';
+import ThreadDrawer from './ThreadDrawer';
 
-function DrawerLogo({ className = "w-7 h-7" }) {
-  const [error, setError] = useState(false);
-  if (!error) {
-    return (
-      <img
-        src="/img/icon.png"
-        alt="West Side Tavern"
-        className={`${className} object-contain rounded-lg`}
-        onError={() => setError(true)}
-      />
-    );
+function formatDateSafe(val, type = 'time') {
+  if (!val) return 'Recently';
+  try {
+    const d = new Date(val);
+    if (isNaN(d.getTime())) return 'Recently';
+    if (type === 'time') {
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+    return d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+  } catch {
+    return 'Recently';
   }
-  return (
-    <div className={`${className} rounded-lg bg-neutral-900 text-white font-serif font-bold text-xs flex items-center justify-center`}>
-      W
-    </div>
-  );
 }
 
-export default function SideNavDrawer({
-  isOpen,
-  onClose,
-  activeModule,
-  onNavigate,
-  currentUser,
-  onLogout
-}) {
-  if (!isOpen) return null;
+export default function Discussion({ currentUser, onBackToHub, onLogout }) {
+  const [threads, setThreads] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedThread, setSelectedThread] = useState(null);
+  const [showArchive, setShowArchive] = useState(false);
 
-  const NAV_SECTIONS = [
-    {
-      title: 'Daily Paperwork',
-      items: [
-        { id: 'handover', label: 'Diary', icon: BookOpen, color: 'text-amber-600', bg: 'bg-amber-50' },
-        { id: 'discussions', label: 'Discussions & Actions', icon: MessageSquare, color: 'text-purple-600', bg: 'bg-purple-50' },
-        { id: 'petty', label: 'Cash Up', icon: Coins, color: 'text-emerald-700', bg: 'bg-emerald-50' },
-        { id: 'wastage', label: 'Spillage & Wastage', icon: TrendingDown, color: 'text-rose-600', bg: 'bg-rose-50' }
-      ]
-    },
-    {
-      title: 'Fresh Produce & Prep',
-      items: [
-        { id: 'produce', label: 'Produce Order', icon: Apple, color: 'text-emerald-800', bg: 'bg-emerald-50' },
-        { id: 'prep', label: 'Prep Calculator', icon: FlaskConical, color: 'text-purple-700', bg: 'bg-purple-50' }
-      ]
-    },
-    {
-      title: 'Inventory Management',
-      items: [
-        { id: 'orders', label: 'Orders', icon: ClipboardList, color: 'text-indigo-600', bg: 'bg-indigo-50' },
-        { id: 'goods', label: 'Goods Received', icon: Truck, color: 'text-amber-700', bg: 'bg-amber-50' },
-        { id: 'catalog', label: 'Catalog Manager', icon: Package, color: 'text-blue-700', bg: 'bg-blue-50' }
-      ]
-    },
-    {
-      title: 'Reports',
-      items: [
-        { id: 'report_inventory', label: 'Inventory', icon: FileSpreadsheet, color: 'text-blue-600', bg: 'bg-blue-50', reportType: 'inventory' },
-        { id: 'report_takings', label: 'Takings', icon: Receipt, color: 'text-emerald-700', bg: 'bg-emerald-50', reportType: 'takings' },
-        { id: 'report_petty', label: 'Petty Cash', icon: DollarSign, color: 'text-teal-700', bg: 'bg-teal-50', reportType: 'petty' },
-        { id: 'report_master', label: 'Master', icon: PieChart, color: 'text-purple-700', bg: 'bg-purple-50', reportType: 'master' }
-      ]
-    },
-    {
-      title: 'Settings & Control',
-      items: [
-        { id: 'preferences', label: 'Preferences & Notifications', icon: UserCheck, color: 'text-gray-700', bg: 'bg-gray-100' },
-        { id: 'settings', label: 'App Settings & Dev Tools', icon: Wrench, color: 'text-gray-700', bg: 'bg-gray-100' }
-      ]
+  // New Thread Modal State
+  const [showNewModal, setShowNewModal] = useState(false);
+  const [newTitle, setNewTitle] = useState('');
+  const [newSnippet, setNewSnippet] = useState('');
+  const [newTopicType, setNewTopicType] = useState('direct');
+  const [newSeverity, setNewSeverity] = useState('normal');
+  const [newAssignedTo, setNewAssignedTo] = useState('Next Shift Openers');
+  const [creating, setCreating] = useState(false);
+
+  const swipeHandlers = useTwoFingerSwipe({
+    disabled: Boolean(selectedThread) || showNewModal,
+    onSwipeRight: () => {
+      if (onBackToHub) onBackToHub();
     }
-  ];
+  });
+
+  const fetchThreads = async () => {
+    setLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('discussion_threads')
+        .select('*')
+        .eq('venue_id', DEFAULT_VENUE_ID)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      setThreads(data || []);
+    } catch (err) {
+      console.warn('Could not load discussion threads:', err);
+      setThreads([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchThreads();
+
+    // Isolated Realtime Listener mounted ONLY while Discussion is open
+    const channel = supabase
+      .channel('discussion_realtime')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'discussion_threads' },
+        () => {
+          fetchThreads();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, []);
+
+  // Filtered Threads with complete null-guards
+  const filteredThreads = useMemo(() => {
+    const q = (searchQuery || '').toLowerCase().trim();
+    return (threads || []).filter((t) => {
+      if (!t) return false;
+      if (!q) return true;
+      const title = String(t.title || '').toLowerCase();
+      const assigned = String(t.assigned_to || '').toLowerCase();
+      const author = String(t.author_name || '').toLowerCase();
+      const snippet = String(t.snippet || '').toLowerCase();
+      return title.includes(q) || assigned.includes(q) || author.includes(q) || snippet.includes(q);
+    });
+  }, [threads, searchQuery]);
+
+  // Section 1: Top Pinned Shelf
+  const pinnedThreads = useMemo(() => {
+    return filteredThreads.filter(
+      (t) => (t.status || 'open') === 'open' && (t.is_pinned || t.severity === 'critical')
+    );
+  }, [filteredThreads]);
+
+  // Section 2: Active Action Feed
+  const activeActionThreads = useMemo(() => {
+    return filteredThreads.filter(
+      (t) => (t.status || 'open') === 'open' && !t.is_pinned && t.severity !== 'critical'
+    );
+  }, [filteredThreads]);
+
+  // Section 3: Resolved / Archive
+  const resolvedThreads = useMemo(() => {
+    return filteredThreads.filter((t) => t.status === 'resolved');
+  }, [filteredThreads]);
+
+  const handleCreateThread = async (e) => {
+    e.preventDefault();
+    if (!newTitle.trim() || creating) return;
+
+    setCreating(true);
+    const authorName = currentUser?.name || 'Staff';
+    const authorId = currentUser?.name || 'anonymous';
+
+    try {
+      const payload = {
+        venue_id: DEFAULT_VENUE_ID,
+        title: newTitle.trim(),
+        snippet: newSnippet.trim() || null,
+        topic_type: newTopicType,
+        severity: newSeverity,
+        assigned_to: newAssignedTo.trim() || 'Next Shift Openers',
+        author_id: authorId,
+        author_name: authorName,
+        is_pinned: newSeverity === 'critical' || newTopicType === 'team'
+      };
+
+      const { error } = await supabase
+        .from('discussion_threads')
+        .insert(payload);
+
+      if (error) throw error;
+
+      setShowNewModal(false);
+      setNewTitle('');
+      setNewSnippet('');
+      setNewSeverity('normal');
+      setNewTopicType('direct');
+      setNewAssignedTo('Next Shift Openers');
+      fetchThreads();
+    } catch (err) {
+      console.error('Error creating discussion thread:', err);
+    } finally {
+      setCreating(false);
+    }
+  };
 
   return (
-    <div className="fixed inset-0 z-50 flex">
-      {/* Backdrop */}
-      <div
-        className="fixed inset-0 bg-black/60 backdrop-blur-xs transition-opacity"
-        onClick={onClose}
-      />
-
-      {/* Drawer Container */}
-      <div className="relative w-[78%] sm:w-[50%] max-w-[340px] h-full bg-white text-gray-900 shadow-2xl flex flex-col justify-between border-r border-gray-200 z-10 select-none">
-        
-        {/* Top Header */}
-        <div className="px-5 pt-[max(1.5rem,env(safe-area-inset-top))] pb-3 border-b border-gray-100 flex items-center justify-between bg-white">
-          <div className="flex items-center space-x-2.5">
-            <DrawerLogo className="w-7 h-7" />
-            <div>
-              <span className="font-extrabold text-sm tracking-tight text-neutral-900 block leading-tight">
-                West Side Tavern
-              </span>
-              <span className="text-[10px] text-gray-400 font-mono block">Operations Hub</span>
-            </div>
+    <div
+      {...swipeHandlers}
+      className="flex flex-col h-[100dvh] w-full max-w-md mx-auto bg-white text-black font-sans antialiased border-x border-gray-200 overflow-hidden relative select-none"
+    >
+      {/* Top Bar */}
+      <header className="flex items-center justify-between px-5 pt-[max(1.5rem,env(safe-area-inset-top))] pb-2 border-b border-gray-100 flex-shrink-0 bg-white z-20">
+        <div className="flex items-center space-x-2">
+          {onBackToHub && (
+            <button
+              onClick={onBackToHub}
+              className="mr-0.5 p-1 -ml-1 text-gray-500 hover:text-black rounded-lg transition"
+              title="Return to Hub"
+            >
+              <ArrowLeft className="w-4 h-4" />
+            </button>
+          )}
+          <div className="w-6 h-6 rounded bg-neutral-900 text-white flex items-center justify-center font-serif text-xs font-bold">
+            W
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-1.5 text-gray-400 hover:text-black rounded-lg transition active:scale-95"
-            aria-label="Close menu"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-
-        {/* Section List */}
-        <div className="flex-1 overflow-y-auto px-4 py-3 space-y-5 touch-pan-y overscroll-contain">
-          {NAV_SECTIONS.map((sec, idx) => (
-            <div key={idx} className="space-y-1">
-              <span className="text-[9px] font-mono font-bold uppercase tracking-wider text-gray-400 block px-2 mb-1.5">
-                {sec.title}
-              </span>
-              <div className="space-y-0.5">
-                {sec.items.map((item) => {
-                  const Icon = item.icon;
-                  const isActive = activeModule === item.id;
-                  return (
-                    <button
-                      key={item.id}
-                      type="button"
-                      onClick={() => {
-                        onNavigate(item.id, item.reportType);
-                        onClose();
-                      }}
-                      className={`w-full flex items-center justify-between px-2.5 py-2 rounded-xl text-xs font-bold transition ${
-                        isActive
-                          ? 'bg-neutral-900 text-white shadow-xs'
-                          : 'text-gray-700 hover:bg-gray-100 active:scale-[0.98]'
-                      }`}
-                    >
-                      <div className="flex items-center space-x-2.5 min-w-0">
-                        <div className={`w-7 h-7 rounded-lg flex items-center justify-center ${isActive ? 'bg-white/20 text-white' : `${item.bg} ${item.color}`}`}>
-                          <Icon className="w-4 h-4 stroke-[2.2]" />
-                        </div>
-                        <span className="truncate">{item.label}</span>
-                      </div>
-                      <ChevronRight className={`w-3.5 h-3.5 ${isActive ? 'text-white' : 'text-gray-400'}`} />
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* User Footer */}
-        <div className="p-4 border-t border-gray-100 bg-gray-50 flex items-center justify-between pb-[max(1rem,env(safe-area-inset-bottom))]">
-          <div className="space-y-0.5 min-w-0 pr-2">
-            <span className="text-xs font-black text-gray-900 block truncate">
-              {currentUser?.name || 'Staff Member'}
-            </span>
-            <span className="text-[10px] text-gray-400 font-mono capitalize block truncate">
-              {currentUser?.role || 'Duty Manager'}
+          <div>
+            <h1 className="font-extrabold text-base tracking-tight text-gray-900 leading-tight">
+              Action Threads
+            </h1>
+            <span className="text-[10px] text-gray-400 font-mono block">
+              Asynchronous Shift Continuity
             </span>
           </div>
+        </div>
 
+        <div className="flex items-center space-x-1.5">
           <button
-            type="button"
-            onClick={() => {
-              onClose();
-              onLogout();
-            }}
-            className="flex items-center space-x-1 py-1.5 px-2.5 bg-white border border-gray-200 rounded-xl text-[11px] font-bold text-rose-600 hover:bg-rose-50 transition active:scale-95 shadow-2xs"
-            title="Log Out"
+            onClick={fetchThreads}
+            className="p-1.5 text-gray-500 hover:text-black rounded-lg transition"
+            title="Refresh"
           >
-            <LogOut className="w-3.5 h-3.5" />
-            <span>Exit</span>
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
           </button>
+          <button
+            onClick={() => setShowNewModal(true)}
+            className="flex items-center space-x-1 py-1.5 px-3 rounded-xl bg-black text-white hover:bg-neutral-800 text-xs font-bold transition active:scale-95 shadow-xs"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>New Action</span>
+          </button>
+        </div>
+      </header>
+
+      {/* Search Bar */}
+      <div className="px-5 py-2 border-b border-gray-100 bg-white flex-shrink-0">
+        <div className="relative">
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search tasks, snags or @assignee..."
+            className="w-full bg-[#EDEDED] py-1.5 pl-3 pr-8 rounded-xl text-xs placeholder-gray-400 focus:outline-none"
+          />
+          {searchQuery ? (
+            <button
+              onClick={() => setSearchQuery('')}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-black"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          ) : (
+            <Search className="w-3.5 h-3.5 absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+          )}
         </div>
       </div>
+
+      {/* Main Action Feed Container */}
+      <div className="flex-1 overflow-y-auto px-5 py-3 space-y-4 pb-28 touch-pan-y overscroll-contain">
+        {/* SECTION 1: TOP PINNED SHELF */}
+        {pinnedThreads.length > 0 && (
+          <div className="space-y-2">
+            <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-rose-600 flex items-center space-x-1 px-1">
+              <Pin className="w-3 h-3" />
+              <span>Pinned Decisions &amp; Critical Snags</span>
+            </span>
+
+            <div className="space-y-2">
+              {pinnedThreads.map((t) => (
+                <div
+                  key={t.id}
+                  onClick={() => setSelectedThread(t)}
+                  className={`p-3.5 rounded-2xl border cursor-pointer transition active:scale-[0.98] shadow-xs ${
+                    t.severity === 'critical'
+                      ? 'bg-rose-50/70 border-rose-300'
+                      : 'bg-amber-50/70 border-amber-300'
+                  }`}
+                >
+                  <div className="flex items-start justify-between">
+                    <div className="space-y-1 pr-2">
+                      <div className="flex items-center space-x-1.5">
+                        <span
+                          className={`w-2 h-2 rounded-full ${
+                            t.severity === 'critical' ? 'bg-rose-600 animate-pulse' : 'bg-amber-500'
+                          }`}
+                        />
+                        <span className="font-extrabold text-xs text-gray-900 block leading-tight">
+                          {t.title || 'Untitled Action'}
+                        </span>
+                      </div>
+                      {t.snippet && (
+                        <p className="text-[11px] text-gray-600 line-clamp-1 italic">
+                          "{t.snippet}"
+                        </p>
+                      )}
+                    </div>
+
+                    <span className="text-[9px] font-mono font-bold uppercase bg-white px-2 py-0.5 rounded-full border border-gray-200 text-gray-800 flex-shrink-0">
+                      @{t.assigned_to || 'Openers'}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between text-[10px] text-gray-500 font-mono mt-2 pt-1.5 border-t border-black/5">
+                    <span>By {t.author_name || 'Staff'}</span>
+                    <span>{formatDateSafe(t.created_at, 'time')}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* SECTION 2: ACTIVE ACTION FEED */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between px-1">
+            <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-gray-400">
+              Active Action Feed ({activeActionThreads.length})
+            </span>
+            <span className="text-[10px] font-mono text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded font-bold">
+              Action Required
+            </span>
+          </div>
+
+          {activeActionThreads.length === 0 ? (
+            <div className="p-8 border border-dashed border-gray-200 rounded-3xl text-center text-xs text-gray-400">
+              All tasks resolved. Nightly handover is clean.
+            </div>
+          ) : (
+            <div className="divide-y divide-gray-100 border border-gray-200 rounded-3xl bg-white overflow-hidden shadow-xs">
+              {activeActionThreads.map((t) => (
+                <div
+                  key={t.id}
+                  onClick={() => setSelectedThread(t)}
+                  className="p-3.5 cursor-pointer hover:bg-gray-50/80 transition group space-y-1"
+                >
+                  <div className="flex items-start justify-between">
+                    <span className="font-bold text-xs text-gray-900 group-hover:text-black leading-snug">
+                      {t.title || 'Action Required'}
+                    </span>
+                    <span className="text-[9px] font-mono font-bold text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded">
+                      @{t.assigned_to || 'Next Shift'}
+                    </span>
+                  </div>
+
+                  {t.snippet && (
+                    <p className="text-[11px] text-gray-500 line-clamp-1 italic">
+                      "{t.snippet}"
+                    </p>
+                  )}
+
+                  <div className="flex items-center justify-between text-[10px] text-gray-400 font-mono pt-1">
+                    <span>
+                      {t.author_name || 'Staff'} • {formatDateSafe(t.created_at, 'date')}
+                    </span>
+                    <span className="flex items-center space-x-1 text-gray-500 font-semibold">
+                      <MessageSquare className="w-3 h-3" />
+                      <span>Open Thread</span>
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* SECTION 4: HISTORICAL / RESOLVED ARCHIVE */}
+        <div className="space-y-2 pt-2 border-t border-gray-100">
+          <button
+            onClick={() => setShowArchive(!showArchive)}
+            className="w-full flex items-center justify-between text-[10px] font-mono font-bold uppercase tracking-wider text-gray-500 py-1 px-1 hover:text-black transition"
+          >
+            <span>Resolved Archive ({resolvedThreads.length})</span>
+            {showArchive ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+          </button>
+
+          {showArchive && (
+            <div className="divide-y divide-gray-100 border border-gray-200 rounded-2xl bg-gray-50/60 overflow-hidden text-xs">
+              {resolvedThreads.length === 0 ? (
+                <p className="p-4 text-center text-gray-400 text-[11px] italic">No resolved records.</p>
+              ) : (
+                resolvedThreads.map((t) => (
+                  <div
+                    key={t.id}
+                    onClick={() => setSelectedThread(t)}
+                    className="p-3 cursor-pointer hover:bg-gray-100/70 transition flex items-center justify-between"
+                  >
+                    <div className="space-y-0.5 min-w-0 pr-2">
+                      <div className="flex items-center space-x-1.5">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 flex-shrink-0" />
+                        <span className="font-bold text-gray-800 truncate block text-[11px]">{t.title}</span>
+                      </div>
+                      <span className="text-[9px] text-gray-400 font-mono block truncate">
+                        Resolved by {t.resolved_by || 'Staff'} • "{t.resolution_note || 'Closed'}"
+                      </span>
+                    </div>
+
+                    <span className="text-[9px] font-mono text-gray-400 flex-shrink-0">
+                      {formatDateSafe(t.resolved_at || t.created_at, 'date')}
+                    </span>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Floating Hub Nav */}
+      <nav className="fixed bottom-2 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-[390px] z-30 rounded-2xl bg-[#111111]/95 backdrop-blur-md text-white py-2 px-3 flex justify-around items-center text-xs font-semibold shadow-2xl border border-white/10 select-none pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))]">
+        <button
+          onClick={onBackToHub}
+          className="flex-1 py-1 text-center rounded-xl transition text-neutral-400 hover:text-white"
+        >
+          Return to Hub
+        </button>
+      </nav>
+
+      {/* Nested Slide-Over Thread Drawer */}
+      {selectedThread && (
+        <ThreadDrawer
+          thread={selectedThread}
+          currentUser={currentUser}
+          onClose={() => setSelectedThread(null)}
+          onThreadUpdated={fetchThreads}
+        />
+      )}
+
+      {/* Create Action Modal */}
+      {showNewModal && (
+        <div className="fixed inset-0 z-60 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-sm rounded-3xl p-5 space-y-3.5 shadow-2xl border border-gray-200 animate-in zoom-in-95 duration-150">
+            <div className="flex justify-between items-start">
+              <div>
+                <span className="text-[9px] font-mono font-bold uppercase text-purple-600 block">
+                  Operations Handover
+                </span>
+                <h3 className="text-base font-extrabold text-gray-900 leading-tight">
+                  New Action Thread
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowNewModal(false)}
+                className="p-1 text-gray-400 hover:text-black"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateThread} className="space-y-3 text-xs">
+              <div>
+                <label className="text-[9px] font-bold text-gray-500 uppercase block mb-1">
+                  Title / Action *
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Glasswasher chemical pump leaking"
+                  value={newTitle}
+                  onChange={(e) => setNewTitle(e.target.value)}
+                  className="w-full bg-[#EDEDED] py-2 px-3 rounded-xl text-xs font-bold text-gray-900 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="text-[9px] font-bold text-gray-500 uppercase block mb-1">
+                  Handover Snippet / Context (Optional)
+                </label>
+                <textarea
+                  rows={2}
+                  placeholder="e.g. Started dripping during Friday close around 1am."
+                  value={newSnippet}
+                  onChange={(e) => setNewSnippet(e.target.value)}
+                  className="w-full bg-[#EDEDED] p-2.5 rounded-xl text-xs leading-relaxed focus:outline-none resize-none"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-[9px] font-bold text-gray-500 uppercase block mb-1">
+                    Assignee (@User)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Luca or Openers"
+                    value={newAssignedTo}
+                    onChange={(e) => setNewAssignedTo(e.target.value)}
+                    className="w-full bg-[#EDEDED] py-1.5 px-2.5 rounded-xl text-xs font-semibold focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="text-[9px] font-bold text-gray-500 uppercase block mb-1">
+                    Severity
+                  </label>
+                  <select
+                    value={newSeverity}
+                    onChange={(e) => setNewSeverity(e.target.value)}
+                    className="w-full bg-[#EDEDED] py-1.5 px-2 rounded-xl text-xs font-semibold focus:outline-none"
+                  >
+                    <option value="normal">Normal</option>
+                    <option value="high">High</option>
+                    <option value="critical">Critical (Pin to top)</option>
+                  </select>
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={!newTitle.trim() || creating}
+                className="w-full py-2.5 bg-black hover:bg-neutral-800 disabled:opacity-40 text-white rounded-xl text-xs font-bold transition flex items-center justify-center space-x-1 shadow-sm mt-2"
+              >
+                <span>{creating ? 'Creating...' : 'Post Action Thread'}</span>
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
