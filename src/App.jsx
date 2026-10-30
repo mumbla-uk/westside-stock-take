@@ -106,7 +106,6 @@ export default function App() {
 
   const fetchLiveActivity = async () => {
     try {
-      // Use Promise.allSettled so an error on one table does not wipe the entire feed
       const [handoverRes, goodsRes, orderRes, wastageRes] = await Promise.allSettled([
         supabase
           .from('handovers')
@@ -208,7 +207,6 @@ export default function App() {
     if (currentUser) {
       fetchLiveActivity();
 
-      // Realtime listener to update the Notification Center feed on new inserts
       const channel = supabase
         .channel('public_activity_feed')
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'handovers' }, () => fetchLiveActivity())
@@ -239,37 +237,48 @@ export default function App() {
     }
   }, []);
 
-  // OneSignal registration & tag seeding on login
+  // OneSignal registration & tag seeding (omits reserved external_id alias)
   useEffect(() => {
     if (!currentUser || !window.OneSignalDeferred) return;
     const hasPrompted = localStorage.getItem('wst_push_prompted');
 
     window.OneSignalDeferred.push(async function(OneSignal) {
-      const cleanName = currentUser.name.trim();
+      try {
+        const cleanName = currentUser.name.trim();
 
-      if (typeof OneSignal.login === 'function') {
-        await OneSignal.login(cleanName);
-      }
-      if (OneSignal.User?.addAlias) {
-        await OneSignal.User.addAlias("external_id", cleanName);
-      }
-      if (OneSignal.User?.addTags) {
-        await OneSignal.User.addTags({
-          user_name: cleanName,
-          role: currentUser.role || 'Staff',
-          notify_handover: '1',
-          notify_orders: '1',
-          notify_goods: '1',
-          notify_my_diary_comments: '1',
-          notify_thread_comments: '1',
-          notify_mentions: '1'
-        });
-      }
+        // 1. OneSignal.login automatically manages external_id internally
+        if (typeof OneSignal.login === 'function') {
+          await OneSignal.login(cleanName);
+        }
 
-      const isOptedIn = await OneSignal.User?.PushSubscription?.optedIn;
-      setPushEnabled(Boolean(isOptedIn));
-      if (!isOptedIn && !hasPrompted) {
-        setShowFirstOpenPushModal(true);
+        // 2. Set user tags for operational rules
+        if (OneSignal.User?.addTags) {
+          await OneSignal.User.addTags({
+            user_name: cleanName,
+            role: currentUser.role || 'Staff',
+            notify_handover: '1',
+            notify_orders: '1',
+            notify_goods: '1',
+            notify_my_diary_comments: '1',
+            notify_thread_comments: '1',
+            notify_mentions: '1'
+          });
+        }
+
+        // 3. Request push permission if not granted
+        const isOptedIn = await OneSignal.User?.PushSubscription?.optedIn;
+        setPushEnabled(Boolean(isOptedIn));
+
+        if (!isOptedIn) {
+          if (OneSignal.Notifications?.permission !== true && typeof OneSignal.Notifications?.requestPermission === 'function') {
+            await OneSignal.Notifications.requestPermission();
+          }
+          if (!hasPrompted) {
+            setShowFirstOpenPushModal(true);
+          }
+        }
+      } catch (err) {
+        console.warn("OneSignal initialization error:", err);
       }
     });
   }, [currentUser]);

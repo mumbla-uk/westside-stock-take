@@ -1,5 +1,4 @@
 exports.handler = async (event) => {
-  // Handle CORS
   if (event.httpMethod === 'OPTIONS') {
     return {
       statusCode: 200,
@@ -20,10 +19,9 @@ exports.handler = async (event) => {
     };
   }
 
-  // Check possible env variable names
   const REST_KEY = 
     process.env.ONESIGNAL_REST_KEY || 
-    process.env.VITE_ONESIGNAL_REST_KEY || 
+    process.env.VITE_ONESIGNAL_REST_KEY ||
     process.env.ONESIGNAL_API_KEY;
 
   if (!REST_KEY) {
@@ -31,24 +29,27 @@ exports.handler = async (event) => {
     return {
       statusCode: 500,
       headers: { 'Access-Control-Allow-Origin': '*' },
-      body: JSON.stringify({ error: 'Server configuration error: Missing ONESIGNAL_REST_KEY' })
+      body: JSON.stringify({ error: 'Missing ONESIGNAL_REST_KEY in Netlify environment variables' })
     };
   }
 
   try {
     const payload = JSON.parse(event.body);
 
+    const authHeader = REST_KEY.trim().startsWith('os_v2_')
+      ? `Key ${REST_KEY.trim()}`
+      : `Basic ${REST_KEY.trim()}`;
+
     const response = await fetch('https://onesignal.com/api/v1/notifications', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Basic ${REST_KEY.trim()}`
+        'Authorization': authHeader
       },
       body: JSON.stringify(payload)
     });
 
     const resData = await response.json();
-    console.log('[Netlify Function] OneSignal API response:', response.status, resData);
 
     return {
       statusCode: response.status,
@@ -59,7 +60,7 @@ exports.handler = async (event) => {
       body: JSON.stringify(resData)
     };
   } catch (err) {
-    console.error('[Netlify Function] Exception:', err);
+    console.error('[Netlify Function] Error forwarding to OneSignal:', err);
     return {
       statusCode: 500,
       headers: { 'Access-Control-Allow-Origin': '*' },

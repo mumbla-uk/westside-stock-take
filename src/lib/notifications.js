@@ -1,10 +1,10 @@
 import { supabase, DEFAULT_VENUE_ID } from './db';
 
 const ONESIGNAL_APP_ID = import.meta.env.VITE_ONESIGNAL_APP_ID || 'c34b17e4-c5a4-49c5-8ee8-ef0736e65a6e';
-const ONESIGNAL_REST_KEY = import.meta.env.VITE_ONESIGNAL_REST_KEY || '';
 
 /**
  * Universal Push Notification Dispatcher
+ * Directly calls the Netlify serverless proxy to avoid browser CORS blocks.
  */
 export async function sendPushNotification(arg1, arg2, arg3, arg4) {
   let title, message, targetUser, targetUsers, prefKey, excludeUser, dataPayload;
@@ -43,7 +43,7 @@ export async function sendPushNotification(arg1, arg2, arg3, arg4) {
       }
     };
 
-    // 1. Direct Target to a Single User (@mention or specific user)
+    // 1. Direct Target to a Single User (@mention or specific author)
     if (targetUser) {
       const cleanTarget = String(targetUser).replace('@', '').trim();
       if (excludeUser && cleanTarget.toLowerCase() === excludeUser.toLowerCase()) {
@@ -51,7 +51,7 @@ export async function sendPushNotification(arg1, arg2, arg3, arg4) {
       }
       payload.include_aliases = { external_id: [cleanTarget] };
       payload.target_channel = 'push';
-    }
+    } 
     // 2. Direct Target to Multiple Users (e.g. commenters)
     else if (targetUsers && targetUsers.length > 0) {
       const cleanList = Array.from(new Set(
@@ -64,66 +64,34 @@ export async function sendPushNotification(arg1, arg2, arg3, arg4) {
 
       payload.include_aliases = { external_id: cleanList };
       payload.target_channel = 'push';
-    }
+    } 
     // 3. Broadcast to All Subscribed Staff
     else {
       payload.included_segments = ['Subscribed Users'];
     }
 
-    console.log('[Push] Dispatching payload:', payload);
-
-    // Primary: Call Supabase Edge Function to avoid client CORS blocks
-    const edgeFunctionUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-push`;
-    let response = await fetch(edgeFunctionUrl, {
+    // Call serverless proxy (avoids browser CORS restrictions)
+    const response = await fetch('/.netlify/functions/send-push', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
-    }).catch(() => null);
+    });
 
-    // If edge function returned ok, we are done
-    if (response && response.ok) {
-      const resData = await response.json().catch(() => ({}));
-      console.log('[Push] Sent successfully via Supabase Edge Function:', resData);
-      return true;
-    }
-
-    // Secondary fallback: Direct OneSignal REST API call
-    if (ONESIGNAL_REST_KEY) {
-      const authHeader = ONESIGNAL_REST_KEY.startsWith('os_v2_')
-        ? `Key ${ONESIGNAL_REST_KEY.trim()}`
-        : `Basic ${ONESIGNAL_REST_KEY.trim()}`;
-
-      const directRes = await fetch('https://api.onesignal.com/notifications', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': authHeader
-        },
-        body: JSON.stringify(payload)
-      }).catch(err => {
-        console.warn('[Push] Direct OneSignal call blocked by browser CORS:', err);
-        return null;
-      });
-
-      if (directRes && directRes.ok) {
-        const resData = await directRes.json().catch(() => ({}));
-        console.log('[Push] Direct OneSignal API success:', resData);
-        return true;
-      }
+    if (!response.ok) {
+      const errText = await response.text();
+      console.warn('[Push] Proxy dispatch failed:', errText);
+      return false;
     }
 
     return true;
   } catch (err) {
-    console.error('[Push] Unexpected error in sendPushNotification:', err);
+    console.warn('[Push] Dispatch error:', err);
     return false;
   }
 }
 
 /**
- * Scans text for @mentions and fires direct push notifications
+ * Scans text for @mentions and triggers direct pushes
  */
 export async function dispatchMentionsFromText(text, authorName, contextTitle, dataPayload = {}) {
   if (!text || !text.includes('@')) return;
