@@ -1,6 +1,7 @@
 import { supabase, DEFAULT_VENUE_ID } from './db';
 
-const ONESIGNAL_APP_ID = import.meta.env.VITE_ONESIGNAL_APP_ID || '';
+// Fallback to your actual OneSignal App ID if env var is missing
+const ONESIGNAL_APP_ID = import.meta.env.VITE_ONESIGNAL_APP_ID || 'c34b17e4-c5a4-49c5-8ee8-ef0736e65a6e';
 
 /**
  * Universal Push Notification Dispatcher
@@ -29,7 +30,7 @@ export async function sendPushNotification(arg1, arg2, arg3, arg4) {
   }
 
   if (!title || !message) {
-    console.warn('sendPushNotification: title and message are required.');
+    console.warn('[Push] Skipping: title and message are required.');
     return false;
   }
 
@@ -44,18 +45,18 @@ export async function sendPushNotification(arg1, arg2, arg3, arg4) {
       }
     };
 
-    // 1. Direct Target to a Single User (@mention or diary author)
+    // 1. Direct Target to a Single User (@mention or specific author)
     if (targetUser) {
       const cleanTarget = String(targetUser).replace('@', '').trim();
       if (excludeUser && cleanTarget.toLowerCase() === excludeUser.toLowerCase()) {
         return false;
       }
-      payload.include_aliases = {
-        external_id: [cleanTarget]
-      };
+      // Support both modern aliases and legacy external_user_ids
+      payload.include_aliases = { external_id: [cleanTarget] };
+      payload.include_external_user_ids = [cleanTarget];
       payload.target_channel = 'push';
     } 
-    // 2. Direct Target to Multiple Users (e.g. previous commenters on a diary)
+    // 2. Direct Target to Multiple Users (e.g. commenters)
     else if (targetUsers && targetUsers.length > 0) {
       const cleanList = Array.from(new Set(
         targetUsers
@@ -65,34 +66,28 @@ export async function sendPushNotification(arg1, arg2, arg3, arg4) {
 
       if (cleanList.length === 0) return false;
 
-      payload.include_aliases = {
-        external_id: cleanList
-      };
+      payload.include_aliases = { external_id: cleanList };
+      payload.include_external_user_ids = cleanList;
       payload.target_channel = 'push';
     } 
     // 3. Broadcast to All Subscribed Staff
     else {
-      // If actor exclusion is requested, exclude using tag filter
-      if (excludeUser) {
-        payload.filters = [
-          { field: 'tag', key: 'user_name', relation: '!=', value: excludeUser }
-        ];
-      } else {
-        payload.included_segments = ['Subscribed Users'];
-      }
+      payload.included_segments = ['Subscribed Users'];
     }
 
-    // Call Netlify serverless function
-    const netlifyRes = await fetch('/.netlify/functions/send-push', {
+    console.log('[Push] Dispatching payload:', payload);
+
+    // Call Netlify Serverless Function directly first
+    let response = await fetch('/.netlify/functions/send-push', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
 
-    if (!netlifyRes.ok) {
-      // Fallback: Attempt Supabase Edge Function if deployed
-      const edgeFunctionUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-push`;
-      const edgeRes = await fetch(edgeFunctionUrl, {
+    if (!response.ok) {
+      // Fallback: Supabase edge function if Netlify function fails
+      const edgeUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-push`;
+      response = await fetch(edgeUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -100,23 +95,25 @@ export async function sendPushNotification(arg1, arg2, arg3, arg4) {
         },
         body: JSON.stringify(payload)
       });
+    }
 
-      if (!edgeRes.ok) {
-        const errText = await netlifyRes.text();
-        console.warn('Push dispatch failed:', errText);
-        return false;
-      }
+    const result = await response.json().catch(() => null);
+    console.log('[Push] OneSignal Response:', result);
+
+    if (result?.errors && result.errors.length > 0) {
+      console.warn('[Push] OneSignal returned errors:', result.errors);
+      return false;
     }
 
     return true;
   } catch (err) {
-    console.warn('Could not dispatch push notification:', err);
+    console.error('[Push] Fatal dispatch error:', err);
     return false;
   }
 }
 
 /**
- * Scans text for @mentions and triggers direct push notifications
+ * Scans text for @mentions and fires direct push notifications
  */
 export async function dispatchMentionsFromText(text, authorName, contextTitle, dataPayload = {}) {
   if (!text || !text.includes('@')) return;
