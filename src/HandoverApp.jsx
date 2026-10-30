@@ -106,7 +106,7 @@ export default function HandoverApp({
     }
   });
 
-  // Calculate Auto Net whenever Gross Sales changes
+  // Calculate Auto Net whenever Gross Sales changes (Gross / 1.20)
   const handleGrossChange = (val) => {
     setGrossSales(val);
     const num = parseFloat(val);
@@ -191,10 +191,9 @@ export default function HandoverApp({
     setStatusMsg(null);
 
     const authorName = currentUser?.name || 'Duty Manager';
-    const authorId = currentUser?.name || 'anonymous';
     const formattedBritish = formatBritishDate(rawDate);
 
-    // Guaranteed ID to satisfy not-null constraint
+    // Guaranteed ID to satisfy table not-null constraint
     const generatedId = (typeof crypto !== 'undefined' && crypto.randomUUID)
       ? crypto.randomUUID()
       : `h-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -230,7 +229,7 @@ export default function HandoverApp({
 
       const recordId = savedRow?.id || generatedId;
 
-      // Dispatch @mentions if any staff were tagged
+      // 1. Dispatch @mentions if any staff were tagged
       const combinedNotes = `${generalNotes} \n ${maintenanceNotes} \n ${staffNotes}`;
       await dispatchMentionsFromText(
         combinedNotes,
@@ -239,12 +238,14 @@ export default function HandoverApp({
         { module: 'handover', entryId: recordId }
       );
 
-      sendPushNotification(
-        `Diary Logged: ${formattedBritish}`,
-        `${authorName} submitted ${entryType}. Gross: £${grossSales || '0'} (Net: £${netSales || '0'})`,
-        null,
-        { module: 'handover', entryId: recordId }
-      );
+      // 2. Broadcast new handover to venue staff with "notify_handover" enabled
+      await sendPushNotification({
+        title: `Handover Logged (${formattedBritish})`,
+        message: `${authorName} submitted ${entryType}. Gross: £${grossSales || '0'} (Net: £${netSales || '0'})`,
+        prefKey: 'notify_handover',
+        excludeUser: authorName,
+        dataPayload: { module: 'handover', entryId: recordId }
+      });
 
       setStatusMsg({ type: 'success', text: `Handover recorded for ${formattedBritish}!` });
 
@@ -288,17 +289,50 @@ export default function HandoverApp({
       if (error) throw error;
 
       setComments(prev => [...prev, data]);
+      const commentSnippet = newCommentText.trim();
       setNewCommentText('');
 
-      // Notify the manager who wrote the handover
-      if (selectedHistoricalHandover.manager_name !== authorName) {
-        sendPushNotification(
-          `New Comment on Your Handover`,
-          `${authorName}: "${newCommentText.trim().slice(0, 60)}"`,
-          selectedHistoricalHandover.manager_name,
-          { module: 'handover', entryId: selectedHistoricalHandover.id }
-        );
+      // 1. Notify the original diary author (if not self)
+      if (
+        selectedHistoricalHandover.manager_name &&
+        selectedHistoricalHandover.manager_name.toLowerCase() !== authorName.toLowerCase()
+      ) {
+        await sendPushNotification({
+          title: `Comment on Your Handover`,
+          message: `${authorName}: "${commentSnippet.slice(0, 60)}"`,
+          targetUser: selectedHistoricalHandover.manager_name,
+          prefKey: 'notify_my_diary_comments',
+          dataPayload: { module: 'handover', entryId: selectedHistoricalHandover.id }
+        });
       }
+
+      // 2. Notify other staff who have commented on this diary
+      const otherCommenters = comments
+        .map(c => c.author_name)
+        .filter(name =>
+          name &&
+          name.toLowerCase() !== authorName.toLowerCase() &&
+          name.toLowerCase() !== selectedHistoricalHandover.manager_name?.toLowerCase()
+        );
+
+      if (otherCommenters.length > 0) {
+        await sendPushNotification({
+          title: `New Comment in Diary Discussion`,
+          message: `${authorName} commented on ${selectedHistoricalHandover.date_formatted || 'diary'}: "${commentSnippet.slice(0, 60)}"`,
+          targetUsers: otherCommenters,
+          prefKey: 'notify_thread_comments',
+          excludeUser: authorName,
+          dataPayload: { module: 'handover', entryId: selectedHistoricalHandover.id }
+        });
+      }
+
+      // 3. Scan comment text for @mentions
+      await dispatchMentionsFromText(
+        commentSnippet,
+        authorName,
+        `Handover Comment (${selectedHistoricalHandover.date_formatted || 'diary'})`,
+        { module: 'handover', entryId: selectedHistoricalHandover.id }
+      );
     } catch (err) {
       console.error("Error adding comment:", err);
     } finally {
@@ -457,7 +491,7 @@ export default function HandoverApp({
             </div>
           </div>
 
-          {/* 1. General Shift Notes */}
+          {/* 1. General Shift Notes (First Section) */}
           <div className="space-y-1">
             <label className="text-[10px] font-bold text-gray-700 uppercase tracking-wider block">
               1. General Notes &amp; Shift Summary (Type @ to tag staff)

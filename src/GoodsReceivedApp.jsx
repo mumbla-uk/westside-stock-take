@@ -331,6 +331,7 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
 
       if (error) throw error;
 
+      // Update last invoice cost ex VAT in catalog
       for (const item of receivedItems) {
         if (item.unitEx > 0 && item.id && !String(item.id).startsWith('CUSTOM-')) {
           await supabase
@@ -344,12 +345,13 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
         }
       }
 
-      sendPushNotification(
-        `Delivery Logged: ${sup}`,
-        `${receivedItems.length} items checked in (${invoiceRef ? "Ref: " + invoiceRef : deliveryDate})`,
-        null,
-        { module: 'goods' }
-      );
+      await sendPushNotification({
+        title: `Delivery Logged: ${sup}`,
+        message: `${receivedItems.length} lines checked in (${invoiceRef ? 'Ref: ' + invoiceRef : deliveryDate})`,
+        prefKey: 'notify_goods',
+        excludeUser: currentUser?.name,
+        dataPayload: { module: 'goods' }
+      });
 
       setStatusMsg({ type: 'success', text: `Delivery for ${sup} saved & master costs updated!` });
       setReceivedItems([]);
