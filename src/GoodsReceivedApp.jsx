@@ -37,6 +37,21 @@ function AppLogo({ className = "w-6 h-6", fallbackTextClass = "font-serif text-x
   return <span className={fallbackTextClass}>W</span>;
 }
 
+// Fail-safe parser to guarantee items is ALWAYS a valid Array
+function parseItems(raw) {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
 export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout }) {
   const [activeTab, setActiveTab] = useState('intake'); // 'intake' | 'reports'
 
@@ -97,7 +112,7 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
           setProducts(data);
           localStorage.setItem('wst_catalog_cache', JSON.stringify(data));
         }
-      } else {
+      } else if (localDb?.cached_catalog) {
         const offline = await localDb.cached_catalog.toArray();
         if (offline.length > 0) setProducts(offline);
       }
@@ -112,14 +127,19 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
       const { data, error } = await supabase
         .from('goods_received')
         .select('*')
-        .eq('venue_id', DEFAULT_VENUE_ID)
         .order('delivery_date', { ascending: false })
         .limit(60);
 
       if (error) throw error;
-      setPastReports(data || []);
+      
+      const normalized = (data || []).map(r => ({
+        ...r,
+        items: parseItems(r.items)
+      }));
+      setPastReports(normalized);
     } catch (err) {
       console.warn("Could not fetch past delivery reports:", err);
+      setPastReports([]);
     } finally {
       setLoadingReports(false);
     }
@@ -135,15 +155,15 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
     const q = itemSearch.toLowerCase();
     return products.filter(p => 
       (p.name && p.name.toLowerCase().includes(q)) || 
-      (p.id && p.id.toLowerCase().includes(q))
+      (p.id && String(p.id).toLowerCase().includes(q))
     ).slice(0, 6);
   }, [products, itemSearch, selectedProduct]);
 
   const handleSelectProduct = (prod) => {
     setSelectedProduct(prod);
-    setCustomName(prod.name);
+    setCustomName(prod.name || '');
     setCustomUnit(prod.order_unit || prod.unit || 'unit');
-    setItemSearch(prod.name);
+    setItemSearch(prod.name || '');
     if (!invoiceSupplier && prod.supplier) {
       setInvoiceSupplier(prod.supplier);
     }
@@ -285,7 +305,7 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
 
       // Update last invoice cost ex VAT in catalog
       for (const item of receivedItems) {
-        if (item.unitEx > 0 && item.id && !item.id.startsWith('CUSTOM-')) {
+        if (item.unitEx > 0 && item.id && !String(item.id).startsWith('CUSTOM-')) {
           await supabase
             .from('catalog_items')
             .update({
@@ -317,7 +337,7 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
     }
   };
 
-  // Filter Past Reports
+  // Filter Past Reports safely
   const filteredPastReports = useMemo(() => {
     const q = reportSearchQuery.toLowerCase();
     return pastReports.filter(rep => {
@@ -328,11 +348,11 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
     });
   }, [pastReports, reportSearchQuery]);
 
-  // Handle Editing An Existing Report
+  // Open Edit Report
   const handleOpenEditReport = (rep) => {
     setEditingReport({
       ...rep,
-      items: Array.isArray(rep.items) ? rep.items.map(i => ({ ...i })) : []
+      items: parseItems(rep.items).map(i => ({ ...i }))
     });
   };
 
@@ -383,7 +403,7 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
 
       // Sync updated unit costs into catalog
       for (const item of (editingReport.items || [])) {
-        if (item.unitEx > 0 && item.id && !item.id.startsWith('CUSTOM-')) {
+        if (item.unitEx > 0 && item.id && !String(item.id).startsWith('CUSTOM-')) {
           await supabase
             .from('catalog_items')
             .update({
@@ -458,7 +478,7 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
               activeTab === 'intake' ? 'bg-white text-black shadow-xs' : 'text-gray-500 hover:text-black'
             }`}
           >
-            <Truck className="w-3.5 h-3.5" />
+            <Plus className="w-3.5 h-3.5" />
             <span>Delivery Check-In</span>
           </button>
           <button
@@ -732,7 +752,6 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
       ) : (
         /* PAST REPORTS TAB */
         <div className="flex-1 min-h-0 flex flex-col overflow-y-auto px-5 py-3 space-y-3 pb-28 touch-pan-y overscroll-contain">
-          {/* Search bar */}
           <div className="relative flex-shrink-0">
             <input
               type="text"
@@ -750,7 +769,6 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
             )}
           </div>
 
-          {/* Report List */}
           <div className="divide-y divide-gray-100 border border-gray-200 rounded-3xl overflow-hidden bg-white shadow-xs">
             {loadingReports ? (
               <p className="p-8 text-center text-xs text-gray-400 italic">Loading past invoices...</p>
@@ -761,11 +779,10 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
               </div>
             ) : (
               filteredPastReports.map((rep) => {
-                const itemsCount = Array.isArray(rep.items) ? rep.items.length : 0;
+                const safeItems = parseItems(rep.items);
+                const itemsCount = safeItems.length;
                 let totEx = 0;
-                if (Array.isArray(rep.items)) {
-                  rep.items.forEach(i => { totEx += Number(i.totalEx || 0); });
-                }
+                safeItems.forEach(i => { totEx += Number(i.totalEx || 0); });
 
                 return (
                   <div
@@ -837,7 +854,6 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
             </div>
 
             <form onSubmit={handleSaveEditedReport} className="p-5 overflow-y-auto space-y-4 text-xs touch-pan-y overscroll-contain">
-              {/* Header Details */}
               <div className="grid grid-cols-3 gap-2">
                 <div>
                   <label className="text-[9px] font-bold text-gray-500 uppercase block mb-0.5">Supplier</label>
@@ -870,14 +886,13 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
                 </div>
               </div>
 
-              {/* Delivery Line Items Breakdown */}
               <div className="space-y-2 pt-1 border-t border-gray-100">
                 <span className="font-bold uppercase tracking-wider text-[10px] text-gray-400 block">
                   Delivered Items &amp; Wholesale Costs
                 </span>
 
                 <div className="space-y-2">
-                  {(editingReport.items || []).map((line, idx) => (
+                  {parseItems(editingReport.items).map((line, idx) => (
                     <div key={idx} className="bg-gray-50 p-2.5 rounded-2xl border border-gray-200/80 space-y-1.5">
                       <div className="flex items-center justify-between">
                         <span className="font-bold text-xs text-gray-900 block truncate">{line.name}</span>
@@ -923,7 +938,6 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
                 </div>
               </div>
 
-              {/* Notes */}
               <div className="space-y-1 pt-1 border-t border-gray-100">
                 <label className="text-[9px] font-bold text-gray-500 uppercase block">Delivery Notes</label>
                 <textarea
@@ -935,7 +949,6 @@ export default function GoodsReceivedApp({ currentUser, onBackToHub, onLogout })
                 />
               </div>
 
-              {/* Action Buttons */}
               <div className="pt-2 flex items-center space-x-2">
                 <button
                   type="button"
