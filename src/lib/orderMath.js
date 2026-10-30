@@ -166,3 +166,28 @@ export function calculateSpillageCost(item, deductedBaseUnits) {
   const cost = (deductedBaseUnits / totalBaseInCase) * costPerCase;
   return Math.round(cost * 100) / 100;
 }
+
+/**
+ * Calculates the exact cumulative cost of a recipe based on live catalog item costs
+ * @param {Array} ingredients - [{ item_id, quantity, unit }]
+ * @param {Array} catalogItems - Full catalog items list
+ * @returns {number} Cost in £ Ex-VAT
+ */
+export function calculateRecipeCost(ingredients = [], catalogItems = []) {
+  let totalCost = 0;
+
+  for (const ing of ingredients) {
+    const parent = catalogItems.find(c => c.id === ing.item_id);
+    if (!parent) continue;
+
+    const baseSize = Number(parent.package_size_base) || 700;
+    const unitCost = Number(parent.last_cost_ex_vat || parent.cost_price_ex_vat || 0);
+
+    if (baseSize > 0 && unitCost > 0) {
+      const lineCost = (Number(ing.quantity) / baseSize) * unitCost;
+      totalCost += lineCost;
+    }
+  }
+
+  return Math.round(totalCost * 100) / 100;
+}
