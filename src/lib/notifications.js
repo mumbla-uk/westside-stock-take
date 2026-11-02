@@ -1,6 +1,7 @@
 import { supabase, DEFAULT_VENUE_ID } from './db';
 
-const ONESIGNAL_APP_ID = import.meta.env.VITE_ONESIGNAL_APP_ID || 'c34b17e4-c5a4-49c5-8ee8-ef0736e65a6e';
+
+const ONESIGNAL_APP_ID = import.meta.env.VITE_ONESIGNAL_APP_ID || '93cb91c7-7f6c-4f75-a66b-40a5fb5375f9';
 
 /**
  * Universal Push Notification Dispatcher

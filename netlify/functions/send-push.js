@@ -13,18 +13,15 @@ exports.handler = async (event) => {
     return { statusCode: 405, headers, body: JSON.stringify({ error: 'Method Not Allowed' }) };
   }
 
-  // 1. Retrieve and sanitize the key
   let rawKey =
     process.env.ONESIGNAL_REST_KEY ||
     process.env.VITE_ONESIGNAL_REST_KEY ||
     process.env.ONESIGNAL_API_KEY ||
     '';
 
-  // Strip leading/trailing quotes or spaces that often get copied into Netlify env vars
   const cleanKey = rawKey.replace(/^["']|["']$/g, '').trim();
 
   if (!cleanKey) {
-    console.error('[send-push] ERROR: No OneSignal REST API key found in environment.');
     return {
       statusCode: 500,
       headers,
@@ -35,8 +32,9 @@ exports.handler = async (event) => {
   try {
     const rawPayload = JSON.parse(event.body || '{}');
 
+    // Use your real App ID
     const payload = {
-      app_id: rawPayload.app_id || 'c34b17e4-c5a4-49c5-8ee8-ef0736e65a6e',
+      app_id: '93cb91c7-7f6c-4f75-a66b-40a5fb5375f9',
       headings: rawPayload.headings,
       contents: rawPayload.contents,
       data: rawPayload.data || {}
@@ -49,16 +47,11 @@ exports.handler = async (event) => {
       payload.included_segments = ['Subscribed Users'];
     }
 
-    // Determine authorization header format:
-    // v2 keys start with 'os_v2_app_' and require 'Key '
-    // Legacy keys require 'Basic ' or 'Key '
     const authHeader = cleanKey.startsWith('os_v2_')
       ? `Key ${cleanKey}`
       : (cleanKey.toLowerCase().startsWith('basic ') || cleanKey.toLowerCase().startsWith('key '))
         ? cleanKey
         : `Basic ${cleanKey}`;
-
-    console.log('[send-push] Sending to OneSignal using auth prefix:', authHeader.slice(0, 10) + '...');
 
     let response = await fetch('https://api.onesignal.com/notifications', {
       method: 'POST',
@@ -71,9 +64,7 @@ exports.handler = async (event) => {
 
     let resData = await response.json();
 
-    // If 'Basic' was rejected with 403, retry once with 'Key ' format
     if (response.status === 403 && !cleanKey.startsWith('os_v2_')) {
-      console.log('[send-push] Retrying with "Key" header format...');
       const retryResponse = await fetch('https://api.onesignal.com/notifications', {
         method: 'POST',
         headers: {
@@ -88,8 +79,6 @@ exports.handler = async (event) => {
       }
     }
 
-    console.log('[send-push] OneSignal Response (HTTP ' + response.status + '):', JSON.stringify(resData));
-
     return {
       statusCode: response.status,
       headers: {
@@ -99,7 +88,6 @@ exports.handler = async (event) => {
       body: JSON.stringify(resData)
     };
   } catch (err) {
-    console.error('[send-push] Error:', err);
     return {
       statusCode: 500,
       headers,
