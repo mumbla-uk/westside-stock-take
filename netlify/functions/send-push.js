@@ -1,22 +1,16 @@
 exports.handler = async (event) => {
+  const headers = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS'
+  };
+
   if (event.httpMethod === 'OPTIONS') {
-    return {
-      statusCode: 200,
-      headers: {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-        'Access-Control-Allow-Methods': 'POST, OPTIONS'
-      },
-      body: ''
-    };
+    return { statusCode: 200, headers, body: '' };
   }
 
   if (event.httpMethod !== 'POST') {
-    return {
-      statusCode: 405,
-      headers: { 'Access-Control-Allow-Origin': '*' },
-      body: JSON.stringify({ error: 'Method Not Allowed' })
-    };
+    return { statusCode: 405, headers, body: JSON.stringify({ error: 'Method Not Allowed' }) };
   }
 
   const REST_KEY = 
@@ -25,11 +19,11 @@ exports.handler = async (event) => {
     process.env.ONESIGNAL_API_KEY;
 
   if (!REST_KEY) {
-    console.error('[send-push] Missing ONESIGNAL_REST_KEY in Netlify environment variables');
+    console.error('[send-push] ERROR: ONESIGNAL_REST_KEY is not set in Netlify Environment Variables.');
     return {
       statusCode: 500,
-      headers: { 'Access-Control-Allow-Origin': '*' },
-      body: JSON.stringify({ error: 'Missing ONESIGNAL_REST_KEY on server' })
+      headers,
+      body: JSON.stringify({ error: 'Missing ONESIGNAL_REST_KEY in Netlify environment' })
     };
   }
 
@@ -43,6 +37,7 @@ exports.handler = async (event) => {
       data: rawPayload.data || {}
     };
 
+    // Audience targeting
     if (rawPayload.include_aliases?.external_id?.length > 0) {
       payload.include_aliases = rawPayload.include_aliases;
       payload.target_channel = 'push';
@@ -50,9 +45,13 @@ exports.handler = async (event) => {
       payload.included_segments = ['Subscribed Users'];
     }
 
-    const authHeader = REST_KEY.trim().startsWith('os_v2_')
-      ? `Key ${REST_KEY.trim()}`
-      : `Basic ${REST_KEY.trim()}`;
+    // Support both new v2 key format (os_v2_app_...) and legacy UUID keys
+    const trimmedKey = REST_KEY.trim();
+    const authHeader = trimmedKey.startsWith('os_v2_')
+      ? `Key ${trimmedKey}`
+      : `Basic ${trimmedKey}`;
+
+    console.log('[send-push] Sending to OneSignal with payload:', JSON.stringify(payload));
 
     const response = await fetch('https://api.onesignal.com/notifications', {
       method: 'POST',
@@ -64,19 +63,21 @@ exports.handler = async (event) => {
     });
 
     const resData = await response.json();
+    console.log('[send-push] OneSignal Response (HTTP ' + response.status + '):', JSON.stringify(resData));
 
     return {
       statusCode: response.status,
       headers: {
-        'Content-Type': 'application/json',
-        'Access-Control-Allow-Origin': '*'
+        ...headers,
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify(resData)
     };
   } catch (err) {
+    console.error('[send-push] Handler Exception:', err);
     return {
       statusCode: 500,
-      headers: { 'Access-Control-Allow-Origin': '*' },
+      headers,
       body: JSON.stringify({ error: err.message })
     };
   }

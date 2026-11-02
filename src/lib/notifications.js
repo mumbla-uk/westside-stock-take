@@ -1,14 +1,9 @@
 import { supabase, DEFAULT_VENUE_ID } from './db';
 
 const ONESIGNAL_APP_ID = import.meta.env.VITE_ONESIGNAL_APP_ID || 'c34b17e4-c5a4-49c5-8ee8-ef0736e65a6e';
-const ONESIGNAL_REST_KEY = import.meta.env.VITE_ONESIGNAL_REST_KEY || '';
-// Fallback if VITE_SUPABASE_URL is undefined in the client build
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://oivfquzghqijqrqnfbog.supabase.co';
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 
 /**
  * Universal Push Notification Dispatcher
- * Compatible with both object arguments and positional arguments.
  */
 export async function sendPushNotification(arg1, arg2, arg3, arg4) {
   let title, message, targetUser, targetUsers, prefKey, excludeUser, dataPayload;
@@ -47,16 +42,17 @@ export async function sendPushNotification(arg1, arg2, arg3, arg4) {
       }
     };
 
-    // 1. Direct Target to a Single User (@mention or specific recipient)
+    // 1. Single user targeting (@mention or direct author)
     if (targetUser) {
       const cleanTarget = String(targetUser).replace('@', '').trim();
       if (excludeUser && cleanTarget.toLowerCase() === excludeUser.toLowerCase()) {
+        console.log(`[Push] Suppressed: Target "${cleanTarget}" matches excludeUser.`);
         return false;
       }
       payload.include_aliases = { external_id: [cleanTarget] };
       payload.target_channel = 'push';
     } 
-    // 2. Direct Target to Multiple Users
+    // 2. Multiple user targeting
     else if (targetUsers && targetUsers.length > 0) {
       const cleanList = Array.from(new Set(
         targetUsers
@@ -69,61 +65,30 @@ export async function sendPushNotification(arg1, arg2, arg3, arg4) {
       payload.include_aliases = { external_id: cleanList };
       payload.target_channel = 'push';
     } 
-    // 3. Broadcast to All Subscribed Users
+    // 3. Broadcast to all subscribed staff
     else {
       payload.included_segments = ['Subscribed Users'];
     }
 
-    console.log('[Push] Dispatching payload:', payload);
+    console.log('[Push] Dispatching to /.netlify/functions/send-push:', payload);
 
-    // Call Supabase Edge Function with valid absolute URL
-    const edgeFunctionUrl = `${SUPABASE_URL}/functions/v1/send-push`;
-    let response = await fetch(edgeFunctionUrl, {
+    const response = await fetch('/.netlify/functions/send-push', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${SUPABASE_ANON_KEY}`
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
-    }).catch(err => {
-      console.warn('[Push] Supabase Edge Function unreachable:', err);
-      return null;
     });
 
-    if (response && response.ok) {
-      const data = await response.json().catch(() => ({}));
-      console.log('[Push] Sent successfully via Supabase Edge:', data);
-      return true;
+    const resData = await response.json().catch(() => null);
+
+    if (!response.ok) {
+      console.error('[Push] Netlify function returned error:', response.status, resData);
+      return false;
     }
 
-    // Direct fallback if REST key is present in client environment
-    if (ONESIGNAL_REST_KEY) {
-      const authHeader = ONESIGNAL_REST_KEY.trim().startsWith('os_v2_')
-        ? `Key ${ONESIGNAL_REST_KEY.trim()}`
-        : `Basic ${ONESIGNAL_REST_KEY.trim()}`;
-
-      const directRes = await fetch('https://api.onesignal.com/notifications', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': authHeader
-        },
-        body: JSON.stringify(payload)
-      }).catch(err => {
-        console.warn('[Push] Direct OneSignal request blocked by CORS:', err);
-        return null;
-      });
-
-      if (directRes && directRes.ok) {
-        const directData = await directRes.json().catch(() => ({}));
-        console.log('[Push] Sent successfully via direct API:', directData);
-        return true;
-      }
-    }
-
+    console.log('[Push] Successfully delivered to OneSignal:', resData);
     return true;
   } catch (err) {
-    console.error('[Push] Fatal dispatch error:', err);
+    console.error('[Push] Network/Dispatch error:', err);
     return false;
   }
 }
